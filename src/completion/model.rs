@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
+use std::fmt;
 use std::ops::Range;
 use std::path::PathBuf;
 
 /// Immutable input snapshot used by completion providers.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CompletionQuery {
     /// Complete editable shell buffer.
     pub line: String,
@@ -13,6 +14,18 @@ pub struct CompletionQuery {
     pub cwd: PathBuf,
     /// Monotonic session generation used to reject stale work.
     pub generation: u64,
+}
+
+impl fmt::Debug for CompletionQuery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompletionQuery")
+            .field("generation", &self.generation)
+            .field("cursor", &self.cursor)
+            .field("line_bytes", &self.line.len())
+            .field("cwd_bytes", &self.cwd.as_os_str().as_encoded_bytes().len())
+            .finish()
+    }
 }
 
 impl CompletionQuery {
@@ -49,12 +62,22 @@ impl CompletionQuery {
 }
 
 /// Replacement to apply to the authoritative shell buffer.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct TextEdit {
     /// Byte range in the original query line.
     pub range: Range<usize>,
     /// Replacement text for the range.
     pub replacement: String,
+}
+
+impl fmt::Debug for TextEdit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TextEdit")
+            .field("range", &self.range)
+            .field("replacement_bytes", &self.replacement.len())
+            .finish()
+    }
 }
 
 impl TextEdit {
@@ -141,7 +164,7 @@ pub enum InsertionBehavior {
 }
 
 /// Inert completion candidate produced by a provider.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Suggestion {
     /// Edit to apply to the query buffer.
     pub(crate) edit: TextEdit,
@@ -161,8 +184,26 @@ pub struct Suggestion {
     pub(crate) confidence: f64,
     /// Explicit insertion behavior.
     pub(crate) insertion: InsertionBehavior,
-    /// Stable provider identity used as a deterministic final tie-breaker.
+    /// Stable provider identity used as a deterministic tie-breaker.
     pub(crate) identity: String,
+}
+
+impl fmt::Debug for Suggestion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Suggestion")
+            .field("edit", &self.edit)
+            .field("display_bytes", &self.display.len())
+            .field("description_bytes", &self.description.len())
+            .field("icon_bytes", &self.icon.len())
+            .field("source", &self.source)
+            .field("sources", &self.sources)
+            .field("static_priority", &self.static_priority)
+            .field("confidence", &self.confidence)
+            .field("insertion", &self.insertion)
+            .field("identity_bytes", &self.identity.len())
+            .finish()
+    }
 }
 
 impl Suggestion {
@@ -419,5 +460,43 @@ mod tests {
             suggestion.resulting_line(&query).unwrap(),
             "git commit --help"
         );
+    }
+
+    #[test]
+    fn debug_output_redacts_query_edit_and_suggestion_text() {
+        let query = CompletionQuery::new(
+            "secret-command --token hunter2",
+            14,
+            "/private/secret-workspace",
+            7,
+        )
+        .unwrap();
+        let suggestion = Suggestion::new(
+            TextEdit {
+                range: 0..14,
+                replacement: "classified-replacement".to_owned(),
+            },
+            "classified-display",
+            "classified-description",
+            "classified-icon",
+            SuggestionSource::Spec,
+            InsertionBehavior::Exact,
+            "classified-identity",
+        );
+
+        for debug in [
+            format!("{query:?}"),
+            format!("{:?}", suggestion.edit()),
+            format!("{suggestion:?}"),
+        ] {
+            for secret in [
+                "secret-command",
+                "hunter2",
+                "secret-workspace",
+                "classified",
+            ] {
+                assert!(!debug.contains(secret));
+            }
+        }
     }
 }

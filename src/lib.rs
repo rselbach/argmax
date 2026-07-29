@@ -11,6 +11,7 @@ pub mod catalog;
 pub mod completion;
 pub mod config;
 pub mod context;
+pub mod coordinator;
 pub mod history;
 pub mod integration;
 pub mod keybindings;
