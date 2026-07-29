@@ -19,6 +19,7 @@ pub mod keybindings;
 pub mod learning;
 pub mod providers;
 pub mod ranking;
+pub mod reload;
 pub mod selection;
 pub mod shell_events;
 pub mod updater;
