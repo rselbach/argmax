@@ -1,0 +1,24 @@
+[package]
+name = "argmax"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A local, terminal-native command assistant"
+license = "MIT"
+publish = false
+
+[lib]
+name = "argmax"
+path = "src/lib.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
