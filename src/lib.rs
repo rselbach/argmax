@@ -20,4 +20,5 @@ pub mod learning;
 pub mod providers;
 pub mod ranking;
 pub mod selection;
+pub mod shell_events;
 pub mod version;
