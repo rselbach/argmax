@@ -6,6 +6,7 @@
 pub mod catalog;
 pub mod completion;
 pub mod history;
+pub mod learning;
 pub mod providers;
 pub mod ranking;
 pub mod selection;

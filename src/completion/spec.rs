@@ -268,6 +268,34 @@ impl SpecIndex {
         &self.roots
     }
 
+    /// Resolves a submitted command to its canonical command/subcommand path.
+    ///
+    /// Flags, their declared values, positionals, and leading shell environment
+    /// assignments are excluded. An unknown executable falls back to its cooked
+    /// first-token name.
+    #[must_use]
+    pub fn command_skeleton(&self, command: &str) -> Option<String> {
+        let mut buffer = command.to_owned();
+        if !buffer.chars().last().is_some_and(char::is_whitespace) {
+            buffer.push(' ');
+        }
+        let parsed = tokenize(&buffer, buffer.len()).ok()?;
+        let root = parsed
+            .committed_tokens()
+            .iter()
+            .find(|token| !is_shell_assignment(&token.cooked))?;
+        let command = &buffer[root.raw.start..];
+        let parsed = tokenize(command, command.len()).ok()?;
+        self.resolve(&parsed)
+            .map(|resolution| resolution.path.join(" "))
+            .or_else(|| {
+                parsed
+                    .committed_tokens()
+                    .first()
+                    .map(|token| token.cooked.clone())
+            })
+    }
+
     /// Resolves committed tokens to the deepest exact command node.
     ///
     /// The final active token is retained as a partial value. Unknown positional
@@ -721,6 +749,17 @@ fn split_option_value(value: &str) -> (&str, bool) {
         .map_or((value, false), |(name, _)| (name, true))
 }
 
+fn is_shell_assignment(value: &str) -> bool {
+    let Some((name, _)) = value.split_once('=') else {
+        return false;
+    };
+    let mut characters = name.chars();
+    characters
+        .next()
+        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+}
+
 fn root_suggestions(
     roots: &[CommandSpec],
     active: &ShellToken,
@@ -1043,6 +1082,24 @@ mod tests {
         assert_eq!(resolution.path, ["git", "remote"]);
         assert_eq!(resolution.positional_count, 0);
         assert!(displays(&index.suggestions(&query(line, line.len()))).contains(&"add"));
+    }
+
+    #[test]
+    fn submitted_commands_resolve_to_canonical_learning_skeletons() {
+        let index = git_index();
+        assert_eq!(
+            index.command_skeleton("git --no-pager -C Greendale remote add origin URL"),
+            Some("git remote add".into())
+        );
+        assert_eq!(
+            index.command_skeleton("COURSE=anthropology g ci -m 'Save Greendale'"),
+            Some("git commit".into())
+        );
+        assert_eq!(
+            index.command_skeleton("greendale-tool --verbose Troy"),
+            Some("greendale-tool".into())
+        );
+        assert_eq!(index.command_skeleton("COURSE=anthropology"), None);
     }
 
     #[test]
