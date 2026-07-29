@@ -279,8 +279,7 @@ impl Suggestion {
         match self.insertion {
             InsertionBehavior::Exact => {}
             InsertionBehavior::AppendSpace => {
-                if !replacement.chars().last().is_some_and(char::is_whitespace)
-                    && !suffix.chars().next().is_some_and(char::is_whitespace)
+                if !replacement.chars().last().is_some_and(char::is_whitespace) && suffix.is_empty()
                 {
                     replacement.push(' ');
                 }

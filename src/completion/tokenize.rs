@@ -81,6 +81,18 @@ impl TokenizedLine {
     pub fn prefix(&self) -> &str {
         &self.line[..self.cursor]
     }
+
+    /// Parses the complete active token through its delimiter after the cursor.
+    ///
+    /// The ordinary active token remains cursor-bounded so providers rank only
+    /// from text the user has already traversed. This full view lets insertion
+    /// logic avoid duplicating an existing same-token suffix.
+    #[must_use]
+    pub fn full_active_token(&self) -> ShellToken {
+        let active = self.active_token();
+        let (full, _) = parse_token(&self.line, active.raw.start);
+        full
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -330,10 +342,11 @@ mod tests {
 
     #[test]
     fn tokenizes_only_through_a_cursor_in_the_middle() {
-        let line = "git com --help";
+        let line = "git commit --help";
         let parsed = tokenize(line, 7).unwrap();
 
         assert_eq!(parsed.prefix(), "git com");
+        assert_eq!(parsed.full_active_token().cooked, "commit");
         assert_eq!(parsed.active_token().raw, 4..7);
         assert_eq!(parsed.active_token().cooked, "com");
         assert_eq!(parsed.line, line);

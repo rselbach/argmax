@@ -372,9 +372,10 @@ impl SpecIndex {
             return Vec::new();
         };
         let active = line.active_token();
+        let full_active = line.full_active_token();
 
         if line.committed_tokens().is_empty() {
-            return root_suggestions(&self.roots, active, &query.line);
+            return root_suggestions(&self.roots, active, &full_active, &query.line, query.cursor);
         }
 
         let Some(resolution) = self.resolve(&line) else {
@@ -384,7 +385,7 @@ impl SpecIndex {
             return Vec::new();
         }
 
-        node_suggestions(&resolution, active, &query.line)
+        node_suggestions(&resolution, active, &full_active, &query.line, query.cursor)
     }
 
     /// Alias for [`Self::suggestions`] for provider-style callers.
@@ -596,20 +597,28 @@ fn split_option_value(value: &str) -> (&str, bool) {
         .map_or((value, false), |(name, _)| (name, true))
 }
 
-fn root_suggestions(roots: &[CommandSpec], active: &ShellToken, line: &str) -> Vec<Suggestion> {
+fn root_suggestions(
+    roots: &[CommandSpec],
+    active: &ShellToken,
+    full_active: &ShellToken,
+    line: &str,
+    cursor: usize,
+) -> Vec<Suggestion> {
     let mut suggestions = Vec::new();
     for root in roots {
         for name in root.names() {
             if prefix_matches(name, &active.cooked) {
-                let mut suggestion = spec_suggestion(
-                    active,
-                    line,
+                let Some(mut suggestion) = spec_suggestion(
+                    (active, full_active),
+                    (line, cursor),
                     name,
                     &root.description,
                     "command",
                     root.insertion,
                     format!("spec:root:{}:{name}", root.name),
-                );
+                ) else {
+                    continue;
+                };
                 suggestion.static_priority = root.priority;
                 suggestions.push(suggestion);
             }
@@ -621,22 +630,26 @@ fn root_suggestions(roots: &[CommandSpec], active: &ShellToken, line: &str) -> V
 fn node_suggestions(
     resolution: &SpecResolution<'_>,
     active: &ShellToken,
+    full_active: &ShellToken,
     line: &str,
+    cursor: usize,
 ) -> Vec<Suggestion> {
     let mut commands = Vec::new();
     if resolution.subcommands_allowed {
         for child in &resolution.node.subcommands {
             for name in child.names() {
                 if prefix_matches(name, &resolution.partial) {
-                    let mut suggestion = spec_suggestion(
-                        active,
-                        line,
+                    let Some(mut suggestion) = spec_suggestion(
+                        (active, full_active),
+                        (line, cursor),
                         name,
                         &child.description,
                         "subcommand",
                         child.insertion,
                         format!("spec:{}:subcommand:{name}", resolution.path.join("/")),
-                    );
+                    ) else {
+                        continue;
+                    };
                     suggestion.static_priority = child.priority;
                     commands.push(suggestion);
                 }
@@ -652,15 +665,17 @@ fn node_suggestions(
             }
             for name in option.names() {
                 if option_prefix_matches(name, &resolution.partial) {
-                    let mut suggestion = spec_suggestion(
-                        active,
-                        line,
+                    let Some(mut suggestion) = spec_suggestion(
+                        (active, full_active),
+                        (line, cursor),
                         name,
                         &option.description,
                         "option",
                         option.insertion,
                         format!("spec:{}:option:{name}", resolution.path.join("/")),
-                    );
+                    ) else {
+                        continue;
+                    };
                     suggestion.static_priority = if resolution.partial.starts_with('-') {
                         option.priority.max(0.75)
                     } else {
@@ -682,26 +697,65 @@ fn node_suggestions(
 }
 
 fn spec_suggestion(
-    active: &ShellToken,
-    line: &str,
+    tokens: (&ShellToken, &ShellToken),
+    buffer: (&str, usize),
     candidate: &str,
     description: &str,
     icon: &str,
     insertion: InsertionBehavior,
     identity: String,
-) -> Suggestion {
-    Suggestion::new(
-        TextEdit {
-            range: active.raw.clone(),
-            replacement: render_replacement(active, line, candidate),
-        },
+) -> Option<Suggestion> {
+    let (active, full_active) = tokens;
+    let (line, cursor) = buffer;
+    let edit = spec_edit(active, full_active, line, cursor, candidate)?;
+    Some(Suggestion::new(
+        edit,
         candidate,
         description,
         icon,
         SuggestionSource::Spec,
         insertion,
         identity,
-    )
+    ))
+}
+
+fn spec_edit(
+    active: &ShellToken,
+    full_active: &ShellToken,
+    line: &str,
+    cursor: usize,
+    candidate: &str,
+) -> Option<TextEdit> {
+    let raw_is_plain = active
+        .raw_text(line)
+        .is_some_and(|raw| raw == active.cooked);
+    if active.quote != QuoteKind::Unquoted || !raw_is_plain {
+        if full_active.raw.end > cursor {
+            return None;
+        }
+        return Some(TextEdit {
+            range: active.raw.clone(),
+            replacement: render_replacement(active, line, candidate),
+        });
+    }
+
+    let suffix = full_active.cooked.strip_prefix(&active.cooked)?;
+    let candidate_chars: Vec<_> = candidate.chars().collect();
+    let prefix_len = active.cooked.chars().count();
+    let suffix_len = suffix.chars().count();
+    if candidate_chars.len() < prefix_len + suffix_len
+        || !candidate.to_lowercase().ends_with(&suffix.to_lowercase())
+    {
+        return None;
+    }
+    let replacement: String = candidate_chars
+        [prefix_len..candidate_chars.len().saturating_sub(suffix_len)]
+        .iter()
+        .collect();
+    Some(TextEdit {
+        range: cursor..cursor,
+        replacement,
+    })
 }
 
 fn prefix_matches(candidate: &str, partial: &str) -> bool {
@@ -827,8 +881,8 @@ mod tests {
             .find(|suggestion| suggestion.display == "commit")
             .unwrap();
 
-        assert_eq!(commit.edit.range, 4..7);
-        assert_eq!(commit.edit.replacement, "commit");
+        assert_eq!(commit.edit.range, 7..7);
+        assert_eq!(commit.edit.replacement, "mit");
         assert_eq!(commit.insertion, InsertionBehavior::AppendSpace);
     }
 
@@ -889,7 +943,7 @@ mod tests {
             .find(|suggestion| suggestion.display == "commit")
             .unwrap();
 
-        assert_eq!(suggestion.edit.range, 4..7);
+        assert_eq!(suggestion.edit.range, 7..7);
         assert_eq!(
             suggestion.edit.apply(line).unwrap(),
             "git commit --no-pager"
@@ -986,7 +1040,7 @@ mod tests {
             .iter()
             .find(|suggestion| suggestion.display == "commit")
             .unwrap();
-        assert_eq!(commit.edit.replacement, "COMmit");
+        assert_eq!(commit.edit.replacement, "mit");
 
         let quoted = index.suggestions(&query("git 'com", 8));
         let commit = quoted
@@ -994,6 +1048,37 @@ mod tests {
             .find(|suggestion| suggestion.display == "commit")
             .unwrap();
         assert_eq!(commit.edit.replacement, "'commit'");
+    }
+
+    #[test]
+    fn same_token_suffix_is_not_duplicated() {
+        let index = git_index();
+        let complete_line = "git commit";
+        let complete_query = query(complete_line, 7);
+        let complete = index
+            .suggestions(&complete_query)
+            .into_iter()
+            .find(|suggestion| suggestion.display == "commit")
+            .unwrap();
+        assert_eq!(complete.edit.range, 7..7);
+        assert!(complete.edit.replacement.is_empty());
+        assert_eq!(
+            complete.resulting_line(&complete_query).unwrap(),
+            complete_line
+        );
+
+        let partial_line = "git comit";
+        let partial_query = query(partial_line, 6);
+        let partial = index
+            .suggestions(&partial_query)
+            .into_iter()
+            .find(|suggestion| suggestion.display == "commit")
+            .unwrap();
+        assert_eq!(partial.edit.replacement, "m");
+        assert_eq!(
+            partial.resulting_line(&partial_query).unwrap(),
+            "git commit"
+        );
     }
 
     #[test]
