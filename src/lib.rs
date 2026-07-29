@@ -12,6 +12,7 @@ pub mod config;
 pub mod context;
 pub mod history;
 pub mod integration;
+pub mod keybindings;
 pub mod learning;
 pub mod providers;
 pub mod ranking;

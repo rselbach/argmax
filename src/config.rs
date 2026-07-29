@@ -11,6 +11,10 @@ use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
+use crate::keybindings::{
+    KeybindingValidationErrors, KeybindingValidationProblem, ResolvedKeybindings,
+};
+
 pub use resolve::{
     CliOverrides, ENV_AI_ENABLED, ENV_AI_PROVIDER, ENV_CORE_DEBUG, ENV_CORE_MODE, ENV_CORE_SHELL,
     ENV_UI_GHOST_TEXT, ENV_UI_MAX_HEIGHT, ENV_UI_MAX_SUGGESTIONS, ENV_UPDATER_CHANNEL,
@@ -79,10 +83,10 @@ pub struct Settings {
 impl Settings {
     /// Validates all known settings and returns every responsible field.
     ///
-    /// Keybinding syntax and prefix conflicts belong to the later key parser;
-    /// this resolved model rejects only blank or duplicate binding names.
-    /// Incomplete provider stanzas are allowed while AI is disabled, which
-    /// permits a commented template to be filled in incrementally.
+    /// Keybindings are validated against their terminal byte sequences, including
+    /// protected controls, encoded aliases, and prefix conflicts. Incomplete
+    /// provider stanzas are allowed while AI is disabled, which permits a
+    /// commented template to be filled in incrementally.
     ///
     /// # Errors
     ///
@@ -281,10 +285,22 @@ pub enum Style {
 /// Names for the two configurable bindings.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Keybindings {
-    /// Mode switch binding, parsed by the terminal input layer later.
+    /// Mode switch binding name.
     pub toggle_mode: String,
-    /// Session menu toggle binding, parsed by the terminal input layer later.
+    /// Session menu toggle binding name.
     pub toggle_menu: String,
+}
+
+impl Keybindings {
+    /// Parses and validates both names into terminal byte sequences.
+    ///
+    /// # Errors
+    ///
+    /// Returns every responsible keybinding field when either name is invalid,
+    /// protected, duplicated by encoding, or prefix-conflicting.
+    pub fn resolve(&self) -> Result<ResolvedKeybindings, KeybindingValidationErrors> {
+        ResolvedKeybindings::resolve(&self.toggle_mode, &self.toggle_menu)
+    }
 }
 
 impl Default for Keybindings {
@@ -538,6 +554,11 @@ pub enum ValidationProblem {
         /// Provider name selected by `ai.provider`.
         name: String,
     },
+    /// A binding is malformed, unsupported, protected, or prefix-conflicting.
+    Keybinding {
+        /// Structured terminal-level binding failure.
+        problem: KeybindingValidationProblem,
+    },
 }
 
 /// One field-specific validation failure.
@@ -592,6 +613,7 @@ impl fmt::Display for ValidationError {
             ValidationProblem::UnknownProvider { name } => {
                 write!(formatter, "references unknown provider {name:?}")
             }
+            ValidationProblem::Keybinding { problem } => problem.fmt(formatter),
         }
     }
 }
@@ -635,25 +657,21 @@ impl fmt::Display for ValidationErrors {
 impl Error for ValidationErrors {}
 
 fn validate_keybindings(keybindings: &Keybindings, errors: &mut Vec<ValidationError>) {
-    if keybindings.toggle_mode.trim().is_empty() {
-        errors.push(ValidationError::new(
-            "keybindings.toggle-mode",
-            ValidationProblem::Blank,
-        ));
-    }
-    if keybindings.toggle_menu.trim().is_empty() {
-        errors.push(ValidationError::new(
-            "keybindings.toggle-menu",
-            ValidationProblem::Blank,
-        ));
-    }
-    if keybindings.toggle_mode == keybindings.toggle_menu {
-        errors.push(ValidationError::new(
-            "keybindings.toggle-menu",
-            ValidationProblem::Duplicate {
-                other_field: "keybindings.toggle-mode",
-            },
-        ));
+    let Err(binding_errors) = keybindings.resolve() else {
+        return;
+    };
+
+    for error in binding_errors.into_errors() {
+        let problem = match error.problem() {
+            KeybindingValidationProblem::Blank => ValidationProblem::Blank,
+            KeybindingValidationProblem::Duplicate { other_field } => {
+                ValidationProblem::Duplicate {
+                    other_field: other_field.field(),
+                }
+            }
+            problem => ValidationProblem::Keybinding { problem },
+        };
+        errors.push(ValidationError::new(error.field_path(), problem));
     }
 }
 
@@ -916,6 +934,70 @@ mod tests {
                     .errors()
                     .iter()
                     .any(|error| error.field == want_field),
+                "{label}: {errors}"
+            );
+        }
+    }
+
+    #[test]
+    fn abed_validates_keybindings_by_terminal_encoding() {
+        let cases = [
+            (
+                "encoded duplicate",
+                "ctrl+space",
+                "ctrl+@",
+                "keybindings.toggle-menu",
+                ValidationProblem::Duplicate {
+                    other_field: "keybindings.toggle-mode",
+                },
+            ),
+            (
+                "fixed control",
+                "ctrl+a",
+                "shift+tab",
+                "keybindings.toggle-mode",
+                ValidationProblem::Keybinding {
+                    problem: KeybindingValidationProblem::FixedControl {
+                        control: crate::keybindings::FixedControl::LineEditing,
+                    },
+                },
+            ),
+            (
+                "prefix conflict",
+                "escape",
+                "shift+tab",
+                "keybindings.toggle-menu",
+                ValidationProblem::Keybinding {
+                    problem: KeybindingValidationProblem::PrefixConflict {
+                        other_field: crate::keybindings::KeybindingAction::ToggleMode,
+                    },
+                },
+            ),
+            (
+                "unsupported",
+                "ctrl+rr",
+                "shift+tab",
+                "keybindings.toggle-mode",
+                ValidationProblem::Keybinding {
+                    problem: KeybindingValidationProblem::Unsupported,
+                },
+            ),
+        ];
+
+        for (label, mode, menu, field, problem) in cases {
+            let settings = Settings {
+                keybindings: Keybindings {
+                    toggle_mode: mode.to_owned(),
+                    toggle_menu: menu.to_owned(),
+                },
+                ..Settings::default()
+            };
+            let errors = settings.validate().expect_err(label);
+            assert!(
+                errors
+                    .errors()
+                    .iter()
+                    .any(|error| error.field == field && error.problem == problem),
                 "{label}: {errors}"
             );
         }
