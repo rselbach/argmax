@@ -1,8 +1,13 @@
 //! Deterministic composite ranking for completion candidates.
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::path::Path;
 
 use crate::completion::Suggestion;
+use crate::context::score_workspace_context;
+use crate::learning::{LearningState, Timestamp};
+use crate::providers::WorkspaceContext;
 
 /// Normalized per-candidate inputs to the parity scoring formula.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -70,6 +75,123 @@ pub struct RankedSuggestion {
     pub suggestion: Suggestion,
     /// Component score breakdown.
     pub score: ScoreBreakdown,
+}
+
+/// One merged candidate plus the canonical data needed for local ranking.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalRankingCandidate {
+    /// Inert suggestion to rank.
+    pub suggestion: Suggestion,
+    /// Canonical command/subcommand path used for learning and context.
+    pub skeleton: String,
+    /// Provider-computed query match quality in the inclusive range zero to one.
+    pub match_quality: f64,
+}
+
+impl LocalRankingCandidate {
+    /// Creates a candidate for composite local ranking.
+    #[must_use]
+    pub fn new(suggestion: Suggestion, skeleton: impl Into<String>, match_quality: f64) -> Self {
+        Self {
+            suggestion,
+            skeleton: skeleton.into(),
+            match_quality,
+        }
+    }
+}
+
+/// Session-local inputs shared by every candidate in one ranking pass.
+#[derive(Clone, Copy)]
+pub struct LocalRankingContext<'a> {
+    /// Cached workspace signatures for the active directory.
+    pub workspace: &'a WorkspaceContext,
+    /// Learned command and transition aggregates.
+    pub learning: &'a LearningState,
+    /// Exact active working directory used for local aggregate preference.
+    pub cwd: &'a Path,
+    /// Current Unix timestamp in seconds.
+    pub now: Timestamp,
+    /// Prior canonical command skeleton, when the session has one.
+    pub prior_skeleton: Option<&'a str>,
+}
+
+/// Composite ranking output plus the transition lineage used for diagnostics.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalRankingResult {
+    /// Candidates after deterministic composite ranking and result limiting.
+    pub candidates: Vec<RankedSuggestion>,
+    /// Exact or parent prior skeleton that supplied transition data.
+    pub matched_prior_skeleton: Option<String>,
+}
+
+/// Combines static, workspace, match, frecency, and transition signals.
+///
+/// Learning scores are normalized over the complete merged candidate set before
+/// the caller's result limit is applied. The suggestion's static priority is the
+/// source/static component; provider confidence remains merge metadata.
+#[must_use]
+pub fn rank_with_local_intelligence(
+    candidates: impl IntoIterator<Item = LocalRankingCandidate>,
+    context: LocalRankingContext<'_>,
+    max_suggestions: usize,
+) -> LocalRankingResult {
+    let candidates = candidates.into_iter().collect::<Vec<_>>();
+    let skeletons = candidates
+        .iter()
+        .map(|candidate| candidate.skeleton.clone())
+        .collect::<Vec<_>>();
+    let frecency = context
+        .learning
+        .frecency_scores(skeletons.iter().cloned(), context.cwd, context.now)
+        .into_iter()
+        .map(|score| (score.skeleton, score.normalized_score))
+        .collect::<BTreeMap<_, _>>();
+    let transitions = context.prior_skeleton.map_or_else(
+        || (None, BTreeMap::new()),
+        |prior| {
+            let scored = context.learning.transition_scores(
+                prior,
+                skeletons.iter().cloned(),
+                context.cwd,
+                context.now,
+            );
+            let by_skeleton = scored
+                .candidates
+                .into_iter()
+                .map(|score| (score.skeleton, score.normalized_score))
+                .collect();
+            (scored.matched_prior, by_skeleton)
+        },
+    );
+
+    let mut ranked = candidates
+        .into_iter()
+        .map(|candidate| {
+            let signals = RankSignals {
+                source_priority: candidate.suggestion.static_priority(),
+                workspace_context: score_workspace_context(context.workspace, &candidate.skeleton)
+                    .normalized_score,
+                match_quality: candidate.match_quality,
+                frecency: frecency.get(&candidate.skeleton).copied().unwrap_or(0.0),
+                transition: transitions
+                    .1
+                    .get(&candidate.skeleton)
+                    .copied()
+                    .unwrap_or(0.0),
+            };
+            RankedSuggestion {
+                suggestion: candidate.suggestion,
+                score: signals.breakdown(),
+            }
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(compare_ranked);
+    ranked.truncate(max_suggestions.clamp(1, 500));
+
+    LocalRankingResult {
+        candidates: ranked,
+        matched_prior_skeleton: transitions.0,
+    }
 }
 
 /// Ranks suggestions deterministically using caller-provided local signals.
@@ -144,10 +266,12 @@ pub fn local_or_global(local: Option<f64>, global: Option<f64>) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::completion::{CompletionQuery, InsertionBehavior, SuggestionSource, TextEdit};
+    use crate::learning::{CommandOutcome, LearningEvent};
+    use crate::providers::{WorkspaceKind, WorkspaceSignature};
 
     fn suggestion(identity: &str) -> Suggestion {
         let query = CompletionQuery::new("g", 1, Path::new("/tmp"), 1).unwrap();
@@ -166,6 +290,25 @@ mod tests {
         );
         assert!(candidate.resulting_line(&query).is_ok());
         candidate
+    }
+
+    fn local_candidate(skeleton: &str) -> LocalRankingCandidate {
+        LocalRankingCandidate::new(suggestion(skeleton), skeleton, 1.0)
+    }
+
+    fn workspace(kinds: &[WorkspaceKind]) -> WorkspaceContext {
+        let cwd = PathBuf::from("/home/troy/Greendale");
+        WorkspaceContext {
+            cwd: cwd.clone(),
+            signatures: kinds
+                .iter()
+                .map(|kind| WorkspaceSignature {
+                    kind: *kind,
+                    root: cwd.clone(),
+                    marker: cwd.join(format!("{kind:?}")),
+                })
+                .collect(),
+        }
     }
 
     #[test]
@@ -231,5 +374,97 @@ mod tests {
 
         assert_eq!(ranked.len(), 100);
         assert_eq!(ranked[0].suggestion.identity, "zzz-best");
+    }
+
+    #[test]
+    fn local_ranking_boosts_matches_and_penalizes_cold_starts() {
+        let workspace = workspace(&[WorkspaceKind::Git, WorkspaceKind::Rust]);
+        let learning = LearningState::default();
+        let context = LocalRankingContext {
+            workspace: &workspace,
+            learning: &learning,
+            cwd: &workspace.cwd,
+            now: 4_000_000,
+            prior_skeleton: None,
+        };
+
+        let ranked = rank_with_local_intelligence(
+            [
+                local_candidate("git init"),
+                local_candidate("echo"),
+                local_candidate("cargo test"),
+            ],
+            context,
+            100,
+        );
+
+        assert_eq!(
+            ranked
+                .candidates
+                .iter()
+                .map(|candidate| candidate.suggestion.identity())
+                .collect::<Vec<_>>(),
+            ["cargo test", "echo", "git init"]
+        );
+        assert_eq!(
+            ranked
+                .candidates
+                .iter()
+                .map(|candidate| candidate.score.workspace_context)
+                .collect::<Vec<_>>(),
+            [1.0, 0.5, 0.0]
+        );
+    }
+
+    #[test]
+    fn local_ranking_normalizes_learning_before_limiting() {
+        const NOW: Timestamp = 4_000_000;
+        let workspace = workspace(&[]);
+        let mut learning = LearningState::default();
+        for event in [
+            LearningEvent::new(
+                "echo one",
+                "echo",
+                &workspace.cwd,
+                NOW,
+                CommandOutcome::Success,
+            ),
+            LearningEvent::new(
+                "echo two",
+                "echo",
+                &workspace.cwd,
+                NOW,
+                CommandOutcome::Success,
+            ),
+            LearningEvent::new(
+                "cargo test",
+                "cargo test",
+                &workspace.cwd,
+                NOW,
+                CommandOutcome::Success,
+            )
+            .with_prior_skeleton("git status"),
+        ] {
+            learning.record(&event).unwrap();
+        }
+        let context = LocalRankingContext {
+            workspace: &workspace,
+            learning: &learning,
+            cwd: &workspace.cwd,
+            now: NOW,
+            prior_skeleton: Some("git status porcelain"),
+        };
+
+        let ranked = rank_with_local_intelligence(
+            [local_candidate("echo"), local_candidate("cargo test")],
+            context,
+            1,
+        );
+
+        assert_eq!(ranked.matched_prior_skeleton.as_deref(), Some("git status"));
+        assert_eq!(ranked.candidates.len(), 1);
+        assert_eq!(ranked.candidates[0].suggestion.identity(), "cargo test");
+        assert!((ranked.candidates[0].score.frecency - 0.5).abs() <= f64::EPSILON);
+        assert!((ranked.candidates[0].score.transition - 1.0).abs() <= f64::EPSILON);
     }
 }
