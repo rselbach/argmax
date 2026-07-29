@@ -4,6 +4,7 @@
 //! the session layer owns insertion and rendering.
 
 pub mod ai;
+pub mod ai_lifecycle;
 pub mod catalog;
 pub mod completion;
 pub mod config;
