@@ -3,6 +3,7 @@
 //! Providers return inert data. They never receive terminal-writing capability;
 //! the session layer owns insertion and rendering.
 
+pub mod catalog;
 pub mod completion;
 pub mod history;
 pub mod providers;
