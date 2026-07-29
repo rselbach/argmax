@@ -8,6 +8,7 @@ pub mod ai_lifecycle;
 pub mod ai_prompt;
 pub mod ai_provider;
 pub mod catalog;
+pub mod cli;
 pub mod completion;
 pub mod config;
 pub mod context;
