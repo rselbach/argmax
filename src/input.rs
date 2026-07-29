@@ -907,12 +907,14 @@ impl InputRouter {
 
     fn resolve_sequence_prefix(&mut self, events: &mut Vec<RouteEvent>) {
         let status = self.sequence_status(&self.sequence_prefix);
-        if let Some((action, forwarding)) = status.exact
-            && !status.has_longer
-        {
-            let bytes = std::mem::take(&mut self.sequence_prefix);
-            self.emit_sequence(bytes, action, forwarding, events);
-        } else if !status.has_match() {
+        if !status.has_longer {
+            if let Some((action, forwarding)) = status.exact {
+                let bytes = std::mem::take(&mut self.sequence_prefix);
+                self.emit_sequence(bytes, action, forwarding, events);
+                return;
+            }
+        }
+        if !status.has_match() {
             let bytes = std::mem::take(&mut self.sequence_prefix);
             self.resolve_unknown_control_prefix(bytes, events);
         }

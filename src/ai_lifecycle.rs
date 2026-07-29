@@ -881,12 +881,12 @@ impl Lifecycle {
             };
         }
 
-        if let Some(cooldown) = &self.cooldown
-            && now_ms < cooldown.retry_at_ms
-        {
-            return LifecyclePoll::Cooldown {
-                retry_at_ms: cooldown.retry_at_ms,
-            };
+        if let Some(cooldown) = &self.cooldown {
+            if now_ms < cooldown.retry_at_ms {
+                return LifecyclePoll::Cooldown {
+                    retry_at_ms: cooldown.retry_at_ms,
+                };
+            }
         }
 
         if let Some(last_started_at_ms) = self.last_started_at_ms {

@@ -226,11 +226,11 @@ pub fn validate_endpoint(
     let path = completion_path(raw_path);
     let base_url = format!("{scheme}://{}{path}", authority.rendered);
     let mut request_url = base_url.clone();
-    if let Some(query) = query
-        && !query.is_empty()
-    {
-        request_url.push('?');
-        request_url.push_str(query);
+    if let Some(query) = query {
+        if !query.is_empty() {
+            request_url.push('?');
+            request_url.push_str(query);
+        }
     }
 
     let security = if scheme == "https" {
@@ -816,10 +816,10 @@ where
         if !valid_environment_name(name) {
             return Err(RequestBuildError::InvalidCredentialEnvironment);
         }
-        if let Some(value) = environment(name)
-            && !value.trim().is_empty()
-        {
-            return authorization(value, CredentialOrigin::Environment).map(Some);
+        if let Some(value) = environment(name) {
+            if !value.trim().is_empty() {
+                return authorization(value, CredentialOrigin::Environment).map(Some);
+            }
         }
         if let Some(credential) = provider.api_key.as_ref() {
             return authorization(

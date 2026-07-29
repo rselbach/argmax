@@ -400,14 +400,15 @@ fn prepare_fields(
     if matches!(
         context_level,
         AiContextLevel::Workspace | AiContextLevel::Full
-    ) && let Some(workspace) = &gathered.workspace
-    {
-        prepare_workspace_fields(workspace, &mut fields);
+    ) {
+        if let Some(workspace) = &gathered.workspace {
+            prepare_workspace_fields(workspace, &mut fields);
+        }
     }
-    if context_level == AiContextLevel::Full
-        && let Some(git) = &gathered.git
-    {
-        prepare_git_fields(git, &mut fields);
+    if context_level == AiContextLevel::Full {
+        if let Some(git) = &gathered.git {
+            prepare_git_fields(git, &mut fields);
+        }
     }
     Ok(fields)
 }
