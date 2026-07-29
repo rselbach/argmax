@@ -13,6 +13,7 @@ pub mod config;
 pub mod context;
 pub mod coordinator;
 pub mod history;
+pub mod input;
 pub mod integration;
 pub mod keybindings;
 pub mod learning;
