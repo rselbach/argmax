@@ -842,7 +842,11 @@ impl ShellConfigTarget {
 
 /// Selects a config target without reading the environment or filesystem.
 ///
-/// An empty `ZDOTDIR` or `XDG_CONFIG_HOME` is treated as unset.
+/// `ZDOTDIR` follows Zsh's exact lexical semantics: only an unset value falls
+/// back to `HOME`, an empty value selects `/.zshrc`, and a relative value stays
+/// relative to the shell's current directory. An empty or relative
+/// `XDG_CONFIG_HOME` is ignored as required by the XDG base-directory
+/// specification.
 #[must_use]
 pub fn suggest_config_target(
     shell: Shell,
@@ -853,9 +857,13 @@ pub fn suggest_config_target(
     let nonempty = |path: &&Path| !path.as_os_str().is_empty();
     let path = match shell {
         Shell::Bash => home.join(".bashrc"),
-        Shell::Zsh => zdotdir.filter(nonempty).unwrap_or(home).join(".zshrc"),
+        Shell::Zsh => match zdotdir {
+            Some(path) if path.as_os_str().is_empty() => PathBuf::from("/.zshrc"),
+            Some(path) => path.join(".zshrc"),
+            None => home.join(".zshrc"),
+        },
         Shell::Fish => xdg_config_home
-            .filter(nonempty)
+            .filter(|path| nonempty(path) && path.is_absolute())
             .map_or_else(|| home.join(".config"), Path::to_path_buf)
             .join("fish")
             .join("config.fish"),
@@ -938,6 +946,8 @@ pub struct ConfigEdit {
     content: Vec<u8>,
     outcome: EditOutcome,
     legacy_integrations: Vec<LegacyIntegration>,
+    source_managed_bytes: usize,
+    source_unmanaged_bytes: usize,
 }
 
 impl fmt::Debug for ConfigEdit {
@@ -947,6 +957,8 @@ impl fmt::Debug for ConfigEdit {
             .field("content_bytes", &self.content.len())
             .field("outcome", &self.outcome)
             .field("legacy_integration_count", &self.legacy_integrations.len())
+            .field("source_managed_bytes", &self.source_managed_bytes)
+            .field("source_unmanaged_bytes", &self.source_unmanaged_bytes)
             .finish()
     }
 }
@@ -968,6 +980,19 @@ impl ConfigEdit {
     #[must_use]
     pub fn legacy_integrations(&self) -> &[LegacyIntegration] {
         &self.legacy_integrations
+    }
+
+    /// Bytes occupied by the one marked block and its line delimiters in the
+    /// inspected source.
+    #[must_use]
+    pub const fn source_managed_bytes(&self) -> usize {
+        self.source_managed_bytes
+    }
+
+    /// Exact inspected-source bytes outside the one bounded managed span.
+    #[must_use]
+    pub const fn source_unmanaged_bytes(&self) -> usize {
+        self.source_unmanaged_bytes
     }
 
     /// Consumes the result and returns its edited bytes.
@@ -1062,6 +1087,8 @@ pub fn edit_config(content: &[u8], shell: Shell) -> Result<ConfigEdit, ConfigEdi
         marked_range,
         legacy_integrations,
     } = scan_config(content)?;
+    let (source_managed_bytes, source_unmanaged_bytes) =
+        source_byte_partition(content, marked_range.as_ref());
 
     if let Some(range) = marked_range {
         let newline = preferred_newline(content);
@@ -1071,6 +1098,8 @@ pub fn edit_config(content: &[u8], shell: Shell) -> Result<ConfigEdit, ConfigEdi
                 content: content.to_vec(),
                 outcome: EditOutcome::Unchanged,
                 legacy_integrations,
+                source_managed_bytes,
+                source_unmanaged_bytes,
             });
         }
 
@@ -1082,6 +1111,8 @@ pub fn edit_config(content: &[u8], shell: Shell) -> Result<ConfigEdit, ConfigEdi
             content: edited,
             outcome: EditOutcome::Replaced,
             legacy_integrations,
+            source_managed_bytes,
+            source_unmanaged_bytes,
         });
     }
 
@@ -1093,6 +1124,8 @@ pub fn edit_config(content: &[u8], shell: Shell) -> Result<ConfigEdit, ConfigEdi
             content: content.to_vec(),
             outcome: EditOutcome::Unchanged,
             legacy_integrations,
+            source_managed_bytes,
+            source_unmanaged_bytes,
         });
     }
 
@@ -1100,19 +1133,36 @@ pub fn edit_config(content: &[u8], shell: Shell) -> Result<ConfigEdit, ConfigEdi
     let mut edited = Vec::with_capacity(content.len() + 128);
     edited.extend_from_slice(content);
     if !content.is_empty() {
-        if !content.ends_with(b"\n") {
-            edited.extend_from_slice(newline);
-        }
-        if !ends_with_blank_line(content, newline) {
-            edited.extend_from_slice(newline);
-        }
+        edited.extend_from_slice(newline);
     }
     edited.extend_from_slice(render_block(shell, newline, true).as_bytes());
     Ok(ConfigEdit {
         content: edited,
         outcome: EditOutcome::Appended,
         legacy_integrations,
+        source_managed_bytes,
+        source_unmanaged_bytes,
     })
+}
+
+fn source_byte_partition(content: &[u8], marked_range: Option<&Range<usize>>) -> (usize, usize) {
+    let Some(marked_range) = marked_range else {
+        return (0, content.len());
+    };
+    let mut start = marked_range.start;
+    if content[..start].ends_with(b"\r\n") {
+        start -= 2;
+    } else if content[..start].ends_with(b"\n") {
+        start -= 1;
+    }
+    let mut end = marked_range.end;
+    if content[end..].starts_with(b"\r\n") {
+        end += 2;
+    } else if content[end..].starts_with(b"\n") {
+        end += 1;
+    }
+    let managed = end - start;
+    (managed, content.len() - managed)
 }
 
 #[derive(Clone, Copy)]
@@ -1258,7 +1308,11 @@ fn legacy_line(line: &[u8]) -> Option<(Shell, LegacyStyle)> {
 }
 
 fn normalized_line_matches(text: &str, pattern: &str) -> bool {
-    text.split_whitespace().eq(pattern.split(' '))
+    let mut actual = text.split_whitespace();
+    if !pattern.split(' ').all(|part| actual.next() == Some(part)) {
+        return false;
+    }
+    actual.next().is_none_or(|part| part.starts_with('#'))
 }
 
 fn preferred_newline(content: &[u8]) -> &'static [u8] {
@@ -1270,10 +1324,6 @@ fn preferred_newline(content: &[u8]) -> &'static [u8] {
     } else {
         b"\n"
     }
-}
-
-fn ends_with_blank_line(content: &[u8], newline: &[u8]) -> bool {
-    content.ends_with(&[newline, newline].concat())
 }
 
 fn render_block(shell: Shell, newline: &[u8], terminal_newline: bool) -> String {
@@ -2048,8 +2098,17 @@ fi
             Path::new("/Users/troy/.config/fish/config.fish")
         );
         assert_eq!(
+            suggest_config_target(Shell::Fish, home, None, Some(Path::new("relative-xdg")),).path(),
+            Path::new("/Users/troy/.config/fish/config.fish")
+        );
+        assert_eq!(
             suggest_config_target(Shell::Zsh, home, Some(Path::new("")), None).path(),
-            Path::new("/Users/troy/.zshrc")
+            Path::new("/.zshrc")
+        );
+        assert_eq!(
+            suggest_config_target(Shell::Zsh, home, Some(Path::new("relative-zdotdir")), None,)
+                .path(),
+            Path::new("relative-zdotdir/.zshrc")
         );
     }
 
@@ -2083,6 +2142,63 @@ fi
         assert!(edit.content().starts_with(b"# Troy Barnes\n"));
         assert!(edit.content().ends_with(b"\n# Greendale\n"));
         assert!(String::from_utf8_lossy(edit.content()).contains(r#"eval "$(argmax init zsh)""#));
+    }
+
+    #[test]
+    fn reports_exact_source_partitions_for_every_edit_outcome() {
+        let appended_source = b"unmanaged";
+        let appended = edit_config(appended_source, Shell::Bash).unwrap();
+        assert_eq!(appended.outcome(), EditOutcome::Appended);
+        assert_eq!(appended.source_managed_bytes(), 0);
+        assert_eq!(appended.source_unmanaged_bytes(), appended_source.len());
+
+        let prefix = b"prefix";
+        let suffix = b"suffix";
+        let wrong_block = render_block(Shell::Zsh, b"\n", false);
+        let mut replaced_source = prefix.to_vec();
+        replaced_source.push(b'\n');
+        replaced_source.extend_from_slice(wrong_block.as_bytes());
+        replaced_source.push(b'\n');
+        replaced_source.extend_from_slice(suffix);
+        let replaced = edit_config(&replaced_source, Shell::Bash).unwrap();
+        assert_eq!(replaced.outcome(), EditOutcome::Replaced);
+        assert_eq!(replaced.source_managed_bytes(), wrong_block.len() + 2);
+        assert_eq!(
+            replaced.source_unmanaged_bytes(),
+            prefix.len() + suffix.len()
+        );
+
+        let desired_block = render_block(Shell::Bash, b"\n", false);
+        let mut unchanged_source = prefix.to_vec();
+        unchanged_source.push(b'\n');
+        unchanged_source.extend_from_slice(desired_block.as_bytes());
+        unchanged_source.push(b'\n');
+        unchanged_source.extend_from_slice(suffix);
+        let unchanged = edit_config(&unchanged_source, Shell::Bash).unwrap();
+        assert_eq!(unchanged.outcome(), EditOutcome::Unchanged);
+        assert_eq!(unchanged.source_managed_bytes(), desired_block.len() + 2);
+        assert_eq!(
+            unchanged.source_unmanaged_bytes(),
+            prefix.len() + suffix.len()
+        );
+
+        let legacy_source = b"eval \"$(argmax init bash)\"\n";
+        let legacy = edit_config(legacy_source, Shell::Bash).unwrap();
+        assert_eq!(legacy.outcome(), EditOutcome::Unchanged);
+        assert_eq!(legacy.source_managed_bytes(), 0);
+        assert_eq!(legacy.source_unmanaged_bytes(), legacy_source.len());
+
+        for (source, edit) in [
+            (appended_source.as_slice(), appended),
+            (replaced_source.as_slice(), replaced),
+            (unchanged_source.as_slice(), unchanged),
+            (legacy_source.as_slice(), legacy),
+        ] {
+            assert_eq!(
+                edit.source_managed_bytes() + edit.source_unmanaged_bytes(),
+                source.len()
+            );
+        }
     }
 
     #[test]
@@ -2121,6 +2237,37 @@ fi
             assert_eq!(edit.outcome(), EditOutcome::Unchanged);
             assert_eq!(edit.content(), content.as_bytes());
         }
+    }
+
+    #[test]
+    fn recognizes_active_legacy_hooks_with_trailing_comments_only() {
+        for (shell, content) in [
+            (
+                Shell::Bash,
+                "eval \"$(argmax init bash)\" # installed by argmax\n",
+            ),
+            (
+                Shell::Zsh,
+                "eval \"$(command argmax init zsh)\" # legacy hook\n",
+            ),
+            (Shell::Fish, "argmax init fish | source # legacy hook\n"),
+        ] {
+            let inspection = inspect_config(content.as_bytes()).unwrap();
+            assert_eq!(inspection.legacy_integrations().len(), 1);
+            let edit = edit_config(content.as_bytes(), shell).unwrap();
+            assert_eq!(edit.outcome(), EditOutcome::Unchanged);
+            assert_eq!(edit.content(), content.as_bytes());
+        }
+
+        let commented_out = "# eval \"$(argmax init bash)\"\n";
+        let inspection = inspect_config(commented_out.as_bytes()).unwrap();
+        assert!(inspection.legacy_integrations().is_empty());
+        assert_eq!(
+            edit_config(commented_out.as_bytes(), Shell::Bash)
+                .unwrap()
+                .outcome(),
+            EditOutcome::Appended
+        );
     }
 
     #[test]

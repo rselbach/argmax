@@ -1,0 +1,22 @@
+[package]
+name = "argmax-platform"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Small audited platform wrappers for argmax"
+license = "MIT"
+publish = false
+
+[dependencies]
+libc = "=0.2.189"
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }

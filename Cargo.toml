@@ -60,6 +60,9 @@ vte = { version = "=0.15.0", default-features = false, features = [
   "ansi",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+argmax-platform = { path = "crates/argmax-platform" }
+
 [lib]
 name = "argmax"
 path = "src/lib.rs"

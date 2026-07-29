@@ -29,6 +29,7 @@ pub mod reload;
 pub mod screen;
 pub mod selection;
 pub mod session;
+pub mod setup;
 pub mod shell_events;
 pub mod state;
 pub mod terminal;
