@@ -4,7 +4,9 @@
 //! module. A loader may accept legacy underscore spellings, but it must resolve
 //! them into this single typed representation before validation.
 
+mod file;
 mod resolve;
+mod store;
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -15,12 +17,18 @@ use crate::keybindings::{
     KeybindingValidationErrors, KeybindingValidationProblem, ResolvedKeybindings,
 };
 
+pub use file::{
+    ConfigDocument, ConfigFileError, ConfigProblem, ConfigProblems, ConfigWarning,
+    DEFAULT_CONFIG_TEMPLATE, MAX_CONFIG_BYTES, MAX_CONFIG_WARNING_BYTES,
+    MAX_CONFIG_WARNING_PATH_BYTES, MAX_CONFIG_WARNINGS, parse_config, render_resolved_config,
+};
 pub use resolve::{
     CliOverrides, ENV_AI_ENABLED, ENV_AI_PROVIDER, ENV_CORE_DEBUG, ENV_CORE_MODE, ENV_CORE_SHELL,
     ENV_UI_GHOST_TEXT, ENV_UI_MAX_HEIGHT, ENV_UI_MAX_SUGGESTIONS, ENV_UPDATER_CHANNEL,
     ENV_UPDATER_CHECK_ON_STARTUP, ENV_UPDATER_INTERVAL, EnvironmentOverrides, OverrideError,
     OverrideErrors, resolve_settings,
 };
+pub use store::{ConfigPaths, ConfigStore, ConfigStoreError, InitOutcome, MigrationOutcome};
 
 /// Current configuration schema emitted by the Rust rewrite.
 ///
