@@ -14,6 +14,7 @@ pub mod completion;
 pub mod config;
 pub mod context;
 pub mod coordinator;
+pub mod crash_boundary;
 pub mod diagnostics;
 pub mod history;
 pub mod input;
