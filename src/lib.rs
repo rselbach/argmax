@@ -12,6 +12,7 @@ pub mod completion;
 pub mod config;
 pub mod context;
 pub mod coordinator;
+pub mod diagnostics;
 pub mod history;
 pub mod input;
 pub mod integration;
