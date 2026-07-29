@@ -26,7 +26,7 @@ pub use dynamic::{
     parse_processes, parse_resource_lines, parse_ssh_hosts, parse_zoxide_directories,
 };
 pub use filesystem::{FilesystemOptions, filesystem_suggestions, quote_path};
-pub use path::{PathExecutable, discover_path_executables, path_suggestions};
+pub use path::{PathExecutable, PathExecutableCache, discover_path_executables, path_suggestions};
 pub use workspace::{WorkspaceContext, WorkspaceKind, WorkspaceSignature, detect_workspace};
 
 /// Supported shell syntax relevant to local completion providers.
