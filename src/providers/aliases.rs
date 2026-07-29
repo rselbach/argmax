@@ -1,13 +1,16 @@
 //! Shell alias discovery and parsing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use crate::completion::{InsertionBehavior, Suggestion, SuggestionSource, TextEdit};
+use crate::completion::{
+    CompletionQuery, InsertionBehavior, QuoteKind, ShellToken, Suggestion, SuggestionSource,
+    TextEdit, TokenizedLine, tokenize,
+};
 
 use super::ShellKind;
 
@@ -16,6 +19,8 @@ const MAX_ALIAS_CONFIG_FILES: usize = 1_024;
 const MAX_ALIAS_LINES: usize = 32_768;
 const MAX_ALIAS_LINE_BYTES: usize = 64 * 1024;
 const MAX_ALIASES: usize = 4_096;
+const MAX_ALIAS_CHAIN: usize = 16;
+const MAX_ALIAS_EXPANSION_BYTES: usize = 64 * 1024;
 
 /// A simple shell alias with its canonical expansion.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,6 +29,155 @@ pub struct Alias {
     pub name: String,
     /// Static alias expansion used for deeper completion lookup.
     pub value: String,
+}
+
+/// Canonical alias view used for spec lookup without changing user input.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AliasLookup {
+    original_query: CompletionQuery,
+    lookup_query: CompletionQuery,
+    original_root: Range<usize>,
+    lookup_root: Range<usize>,
+    chain: Vec<String>,
+}
+
+impl AliasLookup {
+    /// Returns the untouched authoritative query used for candidate insertion.
+    #[must_use]
+    pub const fn original_query(&self) -> &CompletionQuery {
+        &self.original_query
+    }
+
+    /// Returns the canonicalized query used only for specification traversal.
+    #[must_use]
+    pub const fn lookup_query(&self) -> &CompletionQuery {
+        &self.lookup_query
+    }
+
+    /// Returns exact alias names traversed from the typed name to the target.
+    #[must_use]
+    pub fn chain(&self) -> &[String] {
+        &self.chain
+    }
+
+    /// Maps an edit after the canonical root back to the authoritative query.
+    ///
+    /// Edits that overlap the synthetic canonical expansion are rejected so a
+    /// spec candidate cannot replace the alias token shown to the user.
+    #[must_use]
+    pub fn map_lookup_edit(&self, edit: &TextEdit) -> Option<TextEdit> {
+        if edit.range.start > edit.range.end
+            || edit.range.end > self.lookup_query.line.len()
+            || !self.lookup_query.line.is_char_boundary(edit.range.start)
+            || !self.lookup_query.line.is_char_boundary(edit.range.end)
+        {
+            return None;
+        }
+
+        let range = if edit.range.end <= self.lookup_root.start {
+            edit.range.clone()
+        } else if edit.range.start >= self.lookup_root.end {
+            let start = self
+                .original_root
+                .end
+                .checked_add(edit.range.start.checked_sub(self.lookup_root.end)?)?;
+            let end = self
+                .original_root
+                .end
+                .checked_add(edit.range.end.checked_sub(self.lookup_root.end)?)?;
+            start..end
+        } else {
+            return None;
+        };
+
+        if range.end > self.original_query.line.len()
+            || !self.original_query.line.is_char_boundary(range.start)
+            || !self.original_query.line.is_char_boundary(range.end)
+        {
+            return None;
+        }
+
+        Some(TextEdit {
+            range,
+            replacement: edit.replacement.clone(),
+        })
+    }
+}
+
+/// Resolves an exact plain first-token alias for canonical spec lookup.
+///
+/// Alias chains and multi-token values are expanded with fixed bounds. The
+/// returned original query remains authoritative for insertion; callers can map
+/// a canonical spec edit back with [`AliasLookup::map_lookup_edit`]. Dynamic
+/// shell expressions, cycles, incomplete tokens, and function declarations are
+/// ignored without evaluating them.
+#[must_use]
+pub fn resolve_alias_for_lookup(aliases: &[Alias], query: &CompletionQuery) -> Option<AliasLookup> {
+    let tokenized = tokenize(&query.line, query.cursor).ok()?;
+    let root = tokenized.tokens.first()?;
+    if tokenized.tokens.len() == 1 && tokenized.full_active_token().raw.end != root.raw.end {
+        return None;
+    }
+    if !is_plain_token(&tokenized, root) {
+        return None;
+    }
+
+    let expansion = resolve_expansion(aliases, &root.cooked)?;
+    let mut line = String::with_capacity(
+        query.line.len() - (root.raw.end - root.raw.start) + expansion.value.len(),
+    );
+    line.push_str(&query.line[..root.raw.start]);
+    line.push_str(&expansion.value);
+    line.push_str(&query.line[root.raw.end..]);
+
+    let cursor = query
+        .cursor
+        .checked_sub(root.raw.end - root.raw.start)?
+        .checked_add(expansion.value.len())?;
+    let lookup_root = root.raw.start..root.raw.start.checked_add(expansion.value.len())?;
+    let lookup_query = CompletionQuery::new(line, cursor, &query.cwd, query.generation).ok()?;
+
+    Some(AliasLookup {
+        original_query: query.clone(),
+        lookup_query,
+        original_root: root.raw.clone(),
+        lookup_root,
+        chain: expansion.chain,
+    })
+}
+
+/// Creates an inert edit for the first typed space after an exact root alias.
+///
+/// No edit is returned while expansion is disabled, during bracketed paste, for
+/// quoted or escaped roots, after a second separator, or for an unsafe alias.
+/// Applying the edit replaces only the root token, preserving all arguments.
+#[must_use]
+pub fn alias_expansion_edit(
+    aliases: &[Alias],
+    query: &CompletionQuery,
+    expansion_enabled: bool,
+    bracketed_paste: bool,
+) -> Option<TextEdit> {
+    if !expansion_enabled || bracketed_paste {
+        return None;
+    }
+
+    let tokenized = tokenize(&query.line, query.cursor).ok()?;
+    let committed = tokenized.committed_tokens();
+    if committed.len() != 1 || !tokenized.active_token().is_empty_at(query.cursor) {
+        return None;
+    }
+    let root = &committed[0];
+    if query.line.get(root.raw.end..query.cursor) != Some(" ") || !is_plain_token(&tokenized, root)
+    {
+        return None;
+    }
+
+    let expansion = resolve_expansion(aliases, &root.cooked)?;
+    Some(TextEdit {
+        range: root.raw.clone(),
+        replacement: expansion.value,
+    })
 }
 
 /// Parses simple aliases from one shell configuration source.
@@ -155,6 +309,149 @@ pub fn alias_suggestions(
             suggestion
         })
         .collect()
+}
+
+struct ResolvedExpansion {
+    value: String,
+    chain: Vec<String>,
+}
+
+fn resolve_expansion(aliases: &[Alias], name: &str) -> Option<ResolvedExpansion> {
+    if name.len() > MAX_ALIAS_EXPANSION_BYTES {
+        return None;
+    }
+
+    let mut value = name.to_owned();
+    let mut chain = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for _ in 0..MAX_ALIAS_CHAIN {
+        let parsed = parse_static_expansion(&value)?;
+        let root = parsed.tokens.first()?;
+        if !is_plain_token(&parsed, root) {
+            return Some(ResolvedExpansion { value, chain });
+        }
+        let Some(alias) = find_alias(aliases, &root.cooked) else {
+            return (!chain.is_empty()).then_some(ResolvedExpansion { value, chain });
+        };
+        if !seen.insert(alias.name.clone()) {
+            return None;
+        }
+
+        parse_static_expansion(&alias.value)?;
+        let expanded_len = value
+            .len()
+            .checked_sub(root.raw.end - root.raw.start)?
+            .checked_add(alias.value.len())?;
+        if expanded_len > MAX_ALIAS_EXPANSION_BYTES {
+            return None;
+        }
+
+        let mut expanded = String::with_capacity(expanded_len);
+        expanded.push_str(&value[..root.raw.start]);
+        expanded.push_str(&alias.value);
+        expanded.push_str(&value[root.raw.end..]);
+        value = expanded;
+        chain.push(alias.name.clone());
+    }
+
+    let parsed = parse_static_expansion(&value)?;
+    let root = parsed.tokens.first()?;
+    if is_plain_token(&parsed, root) && find_alias(aliases, &root.cooked).is_some() {
+        return None;
+    }
+    Some(ResolvedExpansion { value, chain })
+}
+
+fn find_alias<'a>(aliases: &'a [Alias], name: &str) -> Option<&'a Alias> {
+    aliases
+        .iter()
+        .take(MAX_ALIASES)
+        .rev()
+        .find(|alias| alias.name == name)
+}
+
+fn parse_static_expansion(value: &str) -> Option<TokenizedLine> {
+    if value.is_empty()
+        || value.len() > MAX_ALIAS_EXPANSION_BYTES
+        || contains_dynamic_shell_syntax(value)
+    {
+        return None;
+    }
+
+    let parsed = tokenize(value, value.len()).ok()?;
+    if parsed.tokens.iter().any(|token| !token.complete) {
+        return None;
+    }
+    let root = parsed.tokens.first()?;
+    if root.cooked.is_empty()
+        || matches!(
+            root.cooked.as_str(),
+            "begin"
+                | "case"
+                | "do"
+                | "done"
+                | "elif"
+                | "else"
+                | "end"
+                | "esac"
+                | "eval"
+                | "fi"
+                | "for"
+                | "function"
+                | "if"
+                | "select"
+                | "source"
+                | "switch"
+                | "then"
+                | "until"
+                | "while"
+        )
+    {
+        return None;
+    }
+    Some(parsed)
+}
+
+fn contains_dynamic_shell_syntax(value: &str) -> bool {
+    #[derive(Clone, Copy)]
+    enum Quote {
+        Single,
+        Double,
+    }
+
+    let mut quote = None;
+    let mut escaped = false;
+
+    for character in value.chars() {
+        if character.is_control() {
+            return true;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match (quote, character) {
+            (None | Some(Quote::Double), '\\') => escaped = true,
+            (None, '\'') => quote = Some(Quote::Single),
+            (None, '"') => quote = Some(Quote::Double),
+            (Some(Quote::Single), '\'') | (Some(Quote::Double), '"') => quote = None,
+            (Some(Quote::Double), '$' | '`') => return true,
+            (None, '$' | '`' | ';' | '|' | '&' | '<' | '>' | '(' | ')' | '{' | '}' | '#' | '!') => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
+fn is_plain_token(line: &TokenizedLine, token: &ShellToken) -> bool {
+    token.quote == QuoteKind::Unquoted
+        && token.complete
+        && token.raw_text(&line.line) == Some(token.cooked.as_str())
 }
 
 fn fish_conf_d_paths(directory: &Path) -> Vec<PathBuf> {
@@ -494,5 +791,200 @@ mod tests {
         assert_eq!(suggestions[0].source, SuggestionSource::Alias);
         assert_eq!(suggestions[0].edit.replacement, "gc");
         assert_eq!(suggestions[0].insertion, InsertionBehavior::AppendSpace);
+    }
+
+    #[test]
+    fn resolves_bounded_alias_chains_without_changing_the_original_query() {
+        let aliases = vec![
+            Alias {
+                name: "gs".into(),
+                value: "gst --short".into(),
+            },
+            Alias {
+                name: "gst".into(),
+                value: "g status".into(),
+            },
+            Alias {
+                name: "g".into(),
+                value: "git".into(),
+            },
+        ];
+        let original = query("  gs  'Troy Barnes'", 19);
+
+        let lookup = resolve_alias_for_lookup(&aliases, &original).unwrap();
+
+        assert_eq!(lookup.original_query(), &original);
+        assert_eq!(
+            lookup.lookup_query().line,
+            "  git status --short  'Troy Barnes'"
+        );
+        assert_eq!(lookup.lookup_query().cursor, 35);
+        assert_eq!(lookup.chain(), ["gs", "gst", "g"]);
+    }
+
+    #[test]
+    fn maps_canonical_edits_back_without_replacing_the_alias() {
+        let aliases = vec![Alias {
+            name: "gs".into(),
+            value: "git status".into(),
+        }];
+        let original = query("gs ma", 5);
+        let lookup = resolve_alias_for_lookup(&aliases, &original).unwrap();
+        let canonical_edit = TextEdit {
+            range: 11..13,
+            replacement: "--max-count".into(),
+        };
+
+        let original_edit = lookup.map_lookup_edit(&canonical_edit).unwrap();
+
+        assert_eq!(original_edit.range, 3..5);
+        assert_eq!(
+            original_edit.apply(&original.line).unwrap(),
+            "gs --max-count"
+        );
+        assert!(
+            lookup
+                .map_lookup_edit(&TextEdit {
+                    range: 0..3,
+                    replacement: "other".into(),
+                })
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn lookup_requires_an_exact_plain_case_sensitive_root() {
+        let aliases = vec![Alias {
+            name: "gs".into(),
+            value: "git status".into(),
+        }];
+
+        for line in ["'gs' ", "\"gs\" ", "g\\s ", "GS "] {
+            assert!(resolve_alias_for_lookup(&aliases, &query(line, line.len())).is_none());
+        }
+
+        let partial = query("gsuffix", 2);
+        assert!(resolve_alias_for_lookup(&aliases, &partial).is_none());
+    }
+
+    #[test]
+    fn lookup_rejects_cycles_and_overlong_chains() {
+        let cycle = vec![
+            Alias {
+                name: "a".into(),
+                value: "b".into(),
+            },
+            Alias {
+                name: "b".into(),
+                value: "a".into(),
+            },
+        ];
+        assert!(resolve_alias_for_lookup(&cycle, &query("a ", 2)).is_none());
+
+        let mut too_long = Vec::new();
+        for index in 0..=MAX_ALIAS_CHAIN {
+            too_long.push(Alias {
+                name: format!("a{index}"),
+                value: if index == MAX_ALIAS_CHAIN {
+                    "git".into()
+                } else {
+                    format!("a{}", index + 1)
+                },
+            });
+        }
+        assert!(resolve_alias_for_lookup(&too_long, &query("a0 ", 3)).is_none());
+    }
+
+    #[test]
+    fn rejects_dynamic_alias_values_without_evaluating_them() {
+        let unsafe_aliases = [
+            Alias {
+                name: "dynamic".into(),
+                value: "git $(printf status)".into(),
+            },
+            Alias {
+                name: "pipeline".into(),
+                value: "git status | less".into(),
+            },
+            Alias {
+                name: "helper".into(),
+                value: "function helper".into(),
+            },
+            Alias {
+                name: "redirect".into(),
+                value: "git status >result".into(),
+            },
+        ];
+
+        for alias in unsafe_aliases {
+            let line = format!("{} ", alias.name);
+            assert!(resolve_alias_for_lookup(&[alias], &query(&line, line.len())).is_none());
+        }
+
+        let literal = Alias {
+            name: "authored".into(),
+            value: "git log --author='$USER'".into(),
+        };
+        assert_eq!(
+            resolve_alias_for_lookup(&[literal], &query("authored ", 9))
+                .unwrap()
+                .lookup_query()
+                .line,
+            "git log --author='$USER' "
+        );
+    }
+
+    #[test]
+    fn expands_only_the_root_and_preserves_existing_arguments() {
+        let aliases = vec![
+            Alias {
+                name: "gs".into(),
+                value: "g status".into(),
+            },
+            Alias {
+                name: "g".into(),
+                value: "git".into(),
+            },
+        ];
+        let original = query("gs --short", 3);
+
+        let edit = alias_expansion_edit(&aliases, &original, true, false).unwrap();
+
+        assert_eq!(edit.range, 0..2);
+        assert_eq!(edit.replacement, "git status");
+        assert_eq!(edit.apply(&original.line).unwrap(), "git status --short");
+
+        let indented = query("  gs --short", 5);
+        let edit = alias_expansion_edit(&aliases, &indented, true, false).unwrap();
+        assert_eq!(edit.range, 2..4);
+        assert_eq!(edit.apply(&indented.line).unwrap(), "  git status --short");
+    }
+
+    #[test]
+    fn expansion_honors_event_and_safety_gates() {
+        let aliases = vec![Alias {
+            name: "gs".into(),
+            value: "git status".into(),
+        }];
+        let first_space = query("gs ", 3);
+
+        assert!(alias_expansion_edit(&aliases, &first_space, false, false).is_none());
+        assert!(alias_expansion_edit(&aliases, &first_space, true, true).is_none());
+
+        for line in ["gs  ", "gs\t", "gs argument ", "'gs' ", "g\\s "] {
+            assert!(
+                alias_expansion_edit(&aliases, &query(line, line.len()), true, false).is_none()
+            );
+        }
+
+        let dynamic = Alias {
+            name: "dynamic".into(),
+            value: "git $(printf status)".into(),
+        };
+        assert!(alias_expansion_edit(&[dynamic], &query("dynamic ", 8), true, false).is_none());
+    }
+
+    fn query(line: &str, cursor: usize) -> CompletionQuery {
+        CompletionQuery::new(line, cursor, "/tmp", 7).unwrap()
     }
 }

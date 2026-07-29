@@ -5,7 +5,10 @@ mod filesystem;
 mod path;
 mod workspace;
 
-pub use aliases::{Alias, alias_config_paths, alias_suggestions, load_aliases, parse_aliases};
+pub use aliases::{
+    Alias, AliasLookup, alias_config_paths, alias_expansion_edit, alias_suggestions, load_aliases,
+    parse_aliases, resolve_alias_for_lookup,
+};
 pub use filesystem::{FilesystemOptions, filesystem_suggestions, quote_path};
 pub use path::{PathExecutable, discover_path_executables, path_suggestions};
 pub use workspace::{WorkspaceContext, WorkspaceKind, WorkspaceSignature, detect_workspace};
