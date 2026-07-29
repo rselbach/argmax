@@ -1,7 +1,13 @@
 //! Shell history parsing, session merging, and explicit-tier searching.
 
+mod cache;
+
 use std::cmp::Ordering;
 use std::collections::HashSet;
+
+pub use cache::{
+    DEFAULT_MAX_HISTORY_BYTES, DEFAULT_MAX_SESSION_ENTRIES, HistoryCache, HistoryFileKey,
+};
 
 /// A command read from persistent or current-session shell history.
 #[derive(Clone, Debug, Eq, PartialEq)]
