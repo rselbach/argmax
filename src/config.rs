@@ -4,10 +4,19 @@
 //! module. A loader may accept legacy underscore spellings, but it must resolve
 //! them into this single typed representation before validation.
 
+mod resolve;
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
+
+pub use resolve::{
+    CliOverrides, ENV_AI_ENABLED, ENV_AI_PROVIDER, ENV_CORE_DEBUG, ENV_CORE_MODE, ENV_CORE_SHELL,
+    ENV_UI_GHOST_TEXT, ENV_UI_MAX_HEIGHT, ENV_UI_MAX_SUGGESTIONS, ENV_UPDATER_CHANNEL,
+    ENV_UPDATER_CHECK_ON_STARTUP, ENV_UPDATER_INTERVAL, EnvironmentOverrides, OverrideError,
+    OverrideErrors, resolve_settings,
+};
 
 /// Current configuration schema emitted by the Rust rewrite.
 ///
