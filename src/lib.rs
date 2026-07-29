@@ -6,6 +6,7 @@
 pub mod ai;
 pub mod catalog;
 pub mod completion;
+pub mod config;
 pub mod context;
 pub mod history;
 pub mod learning;
