@@ -22,6 +22,7 @@ pub mod providers;
 pub mod ranking;
 pub mod reload;
 pub mod selection;
+pub mod session;
 pub mod shell_events;
 pub mod updater;
 pub mod version;
