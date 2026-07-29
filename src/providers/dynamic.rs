@@ -150,7 +150,8 @@ pub struct GitBranchOptions<'a> {
     /// Known remote names used to disambiguate remotes that contain `/`.
     ///
     /// The longest matching name wins, so `foo/bar` is preferred over `foo`
-    /// for `refs/remotes/foo/bar/main`.
+    /// for `refs/remotes/foo/bar/main`. At most [`MAX_DYNAMIC_ITEMS`] entries
+    /// are inspected.
     pub remote_names: &'a [&'a str],
 }
 
@@ -213,18 +214,19 @@ pub fn parse_git_branches(
 ) -> Result<Vec<DynamicItem>, DynamicParseError> {
     let text = decode_output(output)?;
     let active_branch = options.active_branch.and_then(normalize_active_branch);
+    let remote_names = normalize_remote_names(options.remote_names);
+    let branches = output_lines(text)
+        .filter_map(|line| parse_branch_line(line, &remote_names))
+        .collect::<Vec<_>>();
     let mut local_activity = BTreeMap::new();
 
-    for line in output_lines(text) {
-        let Some(branch) = parse_branch_line(line, options.remote_names) else {
-            continue;
-        };
+    for branch in &branches {
         if !matches!(branch.scope, GitBranchScope::Local) {
             continue;
         }
         let active = branch.active || active_branch == Some(branch.branch.as_str());
         local_activity
-            .entry(branch.branch)
+            .entry(branch.branch.clone())
             .and_modify(|known_active| *known_active |= active)
             .or_insert(active);
     }
@@ -241,10 +243,7 @@ pub fn parse_git_branches(
         insert_bounded(&mut items, item.value.clone(), item);
     }
 
-    for line in output_lines(text) {
-        let Some(branch) = parse_branch_line(line, options.remote_names) else {
-            continue;
-        };
+    for branch in branches {
         let GitBranchScope::Remote { remote } = branch.scope else {
             continue;
         };
@@ -306,11 +305,12 @@ pub fn parse_git_commits(output: &[u8]) -> Result<Vec<DynamicItem>, DynamicParse
     parse_git_described_rows(output, DynamicItemKind::GitCommit, valid_object_id)
 }
 
-/// Discovers explicit targets from `make -qp`-style rule rows.
+/// Discovers explicit targets from `LC_ALL=C make -qpRr` rule rows.
 ///
-/// Built-in dot rules, pattern rules, variable expressions, and assignment rows
-/// are ignored. Multiple explicit targets before one colon are returned
-/// independently in lexical order.
+/// Only the final `# Files` section is considered, preventing multiline variable
+/// bodies from spoofing rule rows. Special targets, pattern rules, variable
+/// expressions, and assignment rows are ignored. Multiple explicit targets
+/// before one colon are returned independently in lexical order.
 ///
 /// # Errors
 ///
@@ -319,22 +319,19 @@ pub fn parse_git_commits(output: &[u8]) -> Result<Vec<DynamicItem>, DynamicParse
 pub fn parse_make_targets(output: &[u8]) -> Result<Vec<DynamicItem>, DynamicParseError> {
     let text = decode_output(output)?;
     let mut items = BTreeMap::new();
-    let mut in_files = false;
     let mut skip_not_target = false;
+    let lines = output_lines(text).collect::<Vec<_>>();
+    let Some(files_index) = lines.iter().rposition(|line| *line == "# Files") else {
+        return Ok(Vec::new());
+    };
+    let mut section_complete = false;
 
-    for line in output_lines(text) {
-        if line == "# Files" {
-            in_files = true;
-            skip_not_target = false;
-            continue;
-        }
-        if !in_files {
-            continue;
-        }
-        if line == "# files hash-table stats:" || line.starts_with("# Finished Make data base") {
+    for line in &lines[files_index + 1..] {
+        if *line == "# files hash-table stats:" || line.starts_with("# Finished Make data base") {
+            section_complete = true;
             break;
         }
-        if line == "# Not a target:" {
+        if *line == "# Not a target:" {
             skip_not_target = true;
             continue;
         }
@@ -365,6 +362,10 @@ pub fn parse_make_targets(output: &[u8]) -> Result<Vec<DynamicItem>, DynamicPars
                 insert_bounded(&mut items, target.to_owned(), item);
             }
         }
+    }
+
+    if !section_complete {
+        return Ok(Vec::new());
     }
 
     Ok(items.into_values().collect())
@@ -634,18 +635,13 @@ fn parse_remote_branch(reference: &str, remote_names: &[&str]) -> Option<(String
     if !valid_git_ref(reference) {
         return None;
     }
-    let configured = remote_names
-        .iter()
-        .copied()
-        .filter(|remote| valid_git_remote(remote))
-        .filter_map(|remote| {
-            reference
-                .strip_prefix(remote)
-                .and_then(|suffix| suffix.strip_prefix('/'))
-                .filter(|branch| valid_git_ref(branch))
-                .map(|branch| (remote, branch))
-        })
-        .max_by_key(|(remote, _)| remote.len());
+    let configured = remote_names.iter().copied().find_map(|remote| {
+        reference
+            .strip_prefix(remote)
+            .and_then(|suffix| suffix.strip_prefix('/'))
+            .filter(|branch| valid_git_ref(branch))
+            .map(|branch| (remote, branch))
+    });
     let (remote, branch) = configured.or_else(|| reference.split_once('/'))?;
     if !valid_git_remote(remote)
         || !valid_git_ref(branch)
@@ -660,6 +656,19 @@ fn parse_remote_branch(reference: &str, remote_names: &[&str]) -> Option<(String
             remote: remote.to_owned(),
         },
     ))
+}
+
+fn normalize_remote_names<'a>(remote_names: &'a [&'a str]) -> Vec<&'a str> {
+    let mut names = remote_names
+        .iter()
+        .take(MAX_DYNAMIC_ITEMS)
+        .copied()
+        .filter(|remote| valid_git_remote(remote))
+        .collect::<Vec<_>>();
+    names
+        .sort_unstable_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
+    names.dedup();
+    names
 }
 
 fn normalize_active_branch(branch: &str) -> Option<&str> {
@@ -1091,7 +1100,7 @@ mod tests {
                 (
                     GitBranchOptions {
                         active_branch: Some("main"),
-                        remote_names: &["origin", "upstream", "foo/bar"],
+                        remote_names: &["origin", "upstream", "foo", "foo/bar"],
                         ..GitBranchOptions::default()
                     },
                     vec!["feature/study"],
@@ -1104,7 +1113,7 @@ mod tests {
                         active_branch: Some("refs/heads/main"),
                         filter_active_branch: false,
                         deduplicate_branches: false,
-                        remote_names: &["origin", "upstream", "foo/bar"],
+                        remote_names: &["origin", "upstream", "foo", "foo/bar"],
                     },
                     vec![
                         "feature/study",
@@ -1201,6 +1210,7 @@ mod tests {
     fn parses_make_database_and_just_summary_without_interpretation() {
         let make = b"# Make data base\n\
             define MULTILINE\n\
+            # Files\n\
             fake: variable row\n\
             endef\n\
             # Files\n\
@@ -1226,6 +1236,38 @@ mod tests {
         assert_eq!(
             values(&parse_just_recipes(just).unwrap()),
             ["save-greendale", "study-group", "troy_and_abed"]
+        );
+        assert!(
+            parse_make_targets(b"# Files\nunfinished:\n")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn git_remote_disambiguation_has_a_bounded_input_snapshot() {
+        let mut names = (0..MAX_DYNAMIC_ITEMS)
+            .map(|index| format!("remote-{index}"))
+            .collect::<Vec<_>>();
+        names.push("foo/bar".to_owned());
+        let names = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let items = parse_git_branches(
+            b"refs/remotes/foo/bar/main\n",
+            GitBranchOptions {
+                remote_names: &names,
+                ..GitBranchOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            items[0].metadata,
+            DynamicMetadata::GitBranch {
+                scope: GitBranchScope::Remote {
+                    remote: "foo".to_owned(),
+                },
+                active: false,
+            }
         );
     }
 
