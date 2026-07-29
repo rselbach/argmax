@@ -1,4 +1,7 @@
-use crate::completion::{CommandSpec, InsertionBehavior, OptionSpec};
+use crate::completion::{
+    CommandSpec, FilesystemGenerator, GeneratorKind, GeneratorSpec, GeneratorTarget,
+    InsertionBehavior, OptionSpec,
+};
 
 pub(super) fn spec(name: &str, description: &str) -> Option<CommandSpec> {
     Some(match name {
@@ -71,7 +74,8 @@ fn docker(description: &str) -> CommandSpec {
                     "remove the container after it exits",
                 ))
                 .with_option(OptionSpec::new("-d", "run in the background").with_alias("--detach"))
-                .with_option(value_option("--name", "assign a container name")),
+                .with_option(value_option("--name", "assign a container name"))
+                .with_generator(positional_generator(GeneratorKind::DockerImages, 0)),
         )
         .with_subcommand(
             CommandSpec::new("exec", "run a command in a running container")
@@ -80,7 +84,8 @@ fn docker(description: &str) -> CommandSpec {
                 )
                 .with_option(
                     OptionSpec::new("-t", "allocate a pseudo-terminal").with_alias("--tty"),
-                ),
+                )
+                .with_generator(positional_generator(GeneratorKind::DockerContainers, 0)),
         )
         .with_subcommand(no_positionals("ps", "list containers"))
         .with_subcommand(no_positionals("images", "list images"))
@@ -116,9 +121,14 @@ fn npm(description: &str) -> CommandSpec {
                     OptionSpec::new("-g", "remove global packages").with_alias("--global"),
                 ),
         )
-        .with_subcommand(CommandSpec::new("run", "run a package script").with_option(
-            OptionSpec::new("--if-present", "succeed when the script is absent"),
-        ))
+        .with_subcommand(
+            CommandSpec::new("run", "run a package script")
+                .with_option(OptionSpec::new(
+                    "--if-present",
+                    "succeed when the script is absent",
+                ))
+                .with_generator(positional_generator(GeneratorKind::PackageScripts, 0)),
+        )
         .with_subcommand(CommandSpec::new("exec", "run a package-provided command"))
         .with_subcommand(CommandSpec::new("init", "create a package manifest"))
         .with_subcommand(CommandSpec::new("publish", "publish a package"))
@@ -146,11 +156,14 @@ fn pip(description: &str) -> CommandSpec {
                     value_option("-e", "install a project in editable mode")
                         .with_alias("--editable"),
                 )
-                .with_option(OptionSpec::new("-U", "upgrade packages").with_alias("--upgrade")),
+                .with_option(OptionSpec::new("-U", "upgrade packages").with_alias("--upgrade"))
+                .with_generator(positional_generator(GeneratorKind::Packages, 0))
+                .with_generator(option_files("-r", &["txt", "in"])),
         )
         .with_subcommand(
             CommandSpec::new("uninstall", "remove installed packages")
-                .with_option(OptionSpec::new("-y", "confirm all removals").with_alias("--yes")),
+                .with_option(OptionSpec::new("-y", "confirm all removals").with_alias("--yes"))
+                .with_generator(positional_generator(GeneratorKind::Packages, 0)),
         )
         .with_subcommand(
             CommandSpec::new("list", "list installed packages")
@@ -162,7 +175,10 @@ fn pip(description: &str) -> CommandSpec {
                     "show packages not required by others",
                 )),
         )
-        .with_subcommand(CommandSpec::new("show", "show package information"))
+        .with_subcommand(
+            CommandSpec::new("show", "show package information")
+                .with_generator(positional_generator(GeneratorKind::Packages, 0)),
+        )
         .with_subcommand(no_positionals(
             "freeze",
             "print installed packages in requirements format",
@@ -219,9 +235,13 @@ fn cargo(description: &str) -> CommandSpec {
         .with_subcommand(
             CommandSpec::new("add", "add dependencies")
                 .with_option(OptionSpec::new("--dev", "add a development dependency"))
-                .with_option(value_option("--features", "enable dependency features")),
+                .with_option(value_option("--features", "enable dependency features"))
+                .with_generator(positional_generator(GeneratorKind::Packages, 0)),
         )
-        .with_subcommand(CommandSpec::new("remove", "remove dependencies"))
+        .with_subcommand(
+            CommandSpec::new("remove", "remove dependencies")
+                .with_generator(positional_generator(GeneratorKind::Packages, 0)),
+        )
         .with_subcommand(no_positionals(
             "update",
             "update dependencies in Cargo.lock",
@@ -236,6 +256,8 @@ fn cargo_build_command(name: &str, alias: &str, description: &str) -> CommandSpe
         .with_option(value_option("--manifest-path", "select a Cargo.toml file"))
         .with_option(value_option("-p", "select a package").with_alias("--package"))
         .with_option(value_option("--target", "select a compilation target"))
+        .with_generator(option_generator(GeneratorKind::Packages, "--package"))
+        .with_generator(option_files("--manifest-path", &["toml"]))
 }
 
 fn go(description: &str) -> CommandSpec {
@@ -253,8 +275,14 @@ fn go(description: &str) -> CommandSpec {
                 .with_option(OptionSpec::new("-race", "enable the race detector")),
         )
         .with_subcommand(CommandSpec::new("run", "compile and run a Go program"))
-        .with_subcommand(CommandSpec::new("get", "resolve and add dependencies"))
-        .with_subcommand(CommandSpec::new("install", "compile and install packages"))
+        .with_subcommand(
+            CommandSpec::new("get", "resolve and add dependencies")
+                .with_generator(positional_generator(GeneratorKind::Packages, 0)),
+        )
+        .with_subcommand(
+            CommandSpec::new("install", "compile and install packages")
+                .with_generator(positional_generator(GeneratorKind::Packages, 0)),
+        )
         .with_subcommand(CommandSpec::new("fmt", "format package source"))
         .with_subcommand(CommandSpec::new(
             "vet",
@@ -303,6 +331,7 @@ fn mvn(description: &str) -> CommandSpec {
         .with_option(
             terminal_option("-v", "print Maven version information").with_alias("--version"),
         )
+        .with_generator(option_files("-f", &["xml"]))
         .with_subcommand(CommandSpec::new("clean", "remove build output"))
         .with_subcommand(CommandSpec::new("validate", "validate project structure"))
         .with_subcommand(CommandSpec::new("compile", "compile project sources"))
@@ -338,6 +367,12 @@ fn cmake(description: &str) -> CommandSpec {
             "print CMake version information",
         ))
         .with_option(terminal_option("--help", "print CMake usage information"))
+        .with_generator(option_directories("-S"))
+        .with_generator(option_directories("-B"))
+        .with_generator(option_directories("--build"))
+        .with_generator(option_directories("--install"))
+        .with_generator(option_files("-C", &["cmake"]))
+        .with_generator(option_files("--toolchain", &["cmake"]))
 }
 
 fn git(description: &str) -> CommandSpec {
@@ -364,7 +399,8 @@ fn git(description: &str) -> CommandSpec {
                 .with_option(OptionSpec::new("-A", "stage all changes").with_alias("--all"))
                 .with_option(
                     OptionSpec::new("-p", "interactively select changes").with_alias("--patch"),
-                ),
+                )
+                .with_generator(positional_generator(GeneratorKind::GitFiles, 0)),
         )
         .with_subcommand(
             CommandSpec::new("commit", "record changes to the repository")
@@ -379,60 +415,92 @@ fn git(description: &str) -> CommandSpec {
         .with_subcommand(
             CommandSpec::new("branch", "list or manage branches")
                 .with_option(OptionSpec::new("-d", "delete a merged branch").with_alias("--delete"))
-                .with_option(OptionSpec::new("-m", "move or rename a branch").with_alias("--move")),
+                .with_option(OptionSpec::new("-m", "move or rename a branch").with_alias("--move"))
+                .with_generator(positional_generator(GeneratorKind::GitBranches, 0)),
         )
         .with_subcommand(
             CommandSpec::new("checkout", "switch branches or restore files")
-                .with_option(value_option("-b", "create and switch to a branch")),
+                .with_option(value_option("-b", "create and switch to a branch"))
+                .with_generator(positional_generator(GeneratorKind::GitBranches, 0))
+                .with_generator(positional_generator(GeneratorKind::GitCommits, 0)),
         )
-        .with_subcommand(CommandSpec::new("switch", "switch branches").with_option(
-            value_option("-c", "create and switch to a branch").with_alias("--create"),
-        ))
+        .with_subcommand(
+            CommandSpec::new("switch", "switch branches")
+                .with_option(
+                    value_option("-c", "create and switch to a branch").with_alias("--create"),
+                )
+                .with_generator(positional_generator(GeneratorKind::GitBranches, 0)),
+        )
         .with_subcommand(
             CommandSpec::new("log", "show commit logs")
                 .with_option(
                     value_option("-n", "limit the number of commits").with_alias("--max-count"),
                 )
-                .with_option(OptionSpec::new("--oneline", "show one line per commit")),
+                .with_option(OptionSpec::new("--oneline", "show one line per commit"))
+                .with_generator(positional_generator(GeneratorKind::GitCommits, 0)),
         )
         .with_subcommand(
             no_positionals("status", "show the working tree status").with_option(
                 OptionSpec::new("-s", "show short-format status").with_alias("--short"),
             ),
         )
+        .with_subcommand(git_remote())
+        .with_subcommand(git_stash())
+}
+
+fn git_remote() -> CommandSpec {
+    CommandSpec::new("remote", "manage tracked repositories")
+        .with_subcommand(CommandSpec::new("add", "add a remote").with_max_positionals(2))
         .with_subcommand(
-            CommandSpec::new("remote", "manage tracked repositories")
-                .with_subcommand(CommandSpec::new("add", "add a remote").with_max_positionals(2))
-                .with_subcommand(
-                    CommandSpec::new("get-url", "read remote URLs").with_max_positionals(1),
-                )
-                .with_subcommand(
-                    CommandSpec::new("remove", "remove a remote")
-                        .with_alias("rm")
-                        .with_max_positionals(1),
-                )
-                .with_subcommand(
-                    CommandSpec::new("rename", "rename a remote").with_max_positionals(2),
-                )
-                .with_subcommand(CommandSpec::new("set-url", "change remote URLs"))
-                .with_subcommand(
-                    CommandSpec::new("show", "inspect a remote").with_max_positionals(1),
-                ),
+            CommandSpec::new("get-url", "read remote URLs")
+                .with_max_positionals(1)
+                .with_generator(positional_generator(GeneratorKind::GitRemotes, 0)),
         )
         .with_subcommand(
-            CommandSpec::new("stash", "stash working tree changes")
-                .with_subcommand(CommandSpec::new("push", "save local modifications"))
-                .with_subcommand(no_positionals("list", "list stashed changes"))
-                .with_subcommand(
-                    CommandSpec::new("show", "inspect a stashed change").with_max_positionals(1),
-                )
-                .with_subcommand(
-                    CommandSpec::new("apply", "apply a stashed change").with_max_positionals(1),
-                )
-                .with_subcommand(
-                    CommandSpec::new("drop", "remove a stashed change").with_max_positionals(1),
-                )
-                .with_subcommand(no_positionals("pop", "apply and remove a stashed change")),
+            CommandSpec::new("remove", "remove a remote")
+                .with_alias("rm")
+                .with_max_positionals(1)
+                .with_generator(positional_generator(GeneratorKind::GitRemotes, 0)),
+        )
+        .with_subcommand(
+            CommandSpec::new("rename", "rename a remote")
+                .with_max_positionals(2)
+                .with_generator(positional_generator(GeneratorKind::GitRemotes, 0)),
+        )
+        .with_subcommand(
+            CommandSpec::new("set-url", "change remote URLs")
+                .with_generator(positional_generator(GeneratorKind::GitRemotes, 0)),
+        )
+        .with_subcommand(
+            CommandSpec::new("show", "inspect a remote")
+                .with_max_positionals(1)
+                .with_generator(positional_generator(GeneratorKind::GitRemotes, 0)),
+        )
+}
+
+fn git_stash() -> CommandSpec {
+    CommandSpec::new("stash", "stash working tree changes")
+        .with_subcommand(CommandSpec::new("push", "save local modifications"))
+        .with_subcommand(no_positionals("list", "list stashed changes"))
+        .with_subcommand(
+            CommandSpec::new("show", "inspect a stashed change")
+                .with_max_positionals(1)
+                .with_generator(positional_generator(GeneratorKind::GitStashes, 0)),
+        )
+        .with_subcommand(
+            CommandSpec::new("apply", "apply a stashed change")
+                .with_max_positionals(1)
+                .with_generator(positional_generator(GeneratorKind::GitStashes, 0)),
+        )
+        .with_subcommand(
+            CommandSpec::new("drop", "remove a stashed change")
+                .with_max_positionals(1)
+                .with_generator(positional_generator(GeneratorKind::GitStashes, 0)),
+        )
+        .with_subcommand(
+            CommandSpec::new("pop", "apply and remove a stashed change")
+                .with_max_positionals(1)
+                .with_generator(positional_generator(GeneratorKind::GitStashes, 0)),
         )
 }
 
@@ -459,18 +527,27 @@ fn apt(description: &str) -> CommandSpec {
             no_positionals("full-upgrade", "upgrade packages with dependency changes")
                 .with_alias("dist-upgrade"),
         )
-        .with_subcommand(CommandSpec::new("install", "install packages"))
-        .with_subcommand(CommandSpec::new("remove", "remove packages"))
-        .with_subcommand(CommandSpec::new(
-            "purge",
-            "remove packages and configuration",
-        ))
+        .with_subcommand(
+            CommandSpec::new("install", "install packages")
+                .with_generator(positional_generator(GeneratorKind::Packages, 0)),
+        )
+        .with_subcommand(
+            CommandSpec::new("remove", "remove packages")
+                .with_generator(positional_generator(GeneratorKind::Packages, 0)),
+        )
+        .with_subcommand(
+            CommandSpec::new("purge", "remove packages and configuration")
+                .with_generator(positional_generator(GeneratorKind::Packages, 0)),
+        )
         .with_subcommand(CommandSpec::new(
             "autoremove",
             "remove unneeded dependencies",
         ))
         .with_subcommand(CommandSpec::new("search", "search package descriptions"))
-        .with_subcommand(CommandSpec::new("show", "show package details"))
+        .with_subcommand(
+            CommandSpec::new("show", "show package details")
+                .with_generator(positional_generator(GeneratorKind::Packages, 0)),
+        )
         .with_subcommand(CommandSpec::new("list", "list packages"))
         .with_subcommand(no_positionals(
             "edit-sources",
@@ -498,6 +575,9 @@ fn tar(description: &str) -> CommandSpec {
             "--version",
             "print tar version information",
         ))
+        .with_generator(option_files("-f", &["tar", "tgz", "gz", "bz2", "xz"]))
+        .with_generator(option_directories("-C"))
+        .with_generator(positional_files(0))
 }
 
 fn vim(description: &str) -> CommandSpec {
@@ -517,6 +597,9 @@ fn vim(description: &str) -> CommandSpec {
             "print Vim version information",
         ))
         .with_option(terminal_option("--help", "print Vim usage information"))
+        .with_generator(positional_files(0))
+        .with_generator(option_files("-u", &["vim", "vimrc"]))
+        .with_generator(option_files("-S", &["vim"]))
 }
 
 fn jq(description: &str) -> CommandSpec {
@@ -535,6 +618,8 @@ fn jq(description: &str) -> CommandSpec {
         .with_option(value_option("--indent", "set indentation width"))
         .with_option(terminal_option("--version", "print jq version information"))
         .with_option(terminal_option("--help", "print jq usage information"))
+        .with_generator(option_files("-f", &["jq"]))
+        .with_generator(positional_files(1))
 }
 
 fn just(description: &str) -> CommandSpec {
@@ -565,6 +650,9 @@ fn just(description: &str) -> CommandSpec {
         .with_option(
             terminal_option("--version", "print just version information").with_alias("-V"),
         )
+        .with_generator(positional_generator(GeneratorKind::JustRecipes, 0))
+        .with_generator(option_files("-f", &["just", "justfile"]))
+        .with_generator(option_directories("-d"))
 }
 
 fn systemctl(description: &str) -> CommandSpec {
@@ -582,29 +670,29 @@ fn systemctl(description: &str) -> CommandSpec {
             "--version",
             "print systemd version information",
         ))
-        .with_subcommand(CommandSpec::new("start", "start units"))
-        .with_subcommand(CommandSpec::new("stop", "stop units"))
-        .with_subcommand(CommandSpec::new("restart", "restart units"))
-        .with_subcommand(CommandSpec::new("reload", "reload unit configuration"))
+        .with_subcommand(service_command("start", "start units"))
+        .with_subcommand(service_command("stop", "stop units"))
+        .with_subcommand(service_command("restart", "restart units"))
+        .with_subcommand(service_command("reload", "reload unit configuration"))
         .with_subcommand(
-            CommandSpec::new("status", "show unit status")
+            service_command("status", "show unit status")
                 .with_option(OptionSpec::new("-l", "show complete log lines").with_alias("--full")),
         )
         .with_subcommand(
-            CommandSpec::new("enable", "enable units")
+            service_command("enable", "enable units")
                 .with_option(OptionSpec::new("--now", "also start units")),
         )
         .with_subcommand(
-            CommandSpec::new("disable", "disable units")
+            service_command("disable", "disable units")
                 .with_option(OptionSpec::new("--now", "also stop units")),
         )
-        .with_subcommand(CommandSpec::new("mask", "mask units"))
-        .with_subcommand(CommandSpec::new("unmask", "unmask units"))
-        .with_subcommand(CommandSpec::new(
+        .with_subcommand(service_command("mask", "mask units"))
+        .with_subcommand(service_command("unmask", "unmask units"))
+        .with_subcommand(service_command(
             "is-active",
             "test whether units are active",
         ))
-        .with_subcommand(CommandSpec::new(
+        .with_subcommand(service_command(
             "is-enabled",
             "test whether units are enabled",
         ))
@@ -622,13 +710,55 @@ fn systemctl(description: &str) -> CommandSpec {
             "list-unit-files",
             "list installed unit files",
         ))
-        .with_subcommand(CommandSpec::new("show", "show unit properties"))
-        .with_subcommand(CommandSpec::new("cat", "show unit files"))
-        .with_subcommand(CommandSpec::new("edit", "edit unit override files"))
+        .with_subcommand(service_command("show", "show unit properties"))
+        .with_subcommand(service_command("cat", "show unit files"))
+        .with_subcommand(service_command("edit", "edit unit override files"))
 }
 
 fn value_option(name: &str, description: &str) -> OptionSpec {
     OptionSpec::new(name, description).takes_value(true)
+}
+
+fn positional_generator(kind: GeneratorKind, index: usize) -> GeneratorSpec {
+    GeneratorSpec::new(kind, GeneratorTarget::Positional(index))
+}
+
+fn option_generator(kind: GeneratorKind, name: &str) -> GeneratorSpec {
+    GeneratorSpec::new(kind, GeneratorTarget::OptionValue(name.to_owned()))
+}
+
+fn filesystem_generator(
+    target: GeneratorTarget,
+    directory_only: bool,
+    extensions: &[&str],
+) -> GeneratorSpec {
+    GeneratorSpec::new(
+        GeneratorKind::Filesystem(FilesystemGenerator {
+            directory_only,
+            extensions: extensions
+                .iter()
+                .map(|extension| (*extension).to_owned())
+                .collect(),
+            ..FilesystemGenerator::default()
+        }),
+        target,
+    )
+}
+
+fn positional_files(index: usize) -> GeneratorSpec {
+    filesystem_generator(GeneratorTarget::Positional(index), false, &[])
+}
+
+fn option_files(name: &str, extensions: &[&str]) -> GeneratorSpec {
+    filesystem_generator(
+        GeneratorTarget::OptionValue(name.to_owned()),
+        false,
+        extensions,
+    )
+}
+
+fn option_directories(name: &str) -> GeneratorSpec {
+    filesystem_generator(GeneratorTarget::OptionValue(name.to_owned()), true, &[])
 }
 
 fn global_value_option(name: &str, description: &str) -> OptionSpec {
@@ -641,6 +771,11 @@ fn terminal_option(name: &str, description: &str) -> OptionSpec {
 
 fn no_positionals(name: &str, description: &str) -> CommandSpec {
     CommandSpec::new(name, description).with_max_positionals(0)
+}
+
+fn service_command(name: &str, description: &str) -> CommandSpec {
+    CommandSpec::new(name, description)
+        .with_generator(positional_generator(GeneratorKind::Services, 0))
 }
 
 #[cfg(test)]
@@ -676,6 +811,10 @@ mod tests {
             assert!(
                 !candidate.subcommands.is_empty() || !candidate.options.is_empty(),
                 "representative spec for {root} has no useful structure"
+            );
+            assert!(
+                generator_count(&candidate) > 0,
+                "representative spec for {root} has no generator declarations"
             );
         }
     }
@@ -715,5 +854,106 @@ mod tests {
             .find(|option| option.name == "--version")
             .unwrap();
         assert_eq!(version.insertion, InsertionBehavior::Exact);
+    }
+
+    #[test]
+    fn representative_generator_targets_cover_local_dynamic_values() {
+        assert_generator(
+            "docker",
+            &["run"],
+            &positional_generator(GeneratorKind::DockerImages, 0),
+        );
+        assert_generator(
+            "docker",
+            &["exec"],
+            &positional_generator(GeneratorKind::DockerContainers, 0),
+        );
+        assert_generator(
+            "npm",
+            &["run"],
+            &positional_generator(GeneratorKind::PackageScripts, 0),
+        );
+        for (root, path) in [
+            ("pip", &["install"][..]),
+            ("cargo", &["add"][..]),
+            ("go", &["get"][..]),
+            ("apt", &["install"][..]),
+        ] {
+            assert_generator(
+                root,
+                path,
+                &positional_generator(GeneratorKind::Packages, 0),
+            );
+        }
+        assert_generator("mvn", &[], &option_files("-f", &["xml"]));
+        assert_generator("cmake", &[], &option_directories("-S"));
+        assert_generator(
+            "git",
+            &["checkout"],
+            &positional_generator(GeneratorKind::GitBranches, 0),
+        );
+        assert_generator(
+            "git",
+            &["remote", "remove"],
+            &positional_generator(GeneratorKind::GitRemotes, 0),
+        );
+        assert_generator(
+            "git",
+            &["stash", "pop"],
+            &positional_generator(GeneratorKind::GitStashes, 0),
+        );
+        assert_generator(
+            "git",
+            &["add"],
+            &positional_generator(GeneratorKind::GitFiles, 0),
+        );
+        assert_generator(
+            "git",
+            &["log"],
+            &positional_generator(GeneratorKind::GitCommits, 0),
+        );
+        assert_generator(
+            "tar",
+            &[],
+            &option_files("-f", &["tar", "tgz", "gz", "bz2", "xz"]),
+        );
+        assert_generator("vim", &[], &positional_files(0));
+        assert_generator("jq", &[], &positional_files(1));
+        assert_generator(
+            "just",
+            &[],
+            &positional_generator(GeneratorKind::JustRecipes, 0),
+        );
+        assert_generator(
+            "systemctl",
+            &["start"],
+            &positional_generator(GeneratorKind::Services, 0),
+        );
+    }
+
+    fn generator_count(command: &CommandSpec) -> usize {
+        command.generators.len()
+            + command
+                .subcommands
+                .iter()
+                .map(generator_count)
+                .sum::<usize>()
+    }
+
+    fn assert_generator(root: &str, path: &[&str], expected: &GeneratorSpec) {
+        let root_spec = spec(root, "representative command").unwrap();
+        let mut command = &root_spec;
+        for segment in path {
+            command = command
+                .subcommands
+                .iter()
+                .find(|candidate| candidate.name == *segment)
+                .unwrap_or_else(|| panic!("missing command path {root} {}", path.join(" ")));
+        }
+        assert!(
+            command.generators.contains(expected),
+            "missing generator {expected:?} at {root} {}",
+            path.join(" ")
+        );
     }
 }

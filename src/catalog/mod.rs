@@ -510,7 +510,10 @@ pub fn markdown() -> Result<String, CatalogError> {
     for category in Category::ALL {
         output.push_str("## ");
         output.push_str(category.label());
-        output.push_str("\n\n| Command | Description | Status |\n| --- | --- | --- |\n");
+        output.push_str(
+            "\n\n| Command | Description | Status | Subcommands | Options | Generators |\n\
+             | --- | --- | --- | ---: | ---: | ---: |\n",
+        );
         let mut category_entries = entries()
             .into_iter()
             .filter(|entry| entry.category == category)
@@ -524,9 +527,18 @@ pub fn markdown() -> Result<String, CatalogError> {
                 MigrationStatus::Aliased { canonical } => format!("aliased to `{canonical}`"),
                 MigrationStatus::Retired { reason } => format!("retired: {reason}"),
             };
+            let structure =
+                matches!(entry.status, MigrationStatus::Migrated).then(|| command_spec(entry));
+            let (subcommands, options, generators) = structure.as_ref().map_or((0, 0, 0), |spec| {
+                (
+                    spec.subcommands.len(),
+                    spec.options.len(),
+                    spec.generators.len(),
+                )
+            });
             writeln!(
                 output,
-                "| `{}` | {} | {} |",
+                "| `{}` | {} | {} | {subcommands} | {options} | {generators} |",
                 entry.name,
                 entry.description.replace('|', "\\|"),
                 status

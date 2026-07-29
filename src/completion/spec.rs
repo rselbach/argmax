@@ -4,8 +4,8 @@ use std::fmt;
 use std::ops::Range;
 
 use super::{
-    CompletionQuery, InsertionBehavior, QuoteKind, ShellToken, Suggestion, SuggestionSource,
-    TextEdit, TokenizedLine, tokenize,
+    CompletionQuery, GeneratorSpec, GeneratorTarget, InsertionBehavior, QuoteKind, ShellToken,
+    Suggestion, SuggestionSource, TextEdit, TokenizedLine, tokenize,
 };
 
 /// One recursively nested command in a curated completion specification.
@@ -21,6 +21,8 @@ pub struct CommandSpec {
     pub subcommands: Vec<CommandSpec>,
     /// Flags and options accepted at this node.
     pub options: Vec<OptionSpec>,
+    /// Bounded dynamic values declared at argument locations on this node.
+    pub generators: Vec<GeneratorSpec>,
     /// Maximum positional values accepted by this node, or no fixed maximum.
     pub max_positionals: Option<usize>,
     /// Static ranking priority in the inclusive range zero to one.
@@ -39,6 +41,7 @@ impl CommandSpec {
             description: description.into(),
             subcommands: Vec::new(),
             options: Vec::new(),
+            generators: Vec::new(),
             max_positionals: None,
             priority: 0.5,
             insertion: InsertionBehavior::AppendSpace,
@@ -63,6 +66,13 @@ impl CommandSpec {
     #[must_use]
     pub fn with_option(mut self, option: OptionSpec) -> Self {
         self.options.push(option);
+        self
+    }
+
+    /// Adds a bounded dynamic value declaration.
+    #[must_use]
+    pub fn with_generator(mut self, generator: GeneratorSpec) -> Self {
+        self.generators.push(generator);
         self
     }
 
@@ -271,6 +281,7 @@ impl SpecIndex {
         let mut node = &self.roots[root_index];
         let mut path = vec![node.name.clone()];
         let mut inherited_options = Vec::new();
+        let mut inherited_generators = Vec::new();
         let mut used_options = BTreeSet::new();
         let mut positional_count = 0;
         let mut subcommands_allowed = true;
@@ -308,6 +319,14 @@ impl SpecIndex {
 
             if subcommands_allowed {
                 if let Some(child) = find_subcommand(node, &token.cooked) {
+                    inherited_generators.extend(node.generators.iter().filter(|generator| {
+                        let GeneratorTarget::OptionValue(name) = &generator.target else {
+                            return false;
+                        };
+                        node.options.iter().any(|option| {
+                            option.global && option.names().any(|candidate| candidate == name)
+                        })
+                    }));
                     inherited_options.extend(node.options.iter().filter(|option| option.global));
                     node = child;
                     path.push(node.name.clone());
@@ -362,6 +381,7 @@ impl SpecIndex {
             used_options,
             awaiting_option,
             inherited_options,
+            inherited_generators,
         })
     }
 
@@ -423,22 +443,49 @@ pub struct SpecResolution<'a> {
     /// Value-taking option whose value is currently active.
     pub awaiting_option: Option<&'a OptionSpec>,
     inherited_options: Vec<&'a OptionSpec>,
+    inherited_generators: Vec<&'a GeneratorSpec>,
 }
 
-impl SpecResolution<'_> {
+impl<'a> SpecResolution<'a> {
     /// Returns local and inherited global options in stable declaration order.
     #[must_use]
-    pub fn available_options(&self) -> Vec<&OptionSpec> {
+    pub fn available_options(&self) -> Vec<&'a OptionSpec> {
         let mut options = self.node.options.iter().collect::<Vec<_>>();
         options.extend(self.inherited_options.iter().copied());
         options
     }
+
+    /// Returns dynamic generators applicable to the argument at the cursor.
+    #[must_use]
+    pub fn active_generators(&self) -> Vec<&'a GeneratorSpec> {
+        self.node
+            .generators
+            .iter()
+            .chain(self.inherited_generators.iter().copied())
+            .filter(|generator| match &generator.target {
+                GeneratorTarget::Positional(index) => {
+                    self.awaiting_option.is_none()
+                        && self.can_accept_positional
+                        && *index == self.positional_index
+                }
+                GeneratorTarget::OptionValue(name) => self
+                    .awaiting_option
+                    .is_some_and(|option| option.names().any(|candidate| candidate == name)),
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct InheritedOption {
+    path: String,
+    takes_value: bool,
 }
 
 fn validate_command(
     command: &CommandSpec,
     parent_path: &str,
-    inherited_global_names: &BTreeMap<String, String>,
+    inherited_global_names: &BTreeMap<String, InheritedOption>,
 ) -> Result<(), SpecError> {
     validate_command_name(&command.name, parent_path)?;
     let path = if parent_path.is_empty() {
@@ -472,7 +519,10 @@ fn validate_command(
             if let Some(previous) = inherited_global_names.get(name) {
                 return Err(SpecError::new(
                     &path,
-                    format!("option {name:?} conflicts with inherited option from {previous}"),
+                    format!(
+                        "option {name:?} conflicts with inherited option from {}",
+                        previous.path
+                    ),
                 ));
             }
             if let Some(previous) = option_names.insert(name, option.name.as_str()) {
@@ -486,6 +536,8 @@ fn validate_command(
             }
         }
     }
+
+    validate_generators(command, &path, inherited_global_names)?;
 
     let mut child_names = BTreeMap::new();
     for child in &command.subcommands {
@@ -506,7 +558,13 @@ fn validate_command(
     let mut globals = inherited_global_names.clone();
     for option in command.options.iter().filter(|option| option.global) {
         for name in option.names() {
-            globals.insert(name.to_string(), path.clone());
+            globals.insert(
+                name.to_string(),
+                InheritedOption {
+                    path: path.clone(),
+                    takes_value: option.takes_value,
+                },
+            );
         }
     }
     for child in &command.subcommands {
@@ -514,6 +572,72 @@ fn validate_command(
     }
 
     Ok(())
+}
+
+fn validate_generators(
+    command: &CommandSpec,
+    path: &str,
+    inherited_global_names: &BTreeMap<String, InheritedOption>,
+) -> Result<(), SpecError> {
+    for (index, generator) in command.generators.iter().enumerate() {
+        generator
+            .validate()
+            .map_err(|error| SpecError::new(path, format!("invalid generator {index}: {error}")))?;
+        if command.generators[..index].contains(generator) {
+            return Err(SpecError::new(
+                path,
+                format!("duplicate generator declaration at index {index}"),
+            ));
+        }
+        match &generator.target {
+            GeneratorTarget::Positional(position) => {
+                if command
+                    .max_positionals
+                    .is_some_and(|maximum| *position >= maximum)
+                {
+                    return Err(SpecError::new(
+                        path,
+                        format!(
+                            "generator targets positional {position}, beyond the maximum of {}",
+                            command.max_positionals.unwrap_or_default()
+                        ),
+                    ));
+                }
+            }
+            GeneratorTarget::OptionValue(name) => {
+                validate_generator_option_target(command, path, inherited_global_names, name)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_generator_option_target(
+    command: &CommandSpec,
+    path: &str,
+    inherited_global_names: &BTreeMap<String, InheritedOption>,
+    name: &str,
+) -> Result<(), SpecError> {
+    let local = command
+        .options
+        .iter()
+        .find(|option| option.names().any(|candidate| candidate == name));
+    let takes_value = local.map(|option| option.takes_value).or_else(|| {
+        inherited_global_names
+            .get(name)
+            .map(|option| option.takes_value)
+    });
+    match takes_value {
+        Some(true) => Ok(()),
+        Some(false) => Err(SpecError::new(
+            path,
+            format!("generator target {name:?} is not a value-taking option"),
+        )),
+        None => Err(SpecError::new(
+            path,
+            format!("generator targets unknown option {name:?}"),
+        )),
+    }
 }
 
 fn validate_command_name(name: &str, path: &str) -> Result<(), SpecError> {
@@ -833,6 +957,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::completion::{FilesystemGenerator, GeneratorKind};
 
     fn git_index() -> SpecIndex {
         let commit = CommandSpec::new("commit", "record changes")
@@ -1111,5 +1236,102 @@ mod tests {
         let resolution = index.resolve(&parsed).unwrap();
         assert_eq!(resolution.path, ["tool"]);
         assert!(!resolution.subcommands_allowed);
+    }
+
+    #[test]
+    fn generator_targets_are_validated_against_node_arguments() {
+        let valid = CommandSpec::new("tool", "tool")
+            .with_option(OptionSpec::new("--format", "format").takes_value(true))
+            .with_generator(GeneratorSpec::new(
+                GeneratorKind::FileTypes,
+                GeneratorTarget::OptionValue("--format".into()),
+            ))
+            .with_generator(GeneratorSpec::new(
+                GeneratorKind::Processes,
+                GeneratorTarget::Positional(0),
+            ));
+        valid.validate().unwrap();
+
+        let unknown_option = CommandSpec::new("tool", "tool").with_generator(GeneratorSpec::new(
+            GeneratorKind::FileTypes,
+            GeneratorTarget::OptionValue("--format".into()),
+        ));
+        assert!(
+            unknown_option
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("unknown option")
+        );
+
+        let flag = CommandSpec::new("tool", "tool")
+            .with_option(OptionSpec::new("--verbose", "verbose"))
+            .with_generator(GeneratorSpec::new(
+                GeneratorKind::FileTypes,
+                GeneratorTarget::OptionValue("--verbose".into()),
+            ));
+        assert!(flag.validate().is_err());
+
+        let capped = CommandSpec::new("tool", "tool")
+            .with_max_positionals(0)
+            .with_generator(GeneratorSpec::new(
+                GeneratorKind::Processes,
+                GeneratorTarget::Positional(0),
+            ));
+        assert!(capped.validate().is_err());
+    }
+
+    #[test]
+    fn resolution_selects_only_generators_active_at_the_cursor() {
+        let index = SpecIndex::new([CommandSpec::new("tool", "tool")
+            .with_option(OptionSpec::new("--format", "format").takes_value(true))
+            .with_generator(GeneratorSpec::new(
+                GeneratorKind::Processes,
+                GeneratorTarget::Positional(0),
+            ))
+            .with_generator(GeneratorSpec::new(
+                GeneratorKind::FileTypes,
+                GeneratorTarget::OptionValue("--format".into()),
+            ))])
+        .unwrap();
+
+        let positional = tokenize("tool ", 5).unwrap();
+        let active = index.resolve(&positional).unwrap().active_generators();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].kind, GeneratorKind::Processes);
+
+        let option_value = tokenize("tool --format ", 14).unwrap();
+        let active = index.resolve(&option_value).unwrap().active_generators();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].kind, GeneratorKind::FileTypes);
+
+        let consumed = tokenize("tool process ", 13).unwrap();
+        assert!(
+            index
+                .resolve(&consumed)
+                .unwrap()
+                .active_generators()
+                .is_empty()
+        );
+
+        let inherited = SpecIndex::new([CommandSpec::new("tool", "tool")
+            .with_option(
+                OptionSpec::new("--config", "config")
+                    .takes_value(true)
+                    .global(true),
+            )
+            .with_generator(GeneratorSpec::new(
+                GeneratorKind::Filesystem(FilesystemGenerator::default()),
+                GeneratorTarget::OptionValue("--config".into()),
+            ))
+            .with_subcommand(CommandSpec::new("child", "child"))])
+        .unwrap();
+        let option_value = tokenize("tool child --config ", 20).unwrap();
+        let active = inherited
+            .resolve(&option_value)
+            .unwrap()
+            .active_generators();
+        assert_eq!(active.len(), 1);
+        assert!(matches!(active[0].kind, GeneratorKind::Filesystem(_)));
     }
 }
