@@ -200,7 +200,7 @@ impl Default for Core {
 }
 
 /// Supported interactive shell override.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Shell {
     /// Bourne Again Shell.
     Bash,
@@ -208,6 +208,24 @@ pub enum Shell {
     Zsh,
     /// Friendly Interactive Shell.
     Fish,
+}
+
+impl Shell {
+    /// Returns the stable CLI and configuration spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+            Self::Zsh => "zsh",
+            Self::Fish => "fish",
+        }
+    }
+}
+
+impl fmt::Display for Shell {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 /// Initial suggestion mode policy.
