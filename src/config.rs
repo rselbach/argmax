@@ -402,7 +402,7 @@ pub enum AiContextLevel {
 }
 
 /// One named OpenAI-compatible provider.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct AiProvider {
     /// Compatibility protocol inherited by this provider.
     pub inherited_from: ProviderProtocol,
@@ -439,6 +439,27 @@ impl AiProvider {
     #[must_use]
     pub fn redacted_api_key(&self) -> Option<&'static str> {
         redact_credential(self.api_key.as_ref())
+    }
+}
+
+impl fmt::Debug for AiProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let endpoint = self.endpoint.as_ref().map(|_| "<configured>");
+        let extra_request_body = if self.extra_request_body.is_empty() {
+            "<empty>"
+        } else {
+            "<redacted>"
+        };
+        formatter
+            .debug_struct("AiProvider")
+            .field("inherited_from", &self.inherited_from)
+            .field("endpoint", &endpoint)
+            .field("api_key_env", &self.api_key_env)
+            .field("api_key", &self.redacted_api_key())
+            .field("model", &self.model)
+            .field("timeout_ms", &self.timeout_ms)
+            .field("extra_request_body", &extra_request_body)
+            .finish()
     }
 }
 
@@ -1072,19 +1093,24 @@ mod tests {
         let secret = Credential::new("chang-loves-security");
         let provider = AiProvider {
             inherited_from: ProviderProtocol::OpenAi,
+            endpoint: Some("https://api.greendale.test/v1?api-key=query-secret".to_string()),
             api_key_env: Some("GREENDALE_API_KEY".to_string()),
             api_key: Some(secret.clone()),
             extra_request_body: BTreeMap::from([(
-                "temperature".to_string(),
-                ExtraRequestValue::Float(0.2),
+                "metadata".to_string(),
+                ExtraRequestValue::String("extra-secret".to_string()),
             )]),
             ..AiProvider::default()
         };
 
         assert_eq!(secret.expose_secret(), "chang-loves-security");
         assert_eq!(provider.redacted_api_key(), Some(REDACTED_CREDENTIAL));
-        assert!(!format!("{provider:?}").contains("chang-loves-security"));
-        assert!(format!("{provider:?}").contains(REDACTED_CREDENTIAL));
+        let debug = format!("{provider:?}");
+        for secret in ["chang-loves-security", "query-secret", "extra-secret"] {
+            assert!(!debug.contains(secret));
+        }
+        assert!(debug.contains(REDACTED_CREDENTIAL));
+        assert!(debug.contains("<configured>"));
         assert_eq!(provider.inherited_from, ProviderProtocol::OpenAi);
         assert_eq!(provider.api_key_env.as_deref(), Some("GREENDALE_API_KEY"));
         assert_eq!(provider.extra_request_body.len(), 1);
