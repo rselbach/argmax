@@ -1,6 +1,7 @@
 //! Local completion providers that cannot write to the terminal.
 
 mod aliases;
+mod cache;
 mod cobra;
 mod dynamic;
 mod filesystem;
@@ -10,6 +11,11 @@ mod workspace;
 pub use aliases::{
     Alias, AliasLookup, alias_config_paths, alias_expansion_edit, alias_suggestions, load_aliases,
     parse_aliases, resolve_alias_for_lookup,
+};
+pub use cache::{
+    DynamicCacheAdmission, DynamicCacheKey, DynamicCacheKeyError, DynamicResultCache,
+    MAX_DYNAMIC_CACHE_ARGUMENTS, MAX_DYNAMIC_CACHE_BYTES, MAX_DYNAMIC_CACHE_ENTRIES,
+    MAX_DYNAMIC_CACHE_KEY_BYTES,
 };
 pub use cobra::{
     COBRA_COMPLETION_TIMEOUT, CobraBinaryIdentity, CobraCacheKey, CobraCandidate, CobraCompletion,
