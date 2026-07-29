@@ -5,6 +5,10 @@ mod cache;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
+use crate::completion::{
+    CommandSpec, OptionSpec, QuoteKind, ShellToken, SpecIndex, TokenizedLine, tokenize,
+};
+
 pub use cache::{
     DEFAULT_MAX_HISTORY_BYTES, DEFAULT_MAX_SESSION_ENTRIES, HistoryCache, HistoryFileKey,
 };
@@ -150,6 +154,62 @@ pub fn search_history(
     };
     if matched.is_empty() {
         matched = collect_matches(&entries, &query_alternatives, aliases, false);
+    }
+
+    matched.sort_by(compare_matches);
+    matched
+        .into_iter()
+        .take(LIMIT)
+        .map(|ranked| HistoryMatch {
+            entry: ranked.entry,
+            tier: ranked.quality.tier,
+            fuzzy_score: ranked.quality.fuzzy_score,
+        })
+        .collect()
+}
+
+/// Searches history with shell-aware, specification-backed command structure.
+///
+/// This preserves [`search_history`] matching tiers and alias lookup behavior,
+/// but uses the supplied specifications to distinguish subcommands from option
+/// values. Unknown roots, unknown options, and `--` before a subcommand disable
+/// structural filtering conservatively. When no structured candidate matches,
+/// the ordinary broad line and fuzzy search remains available.
+#[must_use]
+pub fn search_history_with_specs(
+    entries: &[HistoryEntry],
+    query: &str,
+    aliases: &[(&str, &str)],
+    specs: &SpecIndex,
+) -> Vec<HistoryMatch> {
+    const LIMIT: usize = 100;
+
+    let query = query.trim_start();
+    let entries = unique_newest(entries);
+    if query.is_empty() {
+        return entries
+            .into_iter()
+            .take(LIMIT)
+            .map(|(_, entry)| HistoryMatch {
+                entry,
+                tier: HistoryTier::Prefix,
+                fuzzy_score: 0,
+            })
+            .collect();
+    }
+
+    let query_alternatives = tokenized_command_alternatives(query, aliases);
+    let structured_queries = query_alternatives
+        .iter()
+        .filter_map(|alternative| spec_query_intent(alternative, specs))
+        .collect::<Vec<_>>();
+    let mut matched = if structured_queries.is_empty() {
+        Vec::new()
+    } else {
+        collect_spec_matches(&entries, &structured_queries, aliases, specs)
+    };
+    if matched.is_empty() {
+        matched = collect_tokenized_line_matches(&entries, &query_alternatives, aliases);
     }
 
     matched.sort_by(compare_matches);
@@ -350,6 +410,301 @@ struct RankedMatch {
     recency: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SpecQueryIntent {
+    line: String,
+    root: String,
+    subcommands: Vec<String>,
+    needle: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SpecCommandParts {
+    root: String,
+    subcommand: String,
+}
+
+struct SpecTraversal<'a> {
+    root: &'a CommandSpec,
+    node: &'a CommandSpec,
+    inherited_options: Vec<&'a OptionSpec>,
+    first_subcommand: Option<String>,
+    awaiting_option_value: bool,
+    subcommands_allowed: bool,
+    options_ended: bool,
+}
+
+fn collect_spec_matches(
+    entries: &[(usize, HistoryEntry)],
+    queries: &[SpecQueryIntent],
+    aliases: &[(&str, &str)],
+    specs: &SpecIndex,
+) -> Vec<RankedMatch> {
+    entries
+        .iter()
+        .filter_map(|(recency, entry)| {
+            let candidates = tokenized_command_alternatives(&entry.command, aliases);
+            let quality = candidates
+                .iter()
+                .filter_map(|candidate| {
+                    let parts = spec_candidate_parts(candidate, specs)?;
+                    queries
+                        .iter()
+                        .filter_map(|query| spec_structured_quality(query, candidate, &parts))
+                        .min_by(compare_quality)
+                })
+                .min_by(compare_quality)?;
+            Some(RankedMatch {
+                entry: entry.clone(),
+                quality,
+                recency: *recency,
+            })
+        })
+        .collect()
+}
+
+fn collect_tokenized_line_matches(
+    entries: &[(usize, HistoryEntry)],
+    query_alternatives: &[String],
+    aliases: &[(&str, &str)],
+) -> Vec<RankedMatch> {
+    entries
+        .iter()
+        .filter_map(|(recency, entry)| {
+            let candidates = tokenized_command_alternatives(&entry.command, aliases);
+            let quality = candidates
+                .iter()
+                .flat_map(|candidate| {
+                    query_alternatives
+                        .iter()
+                        .filter_map(move |query| line_quality(query, candidate))
+                })
+                .min_by(compare_quality)?;
+            Some(RankedMatch {
+                entry: entry.clone(),
+                quality,
+                recency: *recency,
+            })
+        })
+        .collect()
+}
+
+fn spec_structured_quality(
+    query: &SpecQueryIntent,
+    candidate: &str,
+    parts: &SpecCommandParts,
+) -> Option<MatchQuality> {
+    if !query.root.eq_ignore_ascii_case(&parts.root)
+        || !query
+            .subcommands
+            .iter()
+            .any(|subcommand| subcommand.eq_ignore_ascii_case(&parts.subcommand))
+    {
+        return None;
+    }
+
+    if let Some(quality) = line_quality(&query.line, candidate) {
+        if quality.tier != HistoryTier::Fuzzy {
+            return Some(quality);
+        }
+    }
+    let quality = line_quality(&query.needle, &parts.subcommand)?;
+    if quality.tier == HistoryTier::Exact {
+        return Some(MatchQuality {
+            tier: HistoryTier::Prefix,
+            fuzzy_score: 0,
+        });
+    }
+    Some(quality)
+}
+
+fn spec_query_intent(command: &str, specs: &SpecIndex) -> Option<SpecQueryIntent> {
+    let parsed = tokenize(command, command.len()).ok()?;
+    let traversal = traverse_spec_tokens(specs, parsed.committed_tokens())?;
+    let root = traversal.root.name.clone();
+
+    if let Some(subcommand) = traversal.first_subcommand {
+        return Some(SpecQueryIntent {
+            line: command.to_owned(),
+            root,
+            subcommands: vec![subcommand.clone()],
+            needle: subcommand,
+        });
+    }
+    if traversal.awaiting_option_value || traversal.options_ended || !traversal.subcommands_allowed
+    {
+        return None;
+    }
+
+    let active = parsed.active_token();
+    if active.cooked.is_empty() || !active.complete || active.cooked.starts_with('-') {
+        return None;
+    }
+
+    let folded = active.cooked.to_lowercase();
+    let mut subcommands = Vec::new();
+    let mut exact = None;
+    for child in &traversal.node.subcommands {
+        let names =
+            std::iter::once(child.name.as_str()).chain(child.aliases.iter().map(String::as_str));
+        let mut matched = false;
+        for name in names {
+            if name.eq_ignore_ascii_case(&active.cooked) {
+                exact = Some(child.name.clone());
+                matched = true;
+                break;
+            }
+            if name.to_lowercase().starts_with(&folded) {
+                matched = true;
+            }
+        }
+        if matched {
+            subcommands.push(child.name.clone());
+        }
+    }
+    if subcommands.is_empty() {
+        return None;
+    }
+
+    Some(SpecQueryIntent {
+        line: command.to_owned(),
+        root,
+        subcommands,
+        needle: exact.unwrap_or_else(|| active.cooked.clone()),
+    })
+}
+
+fn spec_candidate_parts(command: &str, specs: &SpecIndex) -> Option<SpecCommandParts> {
+    let mut committed_line = command.to_owned();
+    if !committed_line
+        .chars()
+        .next_back()
+        .is_some_and(is_history_whitespace)
+    {
+        committed_line.push(' ');
+    }
+    let parsed = tokenize(&committed_line, committed_line.len()).ok()?;
+    let traversal = traverse_spec_tokens(specs, parsed.committed_tokens())?;
+    Some(SpecCommandParts {
+        root: traversal.root.name.clone(),
+        subcommand: traversal.first_subcommand?,
+    })
+}
+
+fn traverse_spec_tokens<'a>(
+    specs: &'a SpecIndex,
+    tokens: &[ShellToken],
+) -> Option<SpecTraversal<'a>> {
+    let root_token = tokens.first()?;
+    if !root_token.complete {
+        return None;
+    }
+    let root = specs.roots().iter().find(|candidate| {
+        candidate.name.eq_ignore_ascii_case(&root_token.cooked)
+            || candidate
+                .aliases
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(&root_token.cooked))
+    })?;
+    let mut traversal = SpecTraversal {
+        root,
+        node: root,
+        inherited_options: Vec::new(),
+        first_subcommand: None,
+        awaiting_option_value: false,
+        subcommands_allowed: true,
+        options_ended: false,
+    };
+
+    for token in &tokens[1..] {
+        if !token.complete {
+            return None;
+        }
+        if traversal.awaiting_option_value {
+            traversal.awaiting_option_value = false;
+            continue;
+        }
+        if !traversal.options_ended {
+            if token.cooked == "--" {
+                traversal.options_ended = true;
+                traversal.subcommands_allowed = false;
+                continue;
+            }
+            if token.cooked.starts_with('-') {
+                let Some(awaiting_value) = history_option_usage(
+                    traversal.node,
+                    &traversal.inherited_options,
+                    &token.cooked,
+                ) else {
+                    traversal.subcommands_allowed = false;
+                    continue;
+                };
+                traversal.awaiting_option_value = awaiting_value;
+                continue;
+            }
+        }
+
+        if traversal.subcommands_allowed {
+            if let Some(child) = find_history_subcommand(traversal.node, &token.cooked) {
+                if traversal.first_subcommand.is_none() {
+                    traversal.first_subcommand = Some(child.name.clone());
+                }
+                traversal
+                    .inherited_options
+                    .extend(traversal.node.options.iter().filter(|option| option.global));
+                traversal.node = child;
+                continue;
+            }
+            traversal.subcommands_allowed = false;
+        }
+    }
+
+    Some(traversal)
+}
+
+fn find_history_subcommand<'a>(command: &'a CommandSpec, name: &str) -> Option<&'a CommandSpec> {
+    command.subcommands.iter().find(|child| {
+        child.name.eq_ignore_ascii_case(name)
+            || child
+                .aliases
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(name))
+    })
+}
+
+fn history_option_usage(
+    command: &CommandSpec,
+    inherited: &[&OptionSpec],
+    token: &str,
+) -> Option<bool> {
+    let (option_name, attached_with_equals) = token
+        .split_once('=')
+        .map_or((token, false), |(name, _)| (name, true));
+    for option in command.options.iter().chain(inherited.iter().copied()) {
+        if option.names().any(|name| name == option_name) {
+            if attached_with_equals && !option.takes_value {
+                return None;
+            }
+            return Some(option.takes_value && !attached_with_equals);
+        }
+    }
+
+    command
+        .options
+        .iter()
+        .chain(inherited.iter().copied())
+        .filter(|option| option.takes_value)
+        .flat_map(OptionSpec::names)
+        .filter(|name| name.starts_with('-') && !name.starts_with("--"))
+        .filter(|name| token.len() > name.len() && token.starts_with(name))
+        .max_by_key(|name| name.len())
+        .map(|_| false)
+}
+
+const fn is_history_whitespace(character: char) -> bool {
+    matches!(character, ' ' | '\t' | '\n')
+}
+
 fn collect_matches(
     entries: &[(usize, HistoryEntry)],
     query_alternatives: &[String],
@@ -494,6 +849,59 @@ fn command_alternatives(command: &str, aliases: &[(&str, &str)]) -> Vec<String> 
     }
 
     alternatives
+}
+
+fn tokenized_command_alternatives(command: &str, aliases: &[(&str, &str)]) -> Vec<String> {
+    const MAX_ALIASES: usize = 4_096;
+
+    let original = command.to_owned();
+    let mut alternatives = vec![original.clone()];
+    let mut current = original;
+
+    for _ in 0..aliases.len().min(MAX_ALIASES) {
+        let Some(expanded) = expand_root_alias_tokenized(&current, aliases) else {
+            break;
+        };
+        if alternatives
+            .iter()
+            .any(|alternative| alternative.eq_ignore_ascii_case(&expanded))
+        {
+            break;
+        }
+        alternatives.push(expanded.clone());
+        current = expanded;
+    }
+
+    alternatives
+}
+
+fn expand_root_alias_tokenized(command: &str, aliases: &[(&str, &str)]) -> Option<String> {
+    let parsed = tokenize(command, command.len()).ok()?;
+    let root = parsed.tokens.first()?;
+    if !is_plain_history_token(&parsed, root) {
+        return None;
+    }
+    let (_, canonical) = aliases
+        .iter()
+        .take(4_096)
+        .find(|(alias, _)| root.cooked.eq_ignore_ascii_case(alias.trim()))?;
+    let canonical = canonical.trim();
+    if canonical.is_empty() {
+        return None;
+    }
+
+    let mut expanded =
+        String::with_capacity(command.len() - (root.raw.end - root.raw.start) + canonical.len());
+    expanded.push_str(&command[..root.raw.start]);
+    expanded.push_str(canonical);
+    expanded.push_str(&command[root.raw.end..]);
+    Some(expanded)
+}
+
+fn is_plain_history_token(line: &TokenizedLine, token: &ShellToken) -> bool {
+    token.quote == QuoteKind::Unquoted
+        && token.complete
+        && token.raw_text(&line.line) == Some(token.cooked.as_str())
 }
 
 fn expand_root_alias(command: &str, aliases: &[(&str, &str)]) -> Option<String> {
@@ -823,6 +1231,149 @@ mod tests {
     }
 
     #[test]
+    fn spec_search_skips_separate_quoted_and_attached_option_values() {
+        let entries = vec![
+            HistoryEntry::new("git -C Greendale checkout main"),
+            HistoryEntry::new("git --git-dir=/tmp/repo checkout feature"),
+            HistoryEntry::new("git -CGreendale checkout campus"),
+            HistoryEntry::new("git -C checkout status"),
+            HistoryEntry::new("git -C repo commit"),
+        ];
+
+        let found = search_history_with_specs(
+            &entries,
+            "git -C 'Greendale campus' che",
+            &[],
+            &history_specs(),
+        );
+
+        assert_eq!(
+            commands(
+                &found
+                    .iter()
+                    .map(|item| item.entry.clone())
+                    .collect::<Vec<_>>()
+            ),
+            [
+                "git -C Greendale checkout main",
+                "git --git-dir=/tmp/repo checkout feature",
+                "git -CGreendale checkout campus",
+            ]
+        );
+        assert!(found.iter().all(|item| item.tier == HistoryTier::Prefix));
+    }
+
+    #[test]
+    fn spec_search_canonicalizes_root_and_subcommand_aliases() {
+        let entries = vec![
+            HistoryEntry::new("git --no-pager checkout main"),
+            HistoryEntry::new("g checkout feature"),
+            HistoryEntry::new("git -C 'Greendale campus' co courtyard"),
+            HistoryEntry::new("git commit -m message"),
+        ];
+
+        let found = search_history_with_specs(
+            &entries,
+            "g -C 'Greendale campus' co",
+            &[],
+            &history_specs(),
+        );
+
+        assert_eq!(
+            commands(
+                &found
+                    .iter()
+                    .map(|item| item.entry.clone())
+                    .collect::<Vec<_>>()
+            ),
+            [
+                "git --no-pager checkout main",
+                "g checkout feature",
+                "git -C 'Greendale campus' co courtyard",
+            ]
+        );
+        assert!(found.iter().all(|item| item.tier == HistoryTier::Prefix));
+    }
+
+    #[test]
+    fn spec_search_uses_tokenized_multiword_aliases_for_lookup_only() {
+        let aliases = [("gc", "git checkout")];
+        let entries = vec![
+            HistoryEntry::new("git checkout main"),
+            HistoryEntry::new("gc Greendale"),
+            HistoryEntry::new("git commit"),
+        ];
+
+        let found = search_history_with_specs(&entries, "gc ma", &aliases, &history_specs());
+
+        assert_eq!(found[0].entry.command, "git checkout main");
+        assert!(!found.iter().any(|item| item.entry.command == "git commit"));
+        let alias = search_history_with_specs(&entries, "gc", &aliases, &history_specs());
+        assert!(
+            alias
+                .iter()
+                .any(|item| item.entry.command == "gc Greendale")
+        );
+    }
+
+    #[test]
+    fn spec_search_respects_option_terminator_position() {
+        let entries = vec![
+            HistoryEntry::new("echo git -- che"),
+            HistoryEntry::new("git checkout main"),
+            HistoryEntry::new("git commit ma"),
+        ];
+
+        let broad = search_history_with_specs(&entries, "git -- che", &[], &history_specs());
+        assert_eq!(broad[0].entry.command, "echo git -- che");
+        assert_eq!(broad[0].tier, HistoryTier::Contains);
+
+        let structured =
+            search_history_with_specs(&entries, "git checkout -- ma", &[], &history_specs());
+        assert_eq!(commands_from_matches(&structured), ["git checkout main"]);
+    }
+
+    #[test]
+    fn spec_search_treats_unknown_roots_and_options_conservatively() {
+        let candidates = vec![
+            HistoryEntry::new("git --mystery checkout"),
+            HistoryEntry::new("git checkout main"),
+        ];
+        let structured = search_history_with_specs(&candidates, "git che", &[], &history_specs());
+        assert_eq!(commands_from_matches(&structured), ["git checkout main"]);
+
+        let broad_entries = vec![HistoryEntry::new("echo git --mystery repo che")];
+        let unknown_option = search_history_with_specs(
+            &broad_entries,
+            "git --mystery repo che",
+            &[],
+            &history_specs(),
+        );
+        assert_eq!(
+            unknown_option[0].entry.command,
+            "echo git --mystery repo che"
+        );
+
+        let unknown_root = search_history_with_specs(
+            &[HistoryEntry::new("echo mystery che")],
+            "mystery che",
+            &[],
+            &history_specs(),
+        );
+        assert_eq!(unknown_root[0].entry.command, "echo mystery che");
+    }
+
+    #[test]
+    fn spec_search_falls_back_broadly_when_structure_has_no_candidate() {
+        let entries = vec![HistoryEntry::new("echo git checkout reminder")];
+
+        let found = search_history_with_specs(&entries, "git che", &[], &history_specs());
+
+        assert_eq!(found[0].entry.command, "echo git checkout reminder");
+        assert_eq!(found[0].tier, HistoryTier::Contains);
+    }
+
+    #[test]
     fn preserves_exact_command_whitespace_during_parse_and_merge() {
         let parsed = parse_history(HistoryFormat::Bash, "  echo Greendale  \n");
         assert_eq!(parsed[0].command, "  echo Greendale  ");
@@ -845,5 +1396,35 @@ mod tests {
         assert_eq!(found[0].tier, HistoryTier::Prefix);
         assert_eq!(found[1].entry.command, "github auth status");
         assert_eq!(found[1].tier, HistoryTier::Fuzzy);
+    }
+
+    fn history_specs() -> SpecIndex {
+        let git = CommandSpec::new("git", "version control")
+            .with_alias("g")
+            .with_option(
+                OptionSpec::new("-C", "select a working directory")
+                    .takes_value(true)
+                    .global(true),
+            )
+            .with_option(
+                OptionSpec::new("--git-dir", "select a repository")
+                    .takes_value(true)
+                    .global(true),
+            )
+            .with_option(OptionSpec::new("--no-pager", "disable paging").global(true))
+            .with_subcommand(CommandSpec::new("checkout", "switch branches").with_alias("co"))
+            .with_subcommand(
+                CommandSpec::new("commit", "record changes")
+                    .with_option(OptionSpec::new("-m", "set the message").takes_value(true)),
+            )
+            .with_subcommand(CommandSpec::new("status", "show status"));
+        SpecIndex::new([git]).unwrap()
+    }
+
+    fn commands_from_matches(entries: &[HistoryMatch]) -> Vec<&str> {
+        entries
+            .iter()
+            .map(|entry| entry.entry.command.as_str())
+            .collect()
     }
 }
