@@ -600,6 +600,8 @@ impl fmt::Debug for PreparedAiRequest {
 /// credential, or disclosed prompt context.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SanitizedProviderError {
+    /// A validated request could not be encoded within its enforced bound.
+    InvalidRequest,
     /// The local transport deadline elapsed.
     Timeout,
     /// DNS, TLS, connection, or other transport setup failed.
@@ -619,6 +621,7 @@ pub enum SanitizedProviderError {
 impl fmt::Display for SanitizedProviderError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidRequest => formatter.write_str("AI provider request was invalid"),
             Self::Timeout => formatter.write_str("AI provider request timed out"),
             Self::Connection => formatter.write_str("AI provider connection failed"),
             Self::RateLimited => formatter.write_str("AI provider rate limited the request"),
@@ -1327,6 +1330,7 @@ mod tests {
     fn provider_diagnostics_retain_only_a_safe_failure_classification() {
         let errors = [
             SanitizedProviderError::Timeout,
+            SanitizedProviderError::InvalidRequest,
             SanitizedProviderError::Connection,
             SanitizedProviderError::RateLimited,
             SanitizedProviderError::HttpStatus(503),
