@@ -23,6 +23,7 @@ pub mod keybindings;
 pub mod learning;
 pub mod learning_store;
 pub mod overlay;
+pub mod process_runner;
 pub mod providers;
 pub mod pty;
 pub mod ranking;

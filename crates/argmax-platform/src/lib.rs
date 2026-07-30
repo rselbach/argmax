@@ -1,8 +1,94 @@
-//! Safe, descriptor-anchored inspection of macOS extended ACLs.
+//! Small audited wrappers for Unix interfaces missing from safe dependencies.
 
-#![cfg(target_os = "macos")]
+#![cfg(unix)]
+
+/// Audited wrappers shared by supported Unix platforms.
+pub mod unix {
+    use std::io;
+    use std::num::NonZeroI32;
+    use std::ptr;
+
+    /// Reports whether an exact child has exited without reaping it.
+    ///
+    /// Keeping an observed group leader waitable pins its process identifier
+    /// while callers terminate the rest of that process group. This prevents a
+    /// recycled identifier from redirecting cleanup at an unrelated process.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating-system error from `waitid`, including
+    /// [`io::ErrorKind::NotFound`] when the identifier is not a waitable child.
+    pub fn peek_child_exit(pid: NonZeroI32) -> io::Result<bool> {
+        // POSIX specifies that a zero `si_pid` distinguishes the WNOHANG case.
+        // Starting from all-zero bytes also avoids observing uninitialized
+        // padding when the kernel reports no state change.
+        // SAFETY: an all-zero `siginfo_t` is a valid writable output buffer;
+        // `waitid` initializes it before any nonzero `si_pid` is inspected.
+        let mut information = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+        // SAFETY: `information` is live writable storage, `P_PID` selects the
+        // exact positive child identifier, and WNOWAIT explicitly preserves
+        // the waitable status for a later `wait` call.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid.get().unsigned_abs(),
+                ptr::from_mut(&mut information),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `waitid` returned success and `si_pid` is the process field
+        // selected by the WEXITED event class on Linux and macOS.
+        Ok(unsafe { information.si_pid() } != 0)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::process::Command;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        use super::*;
+
+        #[test]
+        fn observes_without_reaping_the_exact_child() {
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", "exit 7"])
+                .spawn()
+                .unwrap();
+            let pid = NonZeroI32::new(i32::try_from(child.id()).unwrap()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while !peek_child_exit(pid).unwrap() {
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(child.wait().unwrap().code(), Some(7));
+        }
+
+        #[test]
+        fn running_child_is_not_reported_as_exited() {
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", "sleep 1"])
+                .spawn()
+                .unwrap();
+            let pid = NonZeroI32::new(i32::try_from(child.id()).unwrap()).unwrap();
+            assert!(!peek_child_exit(pid).unwrap());
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+
+        #[test]
+        fn rejects_a_process_that_is_not_a_child() {
+            let own_pid = NonZeroI32::new(i32::try_from(std::process::id()).unwrap()).unwrap();
+            assert!(peek_child_exit(own_pid).is_err());
+        }
+    }
+}
 
 /// Audited wrappers around macOS-specific descriptor APIs.
+#[cfg(target_os = "macos")]
 pub mod macos {
     use std::io;
     use std::os::fd::{AsFd, AsRawFd};
