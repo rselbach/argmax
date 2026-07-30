@@ -1596,7 +1596,7 @@ mod tests {
             dispatcher.submit_query_with_alias_expansion(SessionMode::Spec, disabled_work, true),
             QueryAdmission::Queued
         );
-        thread::sleep(Duration::from_millis(40));
+        assert!(!wait_for_batches(&dispatcher).is_empty());
         assert!(dispatcher.drain_alias_expansions(8).is_empty());
 
         assert!(dispatcher.reconfigure(Settings::default()));

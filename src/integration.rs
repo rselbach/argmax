@@ -2432,6 +2432,25 @@ mod tests {
 
     static HARNESS_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+    const WAIT_FOR_PROBE_COUNT: &str = r"
+      proc wait_for_probe_count {path wanted} {
+        set deadline [expr {[clock milliseconds] + 5000}]
+        while {1} {
+          set events [open $path rb]
+          fconfigure $events -translation binary
+          set contents [read $events]
+          close $events
+          if {[regexp -all -- {probe-buffer:} $contents] >= $wanted} {
+            return
+          }
+          if {[clock milliseconds] >= $deadline} {
+            exit 6
+          }
+          after 10
+        }
+      }
+    ";
+
     struct HarnessDirectory(PathBuf);
 
     impl HarnessDirectory {
@@ -2476,6 +2495,13 @@ mod tests {
             .filter(|frame| !frame.is_empty())
             .map(<[u8]>::to_vec)
             .collect()
+    }
+
+    const fn test_probe_sequence(shell: Shell) -> &'static str {
+        match shell {
+            Shell::Fish => "\x1e",
+            Shell::Bash | Shell::Zsh => "\x1b[argmax-sync~",
+        }
     }
 
     fn live_shell_events(shell: Shell) -> Option<Vec<Vec<u8>>> {
@@ -2704,10 +2730,7 @@ mod tests {
             Shell::Zsh => "-df",
             Shell::Fish => "--no-config --interactive",
         };
-        let probe = match shell {
-            Shell::Fish => "\x1e",
-            Shell::Bash | Shell::Zsh => "\x1b[argmax-sync~",
-        };
+        let probe = test_probe_sequence(shell);
         let expect_program = r#"
           set timeout 30
           log_user 1
@@ -2809,11 +2832,10 @@ mod tests {
             Shell::Zsh => "-df",
             Shell::Fish => "--no-config --interactive",
         };
-        let probe = match shell {
-            Shell::Fish => "\x1e",
-            Shell::Bash | Shell::Zsh => "\x1b[argmax-sync~",
-        };
-        let expect_program = r#"
+        let probe = test_probe_sequence(shell);
+        let expect_program = format!(
+            "{WAIT_FOR_PROBE_COUNT}\n{}",
+            r#"
           set timeout 30
           log_user 0
           spawn sh -c {exec 3>>"$ARGMAX_TEST_EVENTS"; exec 4<"$ARGMAX_TEST_CONTROLS"; exec $ARGMAX_TEST_SHELL $ARGMAX_TEST_ARGS}
@@ -2837,7 +2859,7 @@ mod tests {
           }
           send -- "safe"
           send -- "$env(ARGMAX_TEST_PROBE)"
-          after 100
+          wait_for_probe_count "$env(ARGMAX_TEST_EVENTS)" 1
           send -- "x"
           set source [open $env(ARGMAX_TEST_APPEND) rb]
           fconfigure $source -translation binary
@@ -2848,14 +2870,15 @@ mod tests {
           puts -nonewline $target $control
           close $target
           send -- "$env(ARGMAX_TEST_PROBE)"
-          after 500
+          wait_for_probe_count "$env(ARGMAX_TEST_EVENTS)" 2
           send -- "\003"
           after 500
           send -- "exit\r"
           expect eof
-        "#;
+        "#
+        );
         let output = Command::new("expect")
-            .args(["-c", expect_program])
+            .args(["-c", expect_program.as_str()])
             .env("ARGMAX_PRIVATE_SESSION", "1")
             .env("ARGMAX_EVENT_FD", "3")
             .env("ARGMAX_CONTROL_FD", "4")
