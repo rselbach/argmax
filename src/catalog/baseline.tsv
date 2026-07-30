@@ -1,568 +1,568 @@
-# argmax equivalent catalog baseline v1
-cloud-devops	aliyun
-cloud-devops	ansible
-cloud-devops	ansible-galaxy
-cloud-devops	ansible-playbook
-cloud-devops	ansible-vault
-cloud-devops	argocd
-cloud-devops	aws
-cloud-devops	aws-vault
-cloud-devops	az
-cloud-devops	barbican
-cloud-devops	bosh
-cloud-devops	boundary
-cloud-devops	bq
-cloud-devops	buildah
-cloud-devops	cdk
-cloud-devops	cf
-cloud-devops	chef
-cloud-devops	cilium
-cloud-devops	cinder
-cloud-devops	civo
-cloud-devops	clickhouse-client
-cloud-devops	cloudflared
-cloud-devops	cockroach
-cloud-devops	colima
-cloud-devops	consul
-cloud-devops	containerd
-cloud-devops	cosign
-cloud-devops	cqlsh
-cloud-devops	crane
-cloud-devops	crictl
-cloud-devops	ctr
-cloud-devops	dapr
-cloud-devops	devspace
-cloud-devops	dive
-cloud-devops	docker
-cloud-devops	doctl
-cloud-devops	duckdb
-cloud-devops	eb
-cloud-devops	eksctl
-cloud-devops	etcdctl
-cloud-devops	exo
-cloud-devops	fastly
-cloud-devops	finch
-cloud-devops	firebase
-cloud-devops	flux
-cloud-devops	flyctl
-cloud-devops	gcloud
-cloud-devops	grype
-cloud-devops	gsutil
-cloud-devops	hadolint
-cloud-devops	hcloud
-cloud-devops	helm
-cloud-devops	helmfile
-cloud-devops	heroku
-cloud-devops	ibmcloud
-cloud-devops	influx
-cloud-devops	inspec
-cloud-devops	istioctl
-cloud-devops	juju
-cloud-devops	k3d
-cloud-devops	k3s
-cloud-devops	k9s
-cloud-devops	kind
-cloud-devops	knife
-cloud-devops	kompose
-cloud-devops	kubeadm
-cloud-devops	kubectl
-cloud-devops	kubectx
-cloud-devops	kubelet
-cloud-devops	kubens
-cloud-devops	kubescape
-cloud-devops	kubeseal
-cloud-devops	kustomize
-cloud-devops	limactl
-cloud-devops	linode-cli
-cloud-devops	mariadb
-cloud-devops	minikube
-cloud-devops	molecule
-cloud-devops	mongosh
-cloud-devops	mysql
-cloud-devops	nerdctl
-cloud-devops	netlify
-cloud-devops	nomad
-cloud-devops	oci
-cloud-devops	okteto
-cloud-devops	openstack
-cloud-devops	oras
-cloud-devops	packer
-cloud-devops	podman
-cloud-devops	podman-compose
-cloud-devops	psql
-cloud-devops	pulumi
-cloud-devops	puppet
-cloud-devops	railway
-cloud-devops	redis-cli
-cloud-devops	regctl
-cloud-devops	runc
-cloud-devops	salt
-cloud-devops	salt-call
-cloud-devops	sam
-cloud-devops	scw
-cloud-devops	session-manager-plugin
-cloud-devops	skaffold
-cloud-devops	skopeo
-cloud-devops	sqlite3
-cloud-devops	stern
-cloud-devops	swift
-cloud-devops	syft
-cloud-devops	telepresence
-cloud-devops	terraform
-cloud-devops	terragrunt
-cloud-devops	tilt
-cloud-devops	tofu
-cloud-devops	trivy
-cloud-devops	vagrant
-cloud-devops	vault
-cloud-devops	vercel
-cloud-devops	wrangler
-javascript	astro
-javascript	ava
-javascript	babel
-javascript	babel-node
-javascript	biome
-javascript	browserify
-javascript	bun
-javascript	bunx
-javascript	capacitor
-javascript	commitlint
-javascript	cordova
-javascript	corepack
-javascript	create-react-app
-javascript	cross-env
-javascript	cypress
-javascript	deno
-javascript	depcheck
-javascript	dotenv
-javascript	eleventy
-javascript	ember
-javascript	env-cmd
-javascript	esbuild
-javascript	eslint
-javascript	expo
-javascript	forever
-javascript	gatsby
-javascript	husky
-javascript	ionic
-javascript	jasmine
-javascript	jest
-javascript	jscodeshift
-javascript	karma
-javascript	lint-staged
-javascript	madge
-javascript	microbundle
-javascript	mocha
-javascript	ncu
-javascript	nest
-javascript	next
-javascript	ng
-javascript	node
-javascript	nodemon
-javascript	npm
-javascript	npx
-javascript	nuxi
-javascript	nuxt
-javascript	parcel
-javascript	playwright
-javascript	pm2
-javascript	pnpm
-javascript	pnpx
-javascript	prettier
-javascript	puppeteer
-javascript	quasar
-javascript	react-native
-javascript	remix
-javascript	rimraf
-javascript	rspack
-javascript	semantic-release
-javascript	shx
-javascript	standard
-javascript	storybook
-javascript	styleguidist
-javascript	stylelint
-javascript	svelte-check
-javascript	swc
-javascript	ts-node
-javascript	ts-node-dev
-javascript	tsc
-javascript	tsserver
-javascript	tsx
-javascript	vite
-javascript	vitest
-javascript	vue
-javascript	vue-cli-service
-javascript	webpack
-javascript	webpack-cli
-javascript	webpack-dev-server
-javascript	xo
-javascript	yarn
-javascript	yarnpkg
-javascript	zx
-python	black
-python	flake8
-python	ipython
-python	isort
-python	jupyter
-python	mypy
-python	nox
-python	pdm
-python	pip
-python	pip3
-python	pipenv
-python	pipx
-python	poetry
-python	pytest
-python	python
-python	python3
-python	ruff
-python	tox
-python	uv
-rust	cargo
-rust	cargo-miri
-rust	clippy-driver
-rust	mdbook
-rust	rust-analyzer
-rust	rust-gdb
-rust	rust-lldb
-rust	rustc
-rust	rustdoc
-rust	rustfmt
-rust	rustup
-go	go
-go	gofmt
-go	golangci-lint
-jvm	gradle
-jvm	java
-jvm	javac
-jvm	javadoc
-jvm	javap
-jvm	jdeps
-jvm	jlink
-jvm	jmod
-jvm	jpackage
-jvm	jshell
-jvm	kotlinc
-jvm	mvn
-jvm	sbt
-jvm	scala
-cpp	autoconf
-cpp	automake
-cpp	c++
-cpp	cc
-cpp	clang
-cpp	clang++
-cpp	cmake
-cpp	conan
-cpp	cpack
-cpp	ctest
-cpp	g++
-cpp	gcc
-cpp	meson
-cpp	ninja
-cpp	pkg-config
-cpp	vcpkg
-git	gh
-git	git
-git	git-flow
-git	git-lfs
-git	gitk
-git	glab
-git	lazygit
-git	tig
-package-managers	apk
-package-managers	apt
-package-managers	apt-cache
-package-managers	apt-get
-package-managers	brew
-package-managers	dnf
-package-managers	dpkg
-package-managers	pacman
-package-managers	port
-package-managers	rpm
-package-managers	yum
-package-managers	zypper
-filesystem	basename
-filesystem	bunzip2
-filesystem	bzip2
-filesystem	cp
-filesystem	df
-filesystem	dirname
-filesystem	du
-filesystem	file
-filesystem	find
-filesystem	gunzip
-filesystem	gzip
-filesystem	install
-filesystem	ln
-filesystem	locate
-filesystem	ls
-filesystem	mkdir
-filesystem	mv
-filesystem	pwd
-filesystem	readlink
-filesystem	realpath
-filesystem	rm
-filesystem	rmdir
-filesystem	stat
-filesystem	tar
-filesystem	touch
-filesystem	tree
-filesystem	truncate
-filesystem	unzip
-filesystem	xz
-filesystem	zip
-editors	atom
-editors	bat
-editors	code
-editors	code-insiders
-editors	ed
-editors	emacs
-editors	ex
-editors	geany
-editors	gedit
-editors	hx
-editors	jed
-editors	joe
-editors	kak
-editors	kate
-editors	kwrite
-editors	leafpad
-editors	less
-editors	micro
-editors	more
-editors	mousepad
-editors	nano
-editors	nvim
-editors	pico
-editors	subl
-editors	sublime_text
-editors	vi
-editors	vim
-text	awk
-text	cat
-text	cmp
-text	column
-text	comm
-text	cut
-text	diff
-text	egrep
-text	fgrep
-text	fmt
-text	fold
-text	grep
-text	head
-text	join
-text	jq
-text	nl
-text	paste
-text	patch
-text	sed
-text	sort
-text	tac
-text	tail
-text	tee
-text	tr
-text	uniq
-text	wc
-text	xargs
-text	yq
-task-runners	bazel
-task-runners	bmake
-task-runners	buck
-task-runners	buck2
-task-runners	concurrently
-task-runners	dagger
-task-runners	doit
-task-runners	earthly
-task-runners	gmake
-task-runners	grunt
-task-runners	gulp
-task-runners	invoke
-task-runners	just
-task-runners	lerna
-task-runners	mage
-task-runners	make
-task-runners	nx
-task-runners	pants
-task-runners	plz
-task-runners	rollup
-task-runners	scons
-task-runners	task
-task-runners	turbo
-task-runners	waf
-system	arp
-system	arping
-system	atop
-system	auditctl
-system	ausearch
-system	bpftool
-system	bridge
-system	btop
-system	busctl
-system	capsh
-system	chage
-system	chpasswd
-system	chrt
-system	conntrack
-system	coredumpctl
-system	crontab
-system	curl
-system	depmod
-system	dhclient
-system	dig
-system	dmesg
-system	dmidecode
-system	dstat
-system	ethtool
-system	faillog
-system	firewall-cmd
-system	free
-system	fuser
-system	getcap
-system	getent
-system	groupadd
-system	groupdel
-system	groupmod
-system	groups
-system	halt
-system	host
-system	hostname
-system	hostnamectl
-system	htop
-system	id
-system	ifconfig
-system	init
-system	insmod
-system	ionice
-system	iostat
-system	iotop
-system	ip
-system	ip6tables
-system	ipcmk
-system	ipcrm
-system	ipcs
-system	iptables
-system	iw
-system	iwconfig
-system	journalctl
-system	kexec
-system	kill
-system	killall
-system	last
-system	lastlog
-system	launchctl
-system	localectl
-system	login
-system	loginctl
-system	logrotate
-system	lscpu
-system	lsipc
-system	lsmod
-system	lsof
-system	lspci
-system	lsusb
-system	ltrace
-system	machinectl
-system	modprobe
-system	mpstat
-system	mtr
-system	nc
-system	ncat
-system	netstat
-system	networkctl
-system	newgrp
-system	nft
-system	nice
-system	nmap
-system	nmcli
-system	nmtui
-system	nohup
-system	nsenter
-system	nslookup
-system	numactl
-system	numastat
-system	openvpn
-system	passwd
-system	perf
-system	pgrep
-system	pidof
-system	pidstat
-system	ping
-system	ping6
-system	pkill
-system	pmap
-system	pmset
-system	poweroff
-system	powertop
-system	prlimit
-system	ps
-system	pstree
-system	reboot
-system	renice
-system	resolvectl
-system	rfkill
-system	rmmod
-system	route
-system	runlevel
-system	sar
-system	scp
-system	scutil
-system	service
-system	sestatus
-system	setcap
-system	setpriv
-system	setsid
-system	sftp
-system	sg
-system	shutdown
-system	slabtop
-system	smem
-system	socat
-system	ss
-system	ssh
-system	ssh-add
-system	ssh-agent
-system	ssh-keygen
-system	ssh-keyscan
-system	strace
-system	su
-system	sudo
-system	sysctl
-system	sysdiagnose
-system	systemctl
-system	systemd-analyze
-system	systemd-cgls
-system	systemd-cgtop
-system	systemd-run
-system	taskset
-system	tc
-system	tcpdump
-system	telinit
-system	telnet
-system	timedatectl
-system	tload
-system	top
-system	tracepath
-system	traceroute
-system	traceroute6
-system	tshark
-system	udevadm
-system	udhcpc
-system	ufw
-system	uname
-system	unshare
-system	uptime
-system	useradd
-system	userdel
-system	usermod
-system	users
-system	visudo
-system	vmstat
-system	w
-system	watch
-system	wg
-system	wg-quick
-system	wget
-system	who
-system	whois
+# IRIS catalog migration inventory v1
+cloud-devops	amplify	ops/amplify.go	migrated
+cloud-devops	ampx	ops/ampx.go	migrated
+cloud-devops	ansible	ops/ansible.go	migrated
+cloud-devops	ansible-config	ops/ansible_config.go	migrated
+cloud-devops	ansible-doc	ops/ansible_doc.go	migrated
+cloud-devops	ansible-galaxy	ops/ansible_galaxy.go	migrated
+cloud-devops	ansible-lint	ops/ansible_lint.go	migrated
+cloud-devops	ansible-playbook	ops/ansible_playbook.go	migrated
+cloud-devops	appwrite	ops/appwrite.go	migrated
+cloud-devops	arch	ops/arch.go	migrated
+cloud-devops	arduino-cli	ops/arduino_cli.go	migrated
+cloud-devops	argo	ops/argo.go	migrated
+cloud-devops	asdf	ops/asdf.go	migrated
+cloud-devops	atlas	ops/atlas.go	migrated
+cloud-devops	aws	ops/aws.go	migrated
+cloud-devops	aws-vault	ops/aws_vault.go	migrated
+cloud-devops	bit	ops/bit.go	migrated
+cloud-devops	bosh	ops/bosh.go	migrated
+cloud-devops	capacitor	ops/capacitor.go	migrated
+cloud-devops	cdk	ops/cdk.go	migrated
+cloud-devops	cf	ops/cf.go	migrated
+cloud-devops	checkov	ops/checkov.go	migrated
+cloud-devops	circleci	ops/circleci.go	migrated
+cloud-devops	cloudflared	ops/cloudflared.go	migrated
+cloud-devops	coda	ops/coda.go	migrated
+cloud-devops	command	ops/command.go	migrated
+cloud-devops	copilot	ops/copilot.go	migrated
+cloud-devops	cosign	ops/cosign.go	migrated
+cloud-devops	dapr	ops/dapr.go	migrated
+cloud-devops	datree	ops/datree.go	migrated
+cloud-devops	deployctl	ops/deployctl.go	migrated
+cloud-devops	direnv	ops/direnv.go	migrated
+cloud-devops	docker	ops/docker.go	migrated
+cloud-devops	docker-compose	ops/docker.go	migrated
+cloud-devops	doctl	ops/doctl.go	migrated
+cloud-devops	doppler	ops/doppler.go	migrated
+cloud-devops	eas	ops/eas.go	migrated
+cloud-devops	fastly	ops/fastly.go	migrated
+cloud-devops	firebase	ops/firebase.go	migrated
+cloud-devops	flyctl	ops/flyctl.go	migrated
+cloud-devops	fnm	ops/fnm.go	migrated
+cloud-devops	gcloud	ops/gcloud.go	migrated
+cloud-devops	gh	ops/gh.go	migrated
+cloud-devops	gpg	ops/gpg.go	migrated
+cloud-devops	hasura	ops/hasura.go	migrated
+cloud-devops	helm	ops/helm.go	migrated
+cloud-devops	helmfile	ops/helmfile.go	migrated
+cloud-devops	hugo	ops/hugo.go	migrated
+cloud-devops	k3d	ops/k3d.go	migrated
+cloud-devops	k6	ops/k6.go	migrated
+cloud-devops	k9s	ops/k9s.go	migrated
+cloud-devops	kind	ops/kind.go	migrated
+cloud-devops	knex	ops/knex.go	migrated
+cloud-devops	kubectl	ops/kubectl.go	migrated
+cloud-devops	kubectx	ops/kubectx.go	migrated
+cloud-devops	kubens	ops/kubens.go	migrated
+cloud-devops	limactl	ops/limactl.go	migrated
+cloud-devops	locust	ops/locust.go	migrated
+cloud-devops	lpass	ops/lpass.go	migrated
+cloud-devops	minikube	ops/minikube.go	migrated
+cloud-devops	mongocli	ops/mongocli.go	migrated
+cloud-devops	mongoimport	ops/mongoimport.go	migrated
+cloud-devops	mongosh	ops/mongosh.go	migrated
+cloud-devops	multipass	ops/multipass.go	migrated
+cloud-devops	mysql	ops/mysql.go	migrated
+cloud-devops	netlify	ops/netlify.go	migrated
+cloud-devops	newman	ops/newman.go	migrated
+cloud-devops	nginx	ops/nginx.go	migrated
+cloud-devops	ngrok	ops/ngrok.go	migrated
+cloud-devops	nvm	ops/nvm.go	migrated
+cloud-devops	oci	ops/oci.go	migrated
+cloud-devops	okteto	ops/okteto.go	migrated
+cloud-devops	op	ops/op.go	migrated
+cloud-devops	opa	ops/opa.go	migrated
+cloud-devops	osqueryi	ops/osqueryi.go	migrated
+cloud-devops	pass	ops/pass.go	migrated
+cloud-devops	pg_dump	ops/pg_dump.go	migrated
+cloud-devops	pgcli	ops/pgcli.go	migrated
+cloud-devops	pm2	ops/pm2.go	migrated
+cloud-devops	pod	ops/pod.go	migrated
+cloud-devops	podman	ops/podman.go	migrated
+cloud-devops	pscale	ops/pscale.go	migrated
+cloud-devops	psql	ops/psql.go	migrated
+cloud-devops	pulumi	ops/pulumi.go	migrated
+cloud-devops	qodana	ops/qodana.go	migrated
+cloud-devops	railway	ops/railway.go	migrated
+cloud-devops	rbenv	ops/rbenv.go	migrated
+cloud-devops	robot	ops/robot.go	migrated
+cloud-devops	rsync	ops/ssh.go	migrated
+cloud-devops	scp	ops/ssh.go	migrated
+cloud-devops	serverless	ops/serverless.go	migrated
+cloud-devops	sfdx	ops/sfdx.go	migrated
+cloud-devops	sftp	ops/sftp.go	migrated
+cloud-devops	space	ops/space.go	migrated
+cloud-devops	sqlite3	ops/sqlite3.go	migrated
+cloud-devops	src	ops/src.go	migrated
+cloud-devops	ssh	ops/ssh.go	migrated
+cloud-devops	ssh-keygen	ops/ssh_keygen.go	migrated
+cloud-devops	stripe	ops/stripe.go	migrated
+cloud-devops	supabase	ops/supabase.go	migrated
+cloud-devops	surreal	ops/surreal.go	migrated
+cloud-devops	tailscale	ops/tailscale.go	migrated
+cloud-devops	terraform	ops/terraform.go	migrated
+cloud-devops	terragrunt	ops/terragrunt.go	migrated
+cloud-devops	tfenv	ops/tfenv.go	migrated
+cloud-devops	tfsec	ops/tfsec.go	migrated
+cloud-devops	tkn	ops/tkn.go	migrated
+cloud-devops	trivy	ops/trivy.go	migrated
+cloud-devops	tsuru	ops/tsuru.go	migrated
+cloud-devops	vault	ops/vault.go	migrated
+cloud-devops	vela	ops/vela.go	migrated
+cloud-devops	vercel	ops/vercel.go	migrated
+cloud-devops	volta	ops/volta.go	migrated
+cloud-devops	watson	ops/watson.go	migrated
+cloud-devops	whois	ops/whois.go	migrated
+cloud-devops	wrangler	ops/wrangler.go	migrated
+cloud-devops	xc	ops/xc.go	migrated
+cloud-devops	xcodes	ops/xcodes.go	migrated
+javascript	asar	js/asar.go	migrated
+javascript	astro	js/astro.go	migrated
+javascript	babel	js/babel.go	migrated
+javascript	blitz	js/blitz.go	migrated
+javascript	browser-sync	js/browser_sync.go	migrated
+javascript	build-storybook	js/build_storybook.go	migrated
+javascript	bun	js/bun.go	migrated
+javascript	bunx	js/bun.go	migrated
+javascript	cordova	js/cordova.go	migrated
+javascript	create-completion-spec	js/create_completion_spec.go	migrated
+javascript	create-next-app	js/create_next_app.go	migrated
+javascript	create-nx-workspace	js/create_nx_workspace.go	migrated
+javascript	create-react-app	js/create_react_app.go	migrated
+javascript	create-react-native-app	js/create_react_native_app.go	migrated
+javascript	create-redwood-app	js/create_redwood_app.go	migrated
+javascript	create-remix	js/create_remix.go	migrated
+javascript	create-t3-app	js/create_t3_app.go	migrated
+javascript	create-video	js/create_video.go	migrated
+javascript	create-vite	js/create_vite.go	migrated
+javascript	create-web3-frontend	js/create_web3_frontend.go	migrated
+javascript	deno	js/deno.go	migrated
+javascript	dotenv	js/dotenv.go	migrated
+javascript	electron	js/electron.go	migrated
+javascript	elm	js/elm.go	migrated
+javascript	elm-format	js/elm_format.go	migrated
+javascript	elm-json	js/elm_json.go	migrated
+javascript	elm-review	js/elm_review.go	migrated
+javascript	esbuild	js/esbuild.go	migrated
+javascript	eslint	js/eslint.go	migrated
+javascript	expo	js/expo.go	migrated
+javascript	expo-cli	js/expo_cli.go	migrated
+javascript	ganache-cli	js/ganache_cli.go	migrated
+javascript	gatsby	js/gatsby.go	migrated
+javascript	hardhat	js/hardhat.go	migrated
+javascript	ionic	js/ionic.go	migrated
+javascript	jest	js/jest.go	migrated
+javascript	lerna	js/lerna.go	migrated
+javascript	meteor	js/meteor.go	migrated
+javascript	ncu	js/ncu.go	migrated
+javascript	nest	js/nest.go	migrated
+javascript	next	js/next.go	migrated
+javascript	ng	js/ng.go	migrated
+javascript	node	js/node.go	migrated
+javascript	npm	js/npm.go	migrated
+javascript	npx	js/npx.go	migrated
+javascript	nuxi	js/nuxi.go	migrated
+javascript	nuxt	js/nuxt.go	migrated
+javascript	nx	js/nx.go	migrated
+javascript	oxlint	js/oxlint.go	migrated
+javascript	playwright	js/playwright.go	migrated
+javascript	pnpm	js/pnpm.go	migrated
+javascript	pnpx	js/pnpx.go	migrated
+javascript	prettier	js/prettier.go	migrated
+javascript	quasar	js/quasar.go	migrated
+javascript	react-native	js/react_native.go	migrated
+javascript	redwood	js/redwood.go	migrated
+javascript	remix	js/remix.go	migrated
+javascript	remotion	js/remotion.go	migrated
+javascript	rollup	js/rollup.go	migrated
+javascript	rome	js/rome.go	migrated
+javascript	rush	js/rush.go	migrated
+javascript	sequelize	js/sequelize.go	migrated
+javascript	serve	js/serve.go	migrated
+javascript	shadcn-ui	js/shadcn_ui.go	migrated
+javascript	start-storybook	js/start_storybook.go	migrated
+javascript	stencil	js/stencil.go	migrated
+javascript	swagger-typescript-api	js/swagger_typescript_api.go	migrated
+javascript	swc	js/swc.go	migrated
+javascript	truffle	js/truffle.go	migrated
+javascript	ts-node	js/ts_node.go	migrated
+javascript	tsc	js/tsc.go	migrated
+javascript	tsx	js/tsx.go	migrated
+javascript	turbo	js/turbo.go	migrated
+javascript	typeorm	js/typeorm.go	migrated
+javascript	vite	js/vite.go	migrated
+javascript	vr	js/vr.go	migrated
+javascript	vsce	js/vsce.go	migrated
+javascript	vue	js/vue.go	migrated
+javascript	watchman	js/watchman.go	migrated
+javascript	webpack	js/webpack.go	migrated
+javascript	yalc	js/yalc.go	migrated
+javascript	yarn	js/yarn.go	migrated
+python	black	python/black.go	migrated
+python	conda	python/conda.go	migrated
+python	django-admin	python/django_admin.go	migrated
+python	googler	python/googler.go	migrated
+python	jupyter	python/jupyter.go	migrated
+python	mamba	python/mamba.go	migrated
+python	mypy	python/mypy.go	migrated
+python	pipenv	python/pipenv.go	migrated
+python	pipx	python/pipx.go	migrated
+python	poetry	python/python.go	migrated
+python	pre-commit	python/pre_commit.go	migrated
+python	pyenv	python/pyenv.go	migrated
+python	pytest	python/pytest.go	migrated
+python	ruff	python/ruff.go	migrated
+python	sqlfluff	python/sqlfluff.go	migrated
+python	sqlmesh	python/sqlmesh.go	migrated
+python	streamlit	python/streamlit.go	migrated
+python	uv	python/python.go	migrated
+python	youtube-dl	python/youtube_dl.go	migrated
+rust	cargo	rust/cargo.go	migrated
+rust	dprint	rust/dprint.go	migrated
+rust	pijul	rust/pijul.go	migrated
+rust	rustc	rust/rustc.go	migrated
+rust	rustup	rust/rustup.go	migrated
+rust	taplo	rust/taplo.go	migrated
+rust	tokei	rust/tokei.go	migrated
+rust	trunk	rust/trunk.go	migrated
+rust	wasm-bindgen	rust/wasm_bindgen.go	migrated
+rust	wasm-pack	rust/wasm_pack.go	migrated
+rust	zellij	rust/zellij.go	migrated
+go	go	golang/go.go	migrated
+go	goctl	golang/goctl.go	migrated
+go	goreleaser	golang/goreleaser.go	migrated
+jvm	clojure	jvm/clojure.go	migrated
+jvm	dart	jvm/dart.go	migrated
+jvm	flutter	jvm/flutter.go	migrated
+jvm	fvm	jvm/fvm.go	migrated
+jvm	gradle	jvm/gradle.go	migrated
+jvm	java	jvm/jvm.go	migrated
+jvm	javac	jvm/jvm.go	migrated
+jvm	jenv	jvm/jenv.go	migrated
+jvm	jmeter	jvm/jmeter.go	migrated
+jvm	kdoctor	jvm/kdoctor.go	migrated
+jvm	keytool	jvm/keytool.go	migrated
+jvm	kotlinc	jvm/jvm.go	migrated
+jvm	mvn	jvm/mvn.go	migrated
+jvm	spring	jvm/spring.go	migrated
+cpp	bazel	cc/bazel.go	migrated
+cpp	c++	cc/cc.go	migrated
+cpp	cc	cc/cc.go	migrated
+cpp	clang	cc/cc.go	migrated
+cpp	clang++	cc/cc.go	migrated
+cpp	cmake	cc/cmake.go	migrated
+cpp	g++	cc/cc.go	migrated
+cpp	gcc	cc/cc.go	migrated
+cpp	premake	cc/premake.go	migrated
+cpp	swift	cc/swift.go	migrated
+cpp	typst	cc/typst.go	migrated
+cpp	xcode-select	cc/xcode_select.go	migrated
+cpp	xcodebuild	cc/xcodebuild.go	migrated
+cpp	xcodeproj	cc/xcodeproj.go	migrated
+cpp	xcrun	cc/xcrun.go	migrated
+cpp	zig	cc/zig.go	migrated
+git	ghq	git/ghq.go	migrated
+git	git	git/git.go	migrated
+git	git-cliff	git/git_cliff.go	migrated
+git	git-flow	git/git_flow.go	migrated
+git	git-profile	git/git_profile.go	migrated
+git	git-quick-stats	git/git_quick_stats.go	migrated
+git	github	git/github.go	migrated
+git	svn	git/svn.go	migrated
+package-managers	apt	pkginstaller/pkgmgr.go	migrated
+package-managers	apt-get	pkginstaller/pkgmgr.go	migrated
+package-managers	brew	pkginstaller/pkgmgr.go	migrated
+package-managers	dnf	pkginstaller/pkgmgr.go	migrated
+package-managers	dpkg	pkginstaller/dpkg.go	migrated
+package-managers	flatpak	pkginstaller/pkgmgr.go	migrated
+package-managers	pacman	pkginstaller/pkgmgr.go	migrated
+package-managers	paru	pkginstaller/pkgmgr.go	migrated
+package-managers	pkgutil	pkginstaller/pkgutil.go	migrated
+package-managers	snap	pkginstaller/pkgmgr.go	migrated
+package-managers	yay	pkginstaller/pkgmgr.go	migrated
+package-managers	yum	pkginstaller/pkgmgr.go	migrated
+filesystem	broot	fs/broot.go	migrated
+filesystem	cd	fs/cd.go	migrated
+filesystem	chmod	fs/chmod.go	migrated
+filesystem	chown	fs/chown.go	migrated
+filesystem	cp	fs/cp.go	migrated
+filesystem	df	fs/df.go	migrated
+filesystem	dust	fs/dust.go	migrated
+filesystem	exa	fs/exa.go	migrated
+filesystem	eza	fs/eza.go	migrated
+filesystem	find	fs/find.go	merged
+filesystem	fold	fs/fold.go	migrated
+filesystem	ln	fs/ln.go	migrated
+filesystem	ls	fs/ls.go	migrated
+filesystem	lsd	fs/lsd.go	migrated
+filesystem	mkdir	fs/mkdir.go	migrated
+filesystem	mv	fs/mv.go	migrated
+filesystem	paper	fs/paper.go	migrated
+filesystem	rclone	fs/rclone.go	migrated
+filesystem	readlink	fs/readlink.go	migrated
+filesystem	rm	fs/rm.go	migrated
+filesystem	rmdir	fs/rmdir.go	migrated
+filesystem	stow	fs/stow.go	migrated
+filesystem	tar	fs/tar.go	migrated
+filesystem	touch	fs/touch.go	migrated
+filesystem	trash	fs/trash.go	migrated
+filesystem	tree	fs/tree.go	migrated
+filesystem	unzip	fs/unzip.go	migrated
+filesystem	z	fs/zoxide.go	migrated
+filesystem	zi	fs/zoxide.go	migrated
+filesystem	zip	fs/zip.go	migrated
+editors	bat	view/bat.go	migrated
+editors	cat	view/cat.go	migrated
+editors	code	view/code.go	migrated
+editors	cot	view/cot.go	migrated
+editors	du	view/du.go	migrated
+editors	emacs	view/emacs.go	migrated
+editors	file	view/file.go	migrated
+editors	glow	view/glow.go	migrated
+editors	head	view/head.go	migrated
+editors	idea	view/idea.go	migrated
+editors	less	view/less.go	migrated
+editors	lvim	view/lvim.go	migrated
+editors	micro	view/micro.go	migrated
+editors	more	view/more.go	migrated
+editors	nano	view/nano.go	migrated
+editors	nvim	view/nvim.go	migrated
+editors	rich	view/rich.go	migrated
+editors	stat	view/stat.go	migrated
+editors	subl	view/subl.go	migrated
+editors	tail	view/tail.go	migrated
+editors	vi	view/vi.go	migrated
+editors	vim	view/vim.go	migrated
+editors	vimr	view/vimr.go	migrated
+editors	wc	view/wc.go	migrated
+editors	xed	view/xed.go	migrated
+editors	xxd	view/xxd.go	migrated
+editors	zed	view/zed.go	migrated
+text	awk	text/textproc.go	migrated
+text	cut	text/textproc.go	migrated
+text	diff	text/diff.go	migrated
+text	dos2unix	text/dos2unix.go	migrated
+text	egrep	text/grep.go	migrated
+text	fd	text/rg.go	migrated
+text	find	text/find.go	migrated
+text	gawk	text/textproc.go	migrated
+text	grep	text/grep.go	migrated
+text	iconv	text/iconv.go	migrated
+text	jq	text/jq.go	migrated
+text	pandoc	text/pandoc.go	migrated
+text	rg	text/rg.go	migrated
+text	sed	text/textproc.go	migrated
+text	seq	text/seq.go	migrated
+text	sha1sum	text/sha1sum.go	migrated
+text	shasum	text/shasum.go	migrated
+text	shred	text/shred.go	migrated
+text	sort	text/textproc.go	migrated
+text	split	text/split.go	migrated
+text	tee	text/textproc.go	migrated
+text	tr	text/textproc.go	migrated
+text	truncate	text/truncate.go	migrated
+text	typos	text/typos.go	migrated
+text	uniq	text/textproc.go	migrated
+text	unix2dos	text/unix2dos.go	migrated
+text	vale	text/vale.go	migrated
+text	xargs	text/textproc.go	migrated
+task-runners	ant	runner/ant.go	migrated
+task-runners	composer	runner/composer.go	migrated
+task-runners	dbt	runner/dbt.go	migrated
+task-runners	drush	runner/drush.go	migrated
+task-runners	elixir	runner/elixir.go	migrated
+task-runners	gem	runner/gem.go	migrated
+task-runners	hexo	runner/hexo.go	migrated
+task-runners	just	runner/justfile.go	migrated
+task-runners	laravel	runner/laravel.go	migrated
+task-runners	magento	runner/magento.go	migrated
+task-runners	make	runner/makefile.go	migrated
+task-runners	mix	runner/mix.go	migrated
+task-runners	php	runner/php.go	migrated
+task-runners	phpunit	runner/phpunit.go	migrated
+task-runners	phpunit-watcher	runner/phpunit_watcher.go	migrated
+task-runners	rails	runner/rails.go	migrated
+task-runners	rake	runner/rake.go	migrated
+task-runners	rubocop	runner/rubocop.go	migrated
+task-runners	ruby	runner/ruby.go	migrated
+task-runners	rvm	runner/rvm.go	migrated
+task-runners	sidekiq	runner/sidekiq.go	migrated
+task-runners	symfony	runner/symfony.go	migrated
+task-runners	valet	runner/valet.go	migrated
+task-runners	vapor	runner/vapor.go	migrated
+system	adb	sys/adb.go	migrated
+system	ag	sys/ag.go	migrated
+system	airflow	sys/airflow.go	migrated
+system	aliases	sys/aliases.go	migrated
+system	asciinema	sys/asciinema.go	migrated
+system	asr	sys/asr.go	migrated
+system	atuin	sys/atuin.go	migrated
+system	basename	sys/basename.go	migrated
+system	bc	sys/bc.go	migrated
+system	btop	sys/btop.go	migrated
+system	bundle	sys/bundle.go	migrated
+system	cal	sys/cal.go	migrated
+system	cci	sys/cci.go	migrated
+system	cdk8s	sys/cdk8s.go	migrated
+system	chezmoi	sys/chezmoi.go	migrated
+system	chsh	sys/chsh.go	migrated
+system	codesign	sys/codesign.go	migrated
+system	croc	sys/croc.go	migrated
+system	crontab	sys/crontab.go	migrated
+system	curl	sys/network.go	migrated
+system	date	sys/date.go	migrated
+system	dateseq	sys/dateseq.go	migrated
+system	dcli	sys/dcli.go	migrated
+system	dd	sys/dd.go	migrated
+system	ddev	sys/ddev.go	migrated
+system	defaults	sys/defaults.go	migrated
+system	degit	sys/degit.go	migrated
+system	deta	sys/deta.go	migrated
+system	dig	sys/network.go	migrated
+system	dirname	sys/dirname.go	migrated
+system	do-release-upgrade	sys/do_release_upgrade.go	migrated
+system	dog	sys/dog.go	migrated
+system	dotnet	sys/dotnet.go	migrated
+system	dscacheutil	sys/dscacheutil.go	migrated
+system	dscl	sys/dscl.go	migrated
+system	dtm	sys/dtm.go	migrated
+system	echo	sys/echo.go	migrated
+system	eleventy	sys/eleventy.go	migrated
+system	env	sys/env.go	migrated
+system	exec	sys/exec.go	migrated
+system	export	sys/env.go	migrated
+system	fastlane	sys/fastlane.go	migrated
+system	fdisk	sys/fdisk.go	migrated
+system	ffmpeg	sys/ffmpeg.go	migrated
+system	firefox	sys/firefox.go	migrated
+system	fisher	sys/fisher.go	migrated
+system	fmt	sys/fmt.go	migrated
+system	forc	sys/forc.go	migrated
+system	forge	sys/forge.go	migrated
+system	fzf	sys/fzf.go	migrated
+system	fzf-tmux	sys/fzf_tmux.go	migrated
+system	gltfjsx	sys/gltfjsx.go	migrated
+system	goto	sys/goto.go	migrated
+system	gum	sys/gum.go	migrated
+system	herd	sys/herd.go	migrated
+system	hop	sys/hop.go	migrated
+system	hostname	sys/hostname.go	migrated
+system	htop	sys/htop.go	migrated
+system	http	sys/http.go	migrated
+system	hyper	sys/hyper.go	migrated
+system	hyperfine	sys/hyperfine.go	migrated
+system	ibus	sys/ibus.go	migrated
+system	id	sys/id.go	migrated
+system	ifconfig	sys/network.go	migrated
+system	ignite-cli	sys/ignite_cli.go	migrated
+system	install	sys/install.go	migrated
+system	ip	sys/network.go	migrated
+system	join	sys/join.go	migrated
+system	julia	sys/julia.go	migrated
+system	kafkactl	sys/kafkactl.go	migrated
+system	kamal	sys/kamal.go	migrated
+system	kill	sys/ps.go	migrated
+system	killall	sys/ps.go	migrated
+system	kitty	sys/kitty.go	migrated
+system	klist	sys/klist.go	migrated
+system	kool	sys/kool.go	migrated
+system	launchctl	sys/launchctl.go	migrated
+system	leaf	sys/leaf.go	migrated
+system	lima	sys/lima.go	migrated
+system	login	sys/login.go	migrated
+system	lsblk	sys/lsblk.go	migrated
+system	lsof	sys/lsof.go	migrated
+system	man	sys/man.go	migrated
+system	meroxa	sys/meroxa.go	migrated
+system	mkdocs	sys/mkdocs.go	migrated
+system	mkfifo	sys/mkfifo.go	migrated
+system	mkinitcpio	sys/mkinitcpio.go	migrated
+system	mknod	sys/mknod.go	migrated
+system	mosh	sys/mosh.go	migrated
+system	mount	sys/mount.go	migrated
+system	nc	sys/network.go	migrated
+system	ncal	sys/ncal.go	migrated
+system	neofetch	sys/neofetch.go	migrated
+system	netstat	sys/network.go	migrated
+system	networkQuality	sys/networkquality.go	migrated
+system	networksetup	sys/networksetup.go	migrated
+system	nextflow	sys/nextflow.go	migrated
+system	nhost	sys/nhost.go	migrated
+system	nmap	sys/nmap.go	migrated
+system	nrm	sys/nrm.go	migrated
+system	ns	sys/ns.go	migrated
+system	nslookup	sys/network.go	migrated
+system	nylas	sys/nylas.go	migrated
+system	oh-my-posh	sys/oh_my_posh.go	migrated
+system	okta	sys/okta.go	migrated
+system	ollama	sys/ollama.go	migrated
+system	omz	sys/omz.go	migrated
+system	pac	sys/pac.go	migrated
+system	passwd	sys/passwd.go	migrated
+system	pathchk	sys/pathchk.go	migrated
+system	pdfunite	sys/pdfunite.go	migrated
+system	pgrep	sys/ps.go	migrated
+system	ping	sys/network.go	migrated
+system	pkg-config	sys/pkg_config.go	migrated
+system	pkill	sys/ps.go	migrated
+system	pmset	sys/pmset.go	migrated
+system	pocketbase	sys/pocketbase.go	migrated
+system	printenv	sys/env.go	migrated
+system	prisma	sys/prisma.go	migrated
+system	pro	sys/pro.go	migrated
+system	pry	sys/pry.go	migrated
+system	ps	sys/ps.go	migrated
+system	publish	sys/publish.go	migrated
+system	pwd	sys/pwd.go	migrated
+system	rancher	sys/rancher.go	migrated
+system	repeat	sys/repeat.go	migrated
+system	rscript	sys/rscript.go	migrated
+system	sam	sys/sam.go	migrated
+system	sanity	sys/sanity.go	migrated
+system	screen	sys/screen.go	migrated
+system	shell-config	sys/shell_config.go	migrated
+system	shortcuts	sys/shortcuts.go	migrated
+system	simctl	sys/simctl.go	migrated
+system	source	sys/source.go	migrated
+system	speedtest-cli	sys/speedtest_cli.go	migrated
+system	spotify	sys/spotify.go	migrated
+system	ss	sys/network.go	migrated
+system	st2	sys/st2.go	migrated
+system	stack	sys/stack.go	migrated
+system	starkli	sys/starkli.go	migrated
+system	su	sys/su.go	migrated
+system	sudo	sys/sudo.go	migrated
+system	sysctl	sys/sysctl.go	migrated
+system	systemctl	sys/systemctl.go	migrated
+system	tac	sys/tac.go	migrated
+system	tailcall	sys/tailcall.go	migrated
+system	tailwindcss	sys/tailwindcss.go	migrated
+system	time	sys/time.go	migrated
+system	tldr	sys/tldr.go	migrated
+system	tmux	sys/tmux.go	migrated
+system	tmuxinator	sys/tmuxinator.go	migrated
+system	top	sys/top.go	migrated
+system	traceroute	sys/traceroute.go	migrated
+system	trap	sys/trap.go	migrated
+system	trex	sys/trex.go	migrated
+system	tsh	sys/tsh.go	migrated
+system	tuist	sys/tuist.go	migrated
+system	twilio	sys/twilio.go	migrated
+system	uname	sys/uname.go	migrated
+system	unset	sys/env.go	migrated
+system	visudo	sys/visudo.go	migrated
+system	vultr-cli	sys/vultr_cli.go	migrated
+system	wezterm	sys/wezterm.go	migrated
+system	wget	sys/network.go	migrated
+system	where	sys/where.go	migrated
+system	whereis	sys/whereis.go	migrated
+system	which	sys/which.go	migrated
+system	who	sys/who.go	migrated
+system	wing	sys/wing.go	migrated
+system	wp	sys/wp.go	migrated
+system	wrk	sys/wrk.go	migrated
+system	wscat	sys/wscat.go	migrated
+system	yank	sys/yank.go	migrated
+system	ykman	sys/ykman.go	migrated
+system	zapier	sys/zapier.go	migrated

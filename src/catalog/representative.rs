@@ -16,6 +16,7 @@ pub(super) fn spec(name: &str, description: &str) -> Option<CommandSpec> {
         "git" => git(description),
         "apt" => apt(description),
         "ls" => ls(description),
+        "chmod" => chmod(description),
         "tar" => tar(description),
         "vim" => vim(description),
         "jq" => jq(description),
@@ -32,11 +33,13 @@ pub(super) fn spec(name: &str, description: &str) -> Option<CommandSpec> {
     })
 }
 
-pub(super) fn supplemental_specs() -> [CommandSpec; 3] {
+pub(super) fn supplemental_specs() -> [CommandSpec; 5] {
     [
         zoxide("query the zoxide directory database"),
-        printenv("print selected environment variables"),
-        fd("find filesystem entries"),
+        CommandSpec::new("ssh-add", "load keys into an SSH agent"),
+        CommandSpec::new("ssh-agent", "hold private keys for SSH clients"),
+        CommandSpec::new("ssh-keyscan", "collect public SSH host keys"),
+        CommandSpec::new("sshd", "OpenSSH server daemon"),
     ]
 }
 
@@ -613,6 +616,45 @@ fn ls(description: &str) -> CommandSpec {
         .with_generator(positional_files(0))
 }
 
+fn chmod(description: &str) -> CommandSpec {
+    let modes = [
+        ("+x", "add execute permission for all"),
+        ("u+x", "add execute permission for the owner"),
+        ("a+x", "add execute permission for all explicitly"),
+        ("u+rw", "add owner read and write permissions"),
+        ("go-w", "remove write permission from group and others"),
+        ("a-w", "remove write permission from everyone"),
+        ("u+s", "set the set-user-ID bit"),
+        ("g+s", "set the set-group-ID bit"),
+        ("+t", "set the sticky bit"),
+        ("755", "rwxr-xr-x: executable and world-readable"),
+        ("644", "rw-r--r--: regular world-readable file"),
+        ("600", "rw-------: private file"),
+        ("700", "rwx------: private executable"),
+        ("777", "rwxrwxrwx: full permissions for all"),
+        ("666", "rw-rw-rw-: read and write for all"),
+        ("400", "r--------: owner read-only"),
+        ("444", "r--r--r--: read-only for all"),
+        ("750", "rwxr-x---: group read and execute"),
+        ("640", "rw-r-----: group read"),
+        ("664", "rw-rw-r--: group read and write"),
+    ];
+    modes.into_iter().fold(
+        CommandSpec::new("chmod", description)
+            .with_option(OptionSpec::new("-x", "remove execute permission for all"))
+            .with_generator(filesystem_from(1, false, &[])),
+        |command, (mode, mode_description)| {
+            command.with_subcommand(
+                CommandSpec::new(mode, mode_description).with_generator(filesystem_from(
+                    0,
+                    false,
+                    &[],
+                )),
+            )
+        },
+    )
+}
+
 fn tar(description: &str) -> CommandSpec {
     CommandSpec::new("tar", description)
         .with_option(OptionSpec::new("-c", "create an archive").with_alias("--create"))
@@ -862,7 +904,15 @@ fn filesystem_generator(
 }
 
 fn positional_files(index: usize) -> GeneratorSpec {
-    filesystem_generator(GeneratorTarget::Positional(index), false, &[])
+    filesystem_from(index, false, &[])
+}
+
+fn filesystem_from(index: usize, directory_only: bool, extensions: &[&str]) -> GeneratorSpec {
+    filesystem_generator(
+        GeneratorTarget::PositionalsFrom(index),
+        directory_only,
+        extensions,
+    )
 }
 
 fn option_files(name: &str, extensions: &[&str]) -> GeneratorSpec {

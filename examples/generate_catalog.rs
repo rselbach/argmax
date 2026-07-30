@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None => write_atomic(&documentation, &argmax::catalog::markdown()?)?,
         Some("--check") => check_current(&documentation, &argmax::catalog::markdown()?)?,
         Some("--freeze-baseline") => {
-            write_atomic(&baseline, &argmax::catalog::baseline_manifest())?;
+            write_atomic(&baseline, &argmax::catalog::baseline_manifest()?)?;
         }
         Some(argument) => return Err(format!("unknown argument {argument:?}").into()),
     }

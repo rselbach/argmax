@@ -1,6 +1,6 @@
 # Built-in command catalog
 
-Generated from the same audited source used by argmax at runtime.
+Generated from the checked-in IRIS snapshot used by argmax at runtime.
 
 | Category | Count |
 | --- | ---: |
@@ -20,649 +20,658 @@ Generated from the same audited source used by argmax at runtime.
 | System administration, network, and process management | 175 |
 | **Total** | **567** |
 
+The 567 documented records resolve to **566 unique command roots**; the duplicate `find` records are explicitly merged.
+
 ## Cloud, containers, Kubernetes, DevOps, and databases
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `aliyun` | Alibaba Cloud CLI | migrated | 0 | 0 | 0 |
-| `ansible` | configuration automation CLI | migrated | 0 | 0 | 0 |
-| `ansible-galaxy` | Ansible content manager | migrated | 0 | 0 | 0 |
-| `ansible-playbook` | Ansible playbook runner | migrated | 0 | 0 | 0 |
-| `ansible-vault` | Ansible secrets utility | migrated | 0 | 0 | 0 |
-| `argocd` | Argo CD command-line client | migrated | 0 | 0 | 0 |
-| `aws` | Amazon Web Services CLI | migrated | 0 | 0 | 0 |
-| `aws-vault` | secure AWS credential manager | migrated | 0 | 0 | 0 |
-| `az` | Microsoft Azure CLI | migrated | 0 | 0 | 0 |
-| `barbican` | OpenStack key management client | migrated | 0 | 0 | 0 |
-| `bosh` | BOSH deployment management CLI | migrated | 0 | 0 | 0 |
-| `boundary` | secure remote access CLI | migrated | 0 | 0 | 0 |
-| `bq` | Google BigQuery CLI | migrated | 0 | 0 | 0 |
-| `buildah` | Open Container Initiative image builder | migrated | 0 | 0 | 0 |
-| `cdk` | AWS cloud development kit | migrated | 0 | 0 | 0 |
-| `cf` | Cloud Foundry CLI | migrated | 0 | 0 | 0 |
-| `chef` | Chef workstation CLI | migrated | 0 | 0 | 0 |
-| `cilium` | Cilium networking and security CLI | migrated | 0 | 0 | 0 |
-| `cinder` | OpenStack block storage client | migrated | 0 | 0 | 0 |
-| `civo` | Civo cloud CLI | migrated | 0 | 0 | 0 |
-| `clickhouse-client` | ClickHouse command-line client | migrated | 0 | 0 | 0 |
-| `cloudflared` | Cloudflare tunnel client | migrated | 0 | 0 | 0 |
-| `cockroach` | CockroachDB server and administration CLI | migrated | 0 | 0 | 0 |
-| `colima` | container runtime environment manager | migrated | 0 | 0 | 0 |
-| `consul` | service discovery CLI | migrated | 0 | 0 | 0 |
-| `containerd` | container runtime daemon | migrated | 0 | 0 | 0 |
-| `cosign` | container artifact signing client | migrated | 0 | 0 | 0 |
-| `cqlsh` | Apache Cassandra query shell | migrated | 0 | 0 | 0 |
-| `crane` | container registry client | migrated | 0 | 0 | 0 |
-| `crictl` | container runtime interface client | migrated | 0 | 0 | 0 |
-| `ctr` | containerd debugging client | migrated | 0 | 0 | 0 |
-| `dapr` | Dapr application runtime CLI | migrated | 0 | 0 | 0 |
-| `devspace` | Kubernetes development CLI | migrated | 0 | 0 | 0 |
-| `dive` | container image layer explorer | migrated | 0 | 0 | 0 |
-| `docker` | container build and runtime CLI | migrated | 11 | 16 | 2 |
-| `doctl` | DigitalOcean CLI | migrated | 0 | 0 | 0 |
-| `duckdb` | DuckDB command-line shell | migrated | 0 | 0 | 0 |
-| `eb` | AWS Elastic Beanstalk CLI | migrated | 0 | 0 | 0 |
-| `eksctl` | Amazon EKS cluster manager | migrated | 0 | 0 | 0 |
-| `etcdctl` | etcd command-line client | migrated | 0 | 0 | 0 |
-| `exo` | Exoscale CLI | migrated | 0 | 0 | 0 |
-| `fastly` | Fastly edge cloud CLI | migrated | 0 | 0 | 0 |
-| `finch` | container development client | migrated | 0 | 0 | 0 |
-| `firebase` | Firebase project CLI | migrated | 0 | 0 | 0 |
-| `flux` | Flux continuous delivery CLI | migrated | 0 | 0 | 0 |
-| `flyctl` | Fly.io platform CLI | migrated | 0 | 0 | 0 |
-| `gcloud` | Google Cloud CLI | migrated | 0 | 0 | 0 |
-| `grype` | container vulnerability scanner | migrated | 0 | 0 | 0 |
-| `gsutil` | Google Cloud Storage utility | migrated | 0 | 0 | 0 |
-| `hadolint` | Dockerfile linter | migrated | 0 | 0 | 0 |
-| `hcloud` | Hetzner Cloud CLI | migrated | 0 | 0 | 0 |
-| `helm` | Kubernetes package manager | migrated | 0 | 0 | 0 |
-| `helmfile` | declarative Helm release manager | migrated | 0 | 0 | 0 |
-| `heroku` | Heroku platform CLI | migrated | 0 | 0 | 0 |
-| `ibmcloud` | IBM Cloud CLI | migrated | 0 | 0 | 0 |
-| `influx` | InfluxDB command-line client | migrated | 0 | 0 | 0 |
-| `inspec` | infrastructure compliance scanner | migrated | 0 | 0 | 0 |
-| `istioctl` | Istio service mesh CLI | migrated | 0 | 0 | 0 |
-| `juju` | model-driven operations CLI | migrated | 0 | 0 | 0 |
-| `k3d` | K3s-in-Docker cluster manager | migrated | 0 | 0 | 0 |
-| `k3s` | lightweight Kubernetes distribution | migrated | 0 | 0 | 0 |
-| `k9s` | Kubernetes terminal interface | migrated | 0 | 0 | 0 |
-| `kind` | Kubernetes-in-Docker cluster manager | migrated | 0 | 0 | 0 |
-| `knife` | Chef infrastructure client | migrated | 0 | 0 | 0 |
-| `kompose` | convert Compose applications to Kubernetes | migrated | 0 | 0 | 0 |
-| `kubeadm` | Kubernetes cluster bootstrapper | migrated | 0 | 0 | 0 |
-| `kubectl` | Kubernetes command-line client | migrated | 6 | 2 | 0 |
-| `kubectx` | Kubernetes context switcher | migrated | 0 | 0 | 0 |
-| `kubelet` | Kubernetes node agent | migrated | 0 | 0 | 0 |
-| `kubens` | Kubernetes namespace switcher | migrated | 0 | 0 | 0 |
-| `kubescape` | Kubernetes security scanner | migrated | 0 | 0 | 0 |
-| `kubeseal` | Sealed Secrets encryption client | migrated | 0 | 0 | 0 |
-| `kustomize` | Kubernetes manifest customizer | migrated | 0 | 0 | 0 |
-| `limactl` | Lima virtual machine manager | migrated | 0 | 0 | 0 |
-| `linode-cli` | Akamai Linode CLI | migrated | 0 | 0 | 0 |
-| `mariadb` | MariaDB interactive client | migrated | 0 | 0 | 0 |
-| `minikube` | local Kubernetes cluster manager | migrated | 0 | 0 | 0 |
-| `molecule` | Ansible role test runner | migrated | 0 | 0 | 0 |
-| `mongosh` | MongoDB interactive shell | migrated | 0 | 0 | 0 |
-| `mysql` | MySQL interactive client | migrated | 0 | 0 | 0 |
-| `nerdctl` | containerd command-line client | migrated | 0 | 0 | 0 |
-| `netlify` | Netlify deployment CLI | migrated | 0 | 0 | 0 |
-| `nomad` | workload orchestration CLI | migrated | 0 | 0 | 0 |
-| `oci` | Oracle Cloud Infrastructure CLI | migrated | 0 | 0 | 0 |
-| `okteto` | Kubernetes development platform CLI | migrated | 0 | 0 | 0 |
-| `openstack` | OpenStack cloud CLI | migrated | 0 | 0 | 0 |
-| `oras` | OCI registry artifact client | migrated | 0 | 0 | 0 |
-| `packer` | machine image builder | migrated | 0 | 0 | 0 |
-| `podman` | daemonless container engine | migrated | 0 | 0 | 0 |
-| `podman-compose` | Podman Compose client | migrated | 0 | 0 | 0 |
-| `psql` | PostgreSQL interactive client | migrated | 0 | 0 | 0 |
-| `pulumi` | infrastructure as code platform | migrated | 0 | 0 | 0 |
-| `puppet` | infrastructure automation CLI | migrated | 0 | 0 | 0 |
-| `railway` | Railway platform CLI | migrated | 0 | 0 | 0 |
-| `redis-cli` | Redis command-line client | migrated | 0 | 0 | 0 |
-| `regctl` | container registry client | migrated | 0 | 0 | 0 |
-| `runc` | Open Container Initiative runtime | migrated | 0 | 0 | 0 |
-| `salt` | Salt remote execution client | migrated | 0 | 0 | 0 |
-| `salt-call` | Salt local execution client | migrated | 0 | 0 | 0 |
-| `sam` | AWS serverless application CLI | migrated | 0 | 0 | 0 |
-| `scw` | Scaleway CLI | migrated | 0 | 0 | 0 |
-| `session-manager-plugin` | AWS Session Manager client plugin | migrated | 0 | 0 | 0 |
-| `skaffold` | Kubernetes development workflow CLI | migrated | 0 | 0 | 0 |
-| `skopeo` | container image inspection utility | migrated | 0 | 0 | 0 |
-| `sqlite3` | SQLite command-line shell | migrated | 0 | 0 | 0 |
-| `stern` | multi-pod Kubernetes log tailer | migrated | 0 | 0 | 0 |
-| `swift` | OpenStack object storage client | migrated | 0 | 0 | 0 |
-| `syft` | container software bill of materials tool | migrated | 0 | 0 | 0 |
-| `telepresence` | local-to-Kubernetes proxy | migrated | 0 | 0 | 0 |
-| `terraform` | infrastructure as code CLI | migrated | 0 | 0 | 0 |
-| `terragrunt` | Terraform orchestration wrapper | migrated | 0 | 0 | 0 |
-| `tilt` | Kubernetes development environment | migrated | 0 | 0 | 0 |
-| `tofu` | OpenTofu infrastructure CLI | migrated | 0 | 0 | 0 |
-| `trivy` | container vulnerability scanner | migrated | 0 | 0 | 0 |
-| `vagrant` | virtual development environment CLI | migrated | 0 | 0 | 0 |
-| `vault` | secrets management CLI | migrated | 0 | 0 | 0 |
-| `vercel` | Vercel deployment CLI | migrated | 0 | 0 | 0 |
-| `wrangler` | Cloudflare Workers CLI | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `amplify` | Environment | `ops/amplify.go` | migrated | 18 | 8 | 0 |
+| `ampx` | CLI for Amplify Gen 2 | `ops/ampx.go` | migrated | 13 | 27 | 0 |
+| `ansible` | Define and run a single Ansible task | `ops/ansible.go` | migrated | 0 | 34 | 0 |
+| `ansible-config` | View ansible configuration | `ops/ansible_config.go` | migrated | 8 | 9 | 0 |
+| `ansible-doc` | Displays information on modules installed in Ansible libraries | `ops/ansible_doc.go` | migrated | 0 | 11 | 0 |
+| `ansible-galaxy` | The Galaxy API server URL | `ops/ansible_galaxy.go` | migrated | 20 | 30 | 0 |
+| `ansible-lint` | Ansible static code analysis | `ops/ansible_lint.go` | migrated | 0 | 20 | 0 |
+| `ansible-playbook` | Runs Ansible playbooks, executing the defined tasks on the targeted hosts | `ops/ansible_playbook.go` | migrated | 0 | 36 | 0 |
+| `appwrite` | Appwrite - Open-Source End-to-End Backend Server | `ops/appwrite.go` | migrated | 38 | 40 | 0 |
+| `arch` | 32-bit intel | `ops/arch.go` | migrated | 0 | 7 | 0 |
+| `arduino-cli` | Arduino CLI - build, compile, and upload Arduino sketches | `ops/arduino_cli.go` | migrated | 43 | 40 | 0 |
+| `argo` | If True, Use the HTTP client. Defaults to the ARGO_HTTP1 environment variable | `ops/argo.go` | migrated | 31 | 40 | 0 |
+| `asdf` | Plugin name | `ops/asdf.go` | migrated | 0 | 6 | 0 |
+| `atlas` | CLI tool to manage MongoDB Atlas | `ops/atlas.go` | migrated | 50 | 40 | 0 |
+| `aws` | Use a specific profile from your credential file | `ops/aws.go` | migrated | 50 | 1 | 0 |
+| `aws-vault` | Add credentials to the secure keystore | `ops/aws_vault.go` | migrated | 0 | 11 | 0 |
+| `bit` | Bit documentation: https://bit.dev/docs | `ops/bit.go` | migrated | 50 | 40 | 0 |
+| `bosh` | Deployment | `ops/bosh.go` | migrated | 50 | 14 | 0 |
+| `capacitor` | Add a native platform project to your app | `ops/capacitor.go` | migrated | 4 | 6 | 0 |
+| `cdk` | AWS CDK CLI | `ops/cdk.go` | migrated | 15 | 2 | 0 |
+| `cf` | Cloudfoundry cli | `ops/cf.go` | migrated | 49 | 36 | 0 |
+| `checkov` | Branch | `ops/checkov.go` | migrated | 0 | 32 | 0 |
+| `circleci` | CircleCI CLI | `ops/circleci.go` | migrated | 46 | 19 | 0 |
+| `cloudflared` | Specify the hostname of your application | `ops/cloudflared.go` | migrated | 3 | 40 | 0 |
+| `coda` | Coda CLI - interact with Coda docs and tables | `ops/coda.go` | migrated | 15 | 5 | 0 |
+| `command` | Run an external command | `ops/command.go` | migrated | 0 | 1 | 0 |
+| `copilot` | Name of the application | `ops/copilot.go` | migrated | 22 | 40 | 0 |
+| `cosign` | Provides utilities for attaching artifacts to other artifacts in a registry | `ops/cosign.go` | migrated | 28 | 40 | 0 |
+| `dapr` | Distributed Application Runtime CLI | `ops/dapr.go` | migrated | 22 | 40 | 0 |
+| `datree` | Help for | `ops/datree.go` | migrated | 8 | 10 | 0 |
+| `deployctl` | Command line tool for Deno Deploy | `ops/deployctl.go` | migrated | 2 | 8 | 0 |
+| `direnv` | Help for direnv | `ops/direnv.go` | migrated | 18 | 0 | 0 |
+| `docker` | container engine | `ops/docker.go` | migrated | 43 | 44 | 13 |
+| `docker-compose` | multi-container (legacy) | `ops/docker.go` | migrated | 8 | 5 | 0 |
+| `doctl` | The official DigitalOcean command line interface (CLI) | `ops/doctl.go` | migrated | 50 | 6 | 0 |
+| `doppler` | The official CLI for Doppler Secret Operations Platform | `ops/doppler.go` | migrated | 43 | 40 | 0 |
+| `eas` | Log in with your Expo account | `ops/eas.go` | migrated | 49 | 40 | 0 |
+| `fastly` | A CLI for interacting with the Fastly platform | `ops/fastly.go` | migrated | 50 | 40 | 0 |
+| `firebase` | ProjectAlias | `ops/firebase.go` | migrated | 50 | 40 | 0 |
+| `flyctl` | Command line tool for Fly.io services | `ops/flyctl.go` | migrated | 50 | 40 | 0 |
+| `fnm` | Fast and simple Node.js version manager | `ops/fnm.go` | migrated | 14 | 10 | 0 |
+| `gcloud` | Manage Google Cloud Platform resources and developer workflow | `ops/gcloud.go` | migrated | 50 | 0 | 0 |
+| `gh` | Current branch | `ops/gh.go` | migrated | 50 | 40 | 0 |
+| `gpg` | Encryption and signing tool | `ops/gpg.go` | migrated | 0 | 40 | 0 |
+| `hasura` | .env filename to load ENV vars from | `ops/hasura.go` | migrated | 31 | 40 | 0 |
+| `helm` | The Helm package manager for Kubernetes | `ops/helm.go` | migrated | 48 | 40 | 0 |
+| `helmfile` | Deploy helm charts | `ops/helmfile.go` | migrated | 15 | 11 | 0 |
+| `hugo` | The world | `ops/hugo.go` | migrated | 38 | 40 | 0 |
+| `k3d` | Little helper to run k3s in Docker | `ops/k3d.go` | migrated | 37 | 40 | 0 |
+| `k6` | Create an archive | `ops/k6.go` | migrated | 50 | 40 | 0 |
+| `k9s` | Kubernetes namespace | `ops/k9s.go` | migrated | 3 | 24 | 0 |
+| `kind` | Cluster | `ops/kind.go` | migrated | 23 | 16 | 0 |
+| `knex` | SQL query builder for JavaScript | `ops/knex.go` | migrated | 12 | 14 | 0 |
+| `kubectl` | kubernetes cli | `ops/kubectl.go` | migrated | 13 | 4 | 0 |
+| `kubectx` | Switch between Kubernetes-contexts | `ops/kubectx.go` | migrated | 0 | 4 | 0 |
+| `kubens` | Switch between Kubernetes-namespaces | `ops/kubens.go` | migrated | 0 | 2 | 0 |
+| `limactl` | Lima: Linux virtual machines, with a focus on running containers | `ops/limactl.go` | migrated | 12 | 10 | 0 |
+| `locust` | Show program | `ops/locust.go` | migrated | 0 | 26 | 0 |
+| `lpass` | Command line interface for LastPass | `ops/lpass.go` | migrated | 37 | 36 | 0 |
+| `minikube` | Format to print stdout in | `ops/minikube.go` | migrated | 50 | 40 | 0 |
+| `mongocli` | CLI tool to manage your MongoDB Cloud | `ops/mongocli.go` | migrated | 50 | 40 | 0 |
+| `mongoimport` | Import data from a JSON, CSV, or TSV file into a MongoDB instance | `ops/mongoimport.go` | migrated | 0 | 27 | 0 |
+| `mongosh` | Default Connection String; Equivalent to running mongosh without any commands | `ops/mongosh.go` | migrated | 0 | 11 | 0 |
+| `multipass` | Displays help on commandline options | `ops/multipass.go` | migrated | 31 | 19 | 0 |
+| `mysql` | Mysql is a terminal-based front-end to MySQL | `ops/mysql.go` | migrated | 0 | 40 | 0 |
+| `netlify` | Print debugging information | `ops/netlify.go` | migrated | 2 | 39 | 0 |
+| `newman` | Newman is a command-line collection runner for Postman | `ops/newman.go` | migrated | 2 | 31 | 0 |
+| `nginx` | Nginx (pronounced | `ops/nginx.go` | migrated | 0 | 9 | 0 |
+| `ngrok` | Path to log file, | `ops/ngrok.go` | migrated | 10 | 5 | 0 |
+| `nvm` | Node version | `ops/nvm.go` | migrated | 14 | 11 | 0 |
+| `oci` | Oracle Cloud Infrastructure CLI | `ops/oci.go` | migrated | 25 | 29 | 0 |
+| `okteto` | Context | `ops/okteto.go` | migrated | 33 | 36 | 0 |
+| `op` | Official 1Password CLI | `ops/op.go` | migrated | 32 | 40 | 0 |
+| `opa` | Open Policy Agent (OPA) | `ops/opa.go` | migrated | 19 | 40 | 0 |
+| `osqueryi` | Your OS as a high-performance relational database | `ops/osqueryi.go` | migrated | 0 | 40 | 0 |
+| `pass` | Pass - stores, retrieves, generates, and synchronizes passwords securely | `ops/pass.go` | migrated | 17 | 9 | 0 |
+| `pg_dump` | Dumps a database as a text file or to other formats | `ops/pg_dump.go` | migrated | 0 | 40 | 0 |
+| `pgcli` | Host address of the postgres database | `ops/pgcli.go` | migrated | 0 | 18 | 0 |
+| `pm2` | Outputs the version number | `ops/pm2.go` | migrated | 50 | 36 | 0 |
+| `pod` | CocoaPods, the Cocoa library package manager | `ops/pod.go` | migrated | 1 | 40 | 0 |
+| `podman` | Build an image using instructions from Containerfiles | `ops/podman.go` | migrated | 36 | 40 | 0 |
+| `pscale` | The client ID for the PlanetScale CLI application | `ops/pscale.go` | migrated | 35 | 28 | 0 |
+| `psql` | Psql is a terminal-based front-end to PostgreSQL | `ops/psql.go` | migrated | 0 | 3 | 0 |
+| `pulumi` | The name of the stack to operate on. Defaults to the current stack | `ops/pulumi.go` | migrated | 49 | 40 | 0 |
+| `qodana` | Run Qodana as fast as possible, with minimum effort required | `ops/qodana.go` | migrated | 4 | 16 | 0 |
+| `railway` | CLI for managing Railway Apps | `ops/railway.go` | migrated | 34 | 8 | 0 |
+| `rbenv` | List all available rbenv commands | `ops/rbenv.go` | migrated | 10 | 4 | 0 |
+| `robot` | Tag | `ops/robot.go` | migrated | 0 | 40 | 0 |
+| `rsync` | remote sync | `ops/ssh.go` | migrated | 0 | 7 | 1 |
+| `scp` | secure copy | `ops/ssh.go` | migrated | 0 | 4 | 1 |
+| `serverless` | AWS profile to use with the command | `ops/serverless.go` | migrated | 20 | 24 | 0 |
+| `sfdx` | Analyze (lint) Aura component code | `ops/sfdx.go` | migrated | 50 | 40 | 0 |
+| `sftp` | OpenSSH secure file transfer | `ops/sftp.go` | migrated | 0 | 17 | 0 |
+| `space` | Deta Space CLI for mananging Deta Space projects | `ops/space.go` | migrated | 15 | 14 | 0 |
+| `sqlite3` | A command line interface for SQLite version 3 | `ops/sqlite3.go` | migrated | 0 | 28 | 0 |
+| `src` | Interact with Sourcegraph from the command line | `ops/src.go` | migrated | 14 | 15 | 0 |
+| `ssh` | secure shell | `ops/ssh.go` | migrated | 0 | 10 | 1 |
+| `ssh-keygen` | Generates, manages and converts authentication keys for ssh | `ops/ssh_keygen.go` | migrated | 0 | 39 | 0 |
+| `stripe` | Stripe CLI - build, test, and manage your Stripe integrations right from your terminal | `ops/stripe.go` | migrated | 46 | 36 | 0 |
+| `supabase` | Supabase CLI | `ops/supabase.go` | migrated | 43 | 27 | 0 |
+| `surreal` | Database authentication password to use when connecting [default: root] | `ops/surreal.go` | migrated | 17 | 12 | 0 |
+| `tailscale` | Connect to Tailscale, logging in if needed | `ops/tailscale.go` | migrated | 17 | 37 | 0 |
+| `terraform` | Workspace | `ops/terraform.go` | migrated | 4 | 19 | 0 |
+| `terragrunt` | Workspace | `ops/terragrunt.go` | migrated | 4 | 30 | 0 |
+| `tfenv` | Version | `ops/tfenv.go` | migrated | 8 | 2 | 0 |
+| `tfsec` | Terraform workspaces | `ops/tfsec.go` | migrated | 0 | 27 | 0 |
+| `tkn` | CLI for tekton pipelines | `ops/tkn.go` | migrated | 40 | 40 | 0 |
+| `trivy` | Skip updating built-in policies [$TRIVY_SKIP_POLICY_UPDATE] | `ops/trivy.go` | migrated | 17 | 29 | 0 |
+| `tsuru` | Plan | `ops/tsuru.go` | migrated | 43 | 25 | 0 |
+| `vault` | Display help | `ops/vault.go` | migrated | 28 | 40 | 0 |
+| `vela` | Show the reference doc for component, trait or workflow types | `ops/vela.go` | migrated | 46 | 31 | 0 |
+| `vercel` | CLI Interface for Vercel.com | `ops/vercel.go` | migrated | 39 | 31 | 0 |
+| `volta` | Enables verbose diagnostics | `ops/volta.go` | migrated | 11 | 15 | 0 |
+| `watson` | A wonderful CLI to track your time | `ops/watson.go` | migrated | 20 | 31 | 0 |
+| `whois` | Query a database for information about a domain registrant | `ops/whois.go` | migrated | 0 | 17 | 0 |
+| `wrangler` | Path to configuration file [default: wrangler.toml] | `ops/wrangler.go` | migrated | 24 | 18 | 0 |
+| `xc` | List tasks from an xc-compatible markdown file | `ops/xc.go` | migrated | 0 | 5 | 0 |
+| `xcodes` | Manage the Xcode versions installed on your Mac | `ops/xcodes.go` | migrated | 10 | 11 | 0 |
 
 ## JavaScript, TypeScript, frontend, and Node.js tools
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `astro` | Build Astro websites | migrated | 0 | 0 | 0 |
-| `ava` | Run AVA tests | migrated | 0 | 0 | 0 |
-| `babel` | Transform JavaScript source | migrated | 0 | 0 | 0 |
-| `babel-node` | Run Babel-transformed programs | migrated | 0 | 0 | 0 |
-| `biome` | Lint and format web projects | migrated | 0 | 0 | 0 |
-| `browserify` | Bundle CommonJS modules | migrated | 0 | 0 | 0 |
-| `bun` | Run the Bun toolkit | migrated | 1 | 1 | 1 |
-| `bunx` | Run Bun package binaries | migrated | 0 | 0 | 0 |
-| `capacitor` | Manage Capacitor native projects | migrated | 0 | 0 | 0 |
-| `commitlint` | Validate commit messages | migrated | 0 | 0 | 0 |
-| `cordova` | Manage Cordova applications | migrated | 0 | 0 | 0 |
-| `corepack` | Select package manager versions | migrated | 0 | 0 | 0 |
-| `create-react-app` | Create React applications | migrated | 0 | 0 | 0 |
-| `cross-env` | Set cross-platform environment variables | migrated | 0 | 0 | 0 |
-| `cypress` | Run Cypress browser tests | migrated | 0 | 0 | 0 |
-| `deno` | Run secure JavaScript and TypeScript | migrated | 0 | 0 | 0 |
-| `depcheck` | Find unused JavaScript dependencies | migrated | 0 | 0 | 0 |
-| `dotenv` | Run commands with dotenv files | migrated | 0 | 0 | 0 |
-| `eleventy` | Build Eleventy static sites | migrated | 0 | 0 | 0 |
-| `ember` | Manage Ember applications | migrated | 0 | 0 | 0 |
-| `env-cmd` | Load environment variables for commands | migrated | 0 | 0 | 0 |
-| `esbuild` | Bundle JavaScript and TypeScript | migrated | 0 | 0 | 0 |
-| `eslint` | Lint JavaScript and TypeScript | migrated | 0 | 0 | 0 |
-| `expo` | Develop Expo applications | migrated | 0 | 0 | 0 |
-| `forever` | Keep Node.js programs running | migrated | 0 | 0 | 0 |
-| `gatsby` | Build Gatsby sites | migrated | 0 | 0 | 0 |
-| `husky` | Manage Git hooks for projects | migrated | 0 | 0 | 0 |
-| `ionic` | Manage Ionic applications | migrated | 0 | 0 | 0 |
-| `jasmine` | Run Jasmine tests | migrated | 0 | 0 | 0 |
-| `jest` | Run Jest tests | migrated | 0 | 0 | 0 |
-| `jscodeshift` | Run JavaScript codemods | migrated | 0 | 0 | 0 |
-| `karma` | Run browser tests with Karma | migrated | 0 | 0 | 0 |
-| `lint-staged` | Run checks on staged files | migrated | 0 | 0 | 0 |
-| `madge` | Analyze module dependencies | migrated | 0 | 0 | 0 |
-| `microbundle` | Bundle small JavaScript libraries | migrated | 0 | 0 | 0 |
-| `mocha` | Run Mocha tests | migrated | 0 | 0 | 0 |
-| `ncu` | Update package dependency declarations | migrated | 0 | 0 | 0 |
-| `nest` | Manage NestJS applications | migrated | 0 | 0 | 0 |
-| `next` | Build Next.js applications | migrated | 0 | 0 | 0 |
-| `ng` | Manage Angular projects | migrated | 0 | 0 | 0 |
-| `node` | Run JavaScript with Node.js | migrated | 0 | 0 | 0 |
-| `nodemon` | Restart Node.js programs on changes | migrated | 0 | 0 | 0 |
-| `npm` | Manage Node.js packages | migrated | 9 | 7 | 1 |
-| `npx` | Run package-provided commands | migrated | 0 | 0 | 0 |
-| `nuxi` | Manage Nuxt projects | migrated | 0 | 0 | 0 |
-| `nuxt` | Build Nuxt applications | migrated | 0 | 0 | 0 |
-| `parcel` | Build zero-configuration web projects | migrated | 0 | 0 | 0 |
-| `playwright` | Run Playwright browser automation | migrated | 0 | 0 | 0 |
-| `pm2` | Manage Node.js processes | migrated | 0 | 0 | 0 |
-| `pnpm` | Manage content-addressed packages | migrated | 1 | 1 | 1 |
-| `pnpx` | Run pnpm package binaries | migrated | 0 | 0 | 0 |
-| `prettier` | Format source files | migrated | 0 | 0 | 0 |
-| `puppeteer` | Manage Puppeteer browsers | migrated | 0 | 0 | 0 |
-| `quasar` | Manage Quasar applications | migrated | 0 | 0 | 0 |
-| `react-native` | Manage React Native applications | migrated | 0 | 0 | 0 |
-| `remix` | Develop Remix applications | migrated | 0 | 0 | 0 |
-| `rimraf` | Remove files recursively | migrated | 0 | 0 | 0 |
-| `rspack` | Bundle web applications with Rspack | migrated | 0 | 0 | 0 |
-| `semantic-release` | Automate package releases | migrated | 0 | 0 | 0 |
-| `shx` | Run portable shell utilities | migrated | 0 | 0 | 0 |
-| `standard` | Check JavaScript Standard Style | migrated | 0 | 0 | 0 |
-| `storybook` | Develop component stories | migrated | 0 | 0 | 0 |
-| `styleguidist` | Develop React style guides | migrated | 0 | 0 | 0 |
-| `stylelint` | Lint stylesheets | migrated | 0 | 0 | 0 |
-| `svelte-check` | Check Svelte projects | migrated | 0 | 0 | 0 |
-| `swc` | Compile JavaScript and TypeScript | migrated | 0 | 0 | 0 |
-| `ts-node` | Run TypeScript with Node.js | migrated | 0 | 0 | 0 |
-| `ts-node-dev` | Reload TypeScript Node.js programs | migrated | 0 | 0 | 0 |
-| `tsc` | Compile TypeScript projects | migrated | 0 | 0 | 0 |
-| `tsserver` | Serve TypeScript language features | migrated | 0 | 0 | 0 |
-| `tsx` | Run TypeScript and ECMAScript modules | migrated | 0 | 0 | 0 |
-| `vite` | Build and serve web projects | migrated | 0 | 0 | 0 |
-| `vitest` | Run Vitest tests | migrated | 0 | 0 | 0 |
-| `vue` | Manage Vue projects | migrated | 0 | 0 | 0 |
-| `vue-cli-service` | Run Vue CLI project tasks | migrated | 0 | 0 | 0 |
-| `webpack` | Bundle JavaScript application assets | migrated | 0 | 0 | 0 |
-| `webpack-cli` | Invoke the webpack command line | migrated | 0 | 0 | 0 |
-| `webpack-dev-server` | Serve webpack development builds | migrated | 0 | 0 | 0 |
-| `xo` | Lint JavaScript projects | migrated | 0 | 0 | 0 |
-| `yarn` | Manage JavaScript packages | migrated | 1 | 1 | 1 |
-| `yarnpkg` | Invoke the Yarn package manager | aliased to `yarn` | 0 | 0 | 0 |
-| `zx` | Write shell scripts in JavaScript | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `asar` | A simple extensive tar-like archive format with indexing | `js/asar.go` | migrated | 8 | 2 | 0 |
+| `astro` | Add an integration | `js/astro.go` | migrated | 11 | 14 | 0 |
+| `babel` | A comma-separated list of preset names | `js/babel.go` | migrated | 0 | 32 | 0 |
+| `blitz` | Show help for command | `js/blitz.go` | migrated | 18 | 15 | 0 |
+| `browser-sync` | Keep multiple browsers & devices in sync when building websites | `js/browser_sync.go` | migrated | 5 | 40 | 0 |
+| `build-storybook` | Storybook build CLI tools | `js/build_storybook.go` | migrated | 0 | 3 | 0 |
+| `bun` | bun js runtime | `js/bun.go` | migrated | 23 | 57 | 2 |
+| `bunx` | execute package (bun x) | `js/bun.go` | migrated | 0 | 2 | 0 |
+| `cordova` | Print out the version of your cordova-cli install | `js/cordova.go` | migrated | 25 | 17 | 0 |
+| `create-completion-spec` | Setup fig folder and create spec with the given name | `js/create_completion_spec.go` | migrated | 1 | 2 | 0 |
+| `create-next-app` | Output the version number | `js/create_next_app.go` | migrated | 0 | 5 | 0 |
+| `create-nx-workspace` | The name of the workspace | `js/create_nx_workspace.go` | migrated | 0 | 8 | 0 |
+| `create-react-app` | Creates a new React project | `js/create_react_app.go` | migrated | 0 | 5 | 0 |
+| `create-react-native-app` | Creates a new React Native project | `js/create_react_native_app.go` | migrated | 0 | 6 | 0 |
+| `create-redwood-app` | Name of your Redwood project | `js/create_redwood_app.go` | migrated | 0 | 9 | 0 |
+| `create-remix` | Display help for command | `js/create_remix.go` | migrated | 0 | 2 | 0 |
+| `create-t3-app` | The name of the application, as well as the name of the directory to create | `js/create_t3_app.go` | migrated | 0 | 8 | 0 |
+| `create-video` | CLI used to create remotion video project | `js/create_video.go` | migrated | 0 | 0 | 0 |
+| `create-vite` | Create a new project powered by Vite | `js/create_vite.go` | migrated | 0 | 0 | 0 |
+| `create-web3-frontend` | Quickly create a Next.js project with wagmi and TailwindCSS ready to go | `js/create_web3_frontend.go` | migrated | 0 | 4 | 0 |
+| `deno` | A modern JavaScript and TypeScript runtime | `js/deno.go` | migrated | 24 | 40 | 0 |
+| `dotenv` | Loads environment variables from .env | `js/dotenv.go` | migrated | 0 | 4 | 0 |
+| `electron` | Build cross platform desktop apps with JavaScript, HTML and CSS | `js/electron.go` | migrated | 0 | 4 | 0 |
+| `elm` | Fig spec for the Elm language cli | `js/elm.go` | migrated | 6 | 8 | 0 |
+| `elm-format` | Format your code in the Elm idiomatic way | `js/elm_format.go` | migrated | 0 | 6 | 0 |
+| `elm-json` | Deal with your elm.json | `js/elm_json.go` | migrated | 8 | 7 | 0 |
+| `elm-review` | Prints a single JSON object | `js/elm_review.go` | migrated | 4 | 20 | 0 |
+| `esbuild` | An extremely fast JavaScript bundler | `js/esbuild.go` | migrated | 0 | 40 | 0 |
+| `eslint` | Pluggable JavaScript linter | `js/eslint.go` | migrated | 0 | 35 | 0 |
+| `expo` | Tools for creating, running, and deploying Universal Expo and React Native apps | `js/expo.go` | migrated | 0 | 40 | 0 |
+| `expo-cli` | Tools for creating, running, and deploying Universal Expo and React Native apps | `js/expo_cli.go` | migrated | 0 | 40 | 0 |
+| `ganache-cli` | Fast Ethereum RPC client | `js/ganache_cli.go` | migrated | 0 | 20 | 0 |
+| `gatsby` | Set host. Defaults to localhost | `js/gatsby.go` | migrated | 8 | 13 | 0 |
+| `hardhat` | Ethereum development environment | `js/hardhat.go` | migrated | 10 | 14 | 0 |
+| `ionic` | Target engine (e.g. browser, cordova) | `js/ionic.go` | migrated | 35 | 40 | 0 |
+| `jest` | A delightful JavaScript Testing Framework with a focus on simplicity | `js/jest.go` | migrated | 0 | 40 | 0 |
+| `lerna` | Branch | `js/lerna.go` | migrated | 10 | 40 | 0 |
+| `meteor` | Run the meteor command-line tool | `js/meteor.go` | migrated | 22 | 40 | 0 |
+| `ncu` | Clear the default cache, or the cache file specified by --cacheFile | `js/ncu.go` | migrated | 0 | 25 | 0 |
+| `nest` | Report actions that would be taken without writing out results | `js/nest.go` | migrated | 27 | 7 | 0 |
+| `next` | A port number on which to start the application | `js/next.go` | migrated | 8 | 7 | 0 |
+| `ng` | Project name | `js/ng.go` | migrated | 8 | 7 | 0 |
+| `node` | Run the node interpreter | `js/node.go` | migrated | 0 | 31 | 0 |
+| `npm` | node packages | `js/npm.go` | migrated | 18 | 10 | 1 |
+| `npx` | Execute binaries from npm packages | `js/npx.go` | migrated | 0 | 8 | 0 |
+| `nuxi` | The directory of the target application | `js/nuxi.go` | migrated | 0 | 19 | 0 |
+| `nuxt` | Launch the development server | `js/nuxt.go` | migrated | 3 | 3 | 0 |
+| `nx` | All projects | `js/nx.go` | migrated | 21 | 37 | 0 |
+| `oxlint` | All lints (except nursery) | `js/oxlint.go` | migrated | 0 | 16 | 0 |
+| `playwright` | Display help for command | `js/playwright.go` | migrated | 4 | 5 | 0 |
+| `pnpm` | fast node packages | `js/pnpm.go` | migrated | 19 | 11 | 1 |
+| `pnpx` | Execute binaries from npm packages | `js/pnpx.go` | migrated | 0 | 7 | 0 |
+| `prettier` | Run Prettier from the command line | `js/prettier.go` | migrated | 0 | 39 | 0 |
+| `quasar` | Quasar Framework CLI | `js/quasar.go` | migrated | 5 | 23 | 0 |
+| `react-native` | Attempt to fix all diagnosed issues | `js/react_native.go` | migrated | 0 | 40 | 0 |
+| `redwood` | Script | `js/redwood.go` | migrated | 35 | 24 | 0 |
+| `remix` | Represent the directory of the Remix application | `js/remix.go` | migrated | 4 | 4 | 0 |
+| `remotion` | Create videos programmatically in React | `js/remotion.go` | migrated | 40 | 40 | 0 |
+| `rollup` | Next-generation ES module bundler | `js/rollup.go` | migrated | 0 | 40 | 0 |
+| `rome` | Rome CLI | `js/rome.go` | migrated | 10 | 22 | 0 |
+| `rush` | Projects | `js/rush.go` | migrated | 11 | 26 | 0 |
+| `sequelize` | The environment to run the command in | `js/sequelize.go` | migrated | 0 | 22 | 0 |
+| `serve` | Static file serving and directory listing | `js/serve.go` | migrated | 0 | 16 | 0 |
+| `shadcn-ui` | Shadcn UI CLI | `js/shadcn_ui.go` | migrated | 5 | 4 | 0 |
+| `start-storybook` | Display usage information | `js/start_storybook.go` | migrated | 0 | 16 | 0 |
+| `stencil` | CLI to build Stencil projects and generate components | `js/stencil.go` | migrated | 7 | 22 | 0 |
+| `swagger-typescript-api` | Generate api via swagger scheme | `js/swagger_typescript_api.go` | migrated | 0 | 33 | 0 |
+| `swc` | Path to the file | `js/swc.go` | migrated | 0 | 19 | 0 |
+| `truffle` | Execute build pipeline (if configuration present) | `js/truffle.go` | migrated | 31 | 29 | 0 |
+| `ts-node` | Run the TypeScript interpreter for Node.JS | `js/ts_node.go` | migrated | 0 | 26 | 0 |
+| `tsc` | CLI tool for TypeScript compiler | `js/tsc.go` | migrated | 0 | 40 | 0 |
+| `tsx` | Run TypeScript file using tsx | `js/tsx.go` | migrated | 1 | 5 | 0 |
+| `turbo` | Print the version | `js/turbo.go` | migrated | 10 | 22 | 0 |
+| `typeorm` | Show help for command | `js/typeorm.go` | migrated | 14 | 15 | 0 |
+| `vite` | Native ESM-powered web dev build tool | `js/vite.go` | migrated | 0 | 27 | 0 |
+| `vr` | The npm-style script runner for Deno | `js/vr.go` | migrated | 3 | 3 | 0 |
+| `vsce` | The Visual Studio Code Extension Manager | `js/vsce.go` | migrated | 12 | 22 | 0 |
+| `vue` | Vue cli tools | `js/vue.go` | migrated | 13 | 33 | 0 |
+| `watchman` | A file watching service | `js/watchman.go` | migrated | 22 | 20 | 0 |
+| `webpack` | Run webpack (default command, can be omitted) | `js/webpack.go` | migrated | 10 | 40 | 0 |
+| `yalc` | Work with yarn/npm packages locally like a boss | `js/yalc.go` | migrated | 12 | 14 | 0 |
+| `yarn` | yarn package manager | `js/yarn.go` | migrated | 22 | 12 | 1 |
 
 ## Python ecosystem and data science
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `black` | Format Python code | migrated | 0 | 0 | 0 |
-| `flake8` | Check Python code style | migrated | 0 | 0 | 0 |
-| `ipython` | Run interactive Python | migrated | 0 | 0 | 0 |
-| `isort` | Sort Python imports | migrated | 0 | 0 | 0 |
-| `jupyter` | Run Jupyter tools | migrated | 0 | 0 | 0 |
-| `mypy` | Check Python static types | migrated | 0 | 0 | 0 |
-| `nox` | Automate Python test sessions | migrated | 0 | 0 | 0 |
-| `pdm` | Manage modern Python projects | migrated | 0 | 0 | 0 |
-| `pip` | Install Python packages | migrated | 14 | 9 | 4 |
-| `pip3` | Install Python 3 packages | migrated | 0 | 0 | 0 |
-| `pipenv` | Manage Python virtual environments | migrated | 0 | 0 | 0 |
-| `pipx` | Install isolated Python applications | migrated | 0 | 0 | 0 |
-| `poetry` | Manage Python projects and dependencies | migrated | 0 | 0 | 0 |
-| `pytest` | Run Python tests | migrated | 0 | 0 | 0 |
-| `python` | Run the Python interpreter | migrated | 0 | 0 | 0 |
-| `python3` | Run the Python 3 interpreter | migrated | 0 | 0 | 0 |
-| `ruff` | Lint and format Python code | migrated | 0 | 0 | 0 |
-| `tox` | Test Python environments | migrated | 0 | 0 | 0 |
-| `uv` | Manage fast Python environments | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `black` | Version | `python/black.go` | migrated | 0 | 24 | 0 |
+| `conda` | Name of environment | `python/conda.go` | migrated | 21 | 40 | 0 |
+| `django-admin` | Show this help message and exit | `python/django_admin.go` | migrated | 1 | 40 | 0 |
+| `googler` | Google from the command-line | `python/googler.go` | migrated | 0 | 29 | 0 |
+| `jupyter` | Set log level to logging.DEBUG (maximize logging output) | `python/jupyter.go` | migrated | 17 | 17 | 0 |
+| `mamba` | Mamba is a fast, robust, and cross-platform package manager | `python/mamba.go` | migrated | 26 | 40 | 0 |
+| `mypy` | Mypy is a static type checker for Python | `python/mypy.go` | migrated | 0 | 36 | 0 |
+| `pipenv` | Python package manager | `python/pipenv.go` | migrated | 12 | 40 | 0 |
+| `pipx` | Installed package | `python/pipx.go` | migrated | 14 | 19 | 0 |
+| `poetry` | python dependency manager | `python/python.go` | migrated | 17 | 2 | 2 |
+| `pre-commit` | Show help message and exit | `python/pre_commit.go` | migrated | 13 | 22 | 0 |
+| `pyenv` | Pyenv | `python/pyenv.go` | migrated | 8 | 11 | 0 |
+| `pytest` | Control assertion debugging tools. | `python/pytest.go` | migrated | 0 | 40 | 0 |
+| `ruff` | Enable verbose logging | `python/ruff.go` | migrated | 1 | 36 | 0 |
+| `sqlfluff` | A dialect-flexible and configurable SQL linter | `python/sqlfluff.go` | migrated | 10 | 22 | 0 |
+| `sqlmesh` | SQLMesh command line tool | `python/sqlmesh.go` | migrated | 16 | 40 | 0 |
+| `streamlit` | Streamlit | `python/streamlit.go` | migrated | 11 | 3 | 0 |
+| `uv` | fast python package manager | `python/python.go` | migrated | 27 | 8 | 5 |
+| `youtube-dl` | Clipboard | `python/youtube_dl.go` | migrated | 0 | 40 | 0 |
 
 ## Rust ecosystem and modern CLI tools
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `cargo` | Manage Rust projects | migrated | 9 | 21 | 10 |
-| `cargo-miri` | Run Rust code and tests under Miri | migrated | 0 | 0 | 0 |
-| `clippy-driver` | Run Rust lint analysis | migrated | 0 | 0 | 0 |
-| `mdbook` | Build books from Markdown | migrated | 0 | 0 | 0 |
-| `rust-analyzer` | Serve Rust language features | migrated | 0 | 0 | 0 |
-| `rust-gdb` | Debug Rust programs with GDB | migrated | 0 | 0 | 0 |
-| `rust-lldb` | Debug Rust programs with LLDB | migrated | 0 | 0 | 0 |
-| `rustc` | Compile Rust programs | migrated | 0 | 0 | 0 |
-| `rustdoc` | Generate Rust documentation | migrated | 0 | 0 | 0 |
-| `rustfmt` | Format Rust source code | migrated | 0 | 0 | 0 |
-| `rustup` | Manage Rust toolchains | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `cargo` | rust toolchain | `rust/cargo.go` | migrated | 13 | 21 | 10 |
+| `dprint` | Prints the help of the given subcommand(s) | `rust/dprint.go` | migrated | 9 | 6 | 0 |
+| `pijul` | Adds a path to the tree | `rust/pijul.go` | migrated | 32 | 29 | 0 |
+| `rustc` | Rust compiler | `rust/rustc.go` | migrated | 0 | 17 | 1 |
+| `rustup` | The Rust toolchain installer | `rust/rustup.go` | migrated | 27 | 27 | 0 |
+| `taplo` | Set color values for the output | `rust/taplo.go` | migrated | 11 | 19 | 0 |
+| `tokei` | Count your code, quickly | `rust/tokei.go` | migrated | 0 | 13 | 0 |
+| `trunk` | Run on all files instead of only changed files | `rust/trunk.go` | migrated | 18 | 21 | 0 |
+| `wasm-bindgen` | Generate bindings between WebAssembly and JavaScript | `rust/wasm_bindgen.go` | migrated | 0 | 22 | 0 |
+| `wasm-pack` | Build an npm package | `rust/wasm_pack.go` | migrated | 2 | 5 | 0 |
+| `zellij` | Change where zellij looks for the configuration file | `rust/zellij.go` | migrated | 0 | 40 | 0 |
 
 ## Go development and project tools
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `go` | Go toolchain and module driver | migrated | 16 | 6 | 2 |
-| `gofmt` | Go source formatter | migrated | 0 | 0 | 0 |
-| `golangci-lint` | Go linters runner | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `go` | tool for managing Go source code | `golang/go.go` | migrated | 42 | 158 | 5 |
+| `goctl` | A cli tool to generate go-zero code | `golang/goctl.go` | migrated | 40 | 40 | 0 |
+| `goreleaser` | Deliver Go binaries as fast and easily as possible | `golang/goreleaser.go` | migrated | 12 | 29 | 0 |
 
 ## Java, Kotlin, and JVM build tools
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `gradle` | Build Gradle projects | migrated | 0 | 0 | 0 |
-| `java` | Run Java applications | migrated | 0 | 0 | 0 |
-| `javac` | Compile Java source code | migrated | 0 | 0 | 0 |
-| `javadoc` | Generate Java API documentation | migrated | 0 | 0 | 0 |
-| `javap` | Inspect Java class files | migrated | 0 | 0 | 0 |
-| `jdeps` | Analyze Java dependencies | migrated | 0 | 0 | 0 |
-| `jlink` | Build custom Java runtimes | migrated | 0 | 0 | 0 |
-| `jmod` | Manage Java module files | migrated | 0 | 0 | 0 |
-| `jpackage` | Package Java applications | migrated | 0 | 0 | 0 |
-| `jshell` | Run the Java interactive shell | migrated | 0 | 0 | 0 |
-| `kotlinc` | Compile Kotlin source code | migrated | 0 | 0 | 0 |
-| `mvn` | Build Maven projects | migrated | 9 | 5 | 1 |
-| `sbt` | Build Scala projects | migrated | 0 | 0 | 0 |
-| `scala` | Run Scala programs | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `clojure` | An alias to refer to its function or a qualified function | `jvm/clojure.go` | migrated | 0 | 23 | 0 |
+| `dart` | The Dart file containing the main function | `jvm/dart.go` | migrated | 50 | 40 | 0 |
+| `flutter` | Available emulators | `jvm/flutter.go` | migrated | 44 | 40 | 0 |
+| `fvm` | Print this usage information | `jvm/fvm.go` | migrated | 18 | 10 | 0 |
+| `gradle` | Log all warnings | `jvm/gradle.go` | migrated | 11 | 31 | 0 |
+| `java` | Java runtime | `jvm/jvm.go` | migrated | 0 | 9 | 1 |
+| `javac` | Java compiler | `jvm/jvm.go` | migrated | 0 | 11 | 1 |
+| `jenv` | Executable file | `jvm/jenv.go` | migrated | 29 | 7 | 0 |
+| `jmeter` | Apache JMeter - 100% Java Load Testing Tool | `jvm/jmeter.go` | migrated | 0 | 27 | 0 |
+| `kdoctor` | Report a version of KDoctor | `jvm/kdoctor.go` | migrated | 0 | 5 | 0 |
+| `keytool` | Show help message | `jvm/keytool.go` | migrated | 0 | 40 | 0 |
+| `kotlinc` | Kotlin compiler | `jvm/jvm.go` | migrated | 0 | 5 | 1 |
+| `mvn` | Maven - a Java based project management and comprehension tool | `jvm/mvn.go` | migrated | 9 | 39 | 1 |
+| `spring` | Initialize a new project using Spring Initializr | `jvm/spring.go` | migrated | 9 | 19 | 0 |
 
 ## C/C++ compilers and build systems
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `autoconf` | generate configure scripts | migrated | 0 | 0 | 0 |
-| `automake` | generate portable Makefile templates | migrated | 0 | 0 | 0 |
-| `c++` | invoke the system C++ compiler | migrated | 0 | 0 | 0 |
-| `cc` | invoke the system C compiler | migrated | 0 | 0 | 0 |
-| `clang` | compile C-family programs with Clang | migrated | 0 | 0 | 0 |
-| `clang++` | compile C++ programs with Clang | migrated | 0 | 0 | 0 |
-| `cmake` | configure and generate cross-platform builds | migrated | 0 | 13 | 6 |
-| `conan` | manage C and C++ dependencies | migrated | 0 | 0 | 0 |
-| `cpack` | create packages from CMake projects | migrated | 0 | 0 | 0 |
-| `ctest` | run tests from a CMake build tree | migrated | 0 | 0 | 0 |
-| `g++` | compile C++ programs with GCC | migrated | 0 | 0 | 0 |
-| `gcc` | compile C and C++ programs with GCC | migrated | 0 | 0 | 0 |
-| `meson` | configure Meson build projects | migrated | 0 | 0 | 0 |
-| `ninja` | run Ninja builds | migrated | 0 | 0 | 0 |
-| `pkg-config` | query installed library metadata | migrated | 0 | 0 | 0 |
-| `vcpkg` | manage cross-platform C++ packages | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `bazel` | Bazel target | `cc/bazel.go` | migrated | 3 | 29 | 0 |
+| `c++` | C++ compiler (alias) | `cc/cc.go` | migrated | 0 | 27 | 1 |
+| `cc` | C compiler (alias) | `cc/cc.go` | migrated | 0 | 27 | 1 |
+| `clang` | LLVM C compiler | `cc/cc.go` | migrated | 0 | 27 | 1 |
+| `clang++` | LLVM C++ compiler | `cc/cc.go` | migrated | 0 | 27 | 1 |
+| `cmake` | Command-line interface of the cross-platform buildsystem generator CMake | `cc/cmake.go` | migrated | 26 | 46 | 6 |
+| `g++` | GNU C++ compiler | `cc/cc.go` | migrated | 0 | 27 | 1 |
+| `gcc` | GNU C compiler | `cc/cc.go` | migrated | 0 | 27 | 1 |
+| `premake` | The premake5.lua file | `cc/premake.go` | migrated | 14 | 14 | 0 |
+| `swift` | Show help information | `cc/swift.go` | migrated | 48 | 40 | 0 |
+| `typst` | The Typst compiler | `cc/typst.go` | migrated | 10 | 16 | 0 |
+| `xcode-select` | Active developer directory for Xcode tools | `cc/xcode_select.go` | migrated | 0 | 6 | 0 |
+| `xcodebuild` | Build Xcode projects | `cc/xcodebuild.go` | migrated | 0 | 40 | 0 |
+| `xcodeproj` | Xcodeproj lets you create and modify Xcode projects | `cc/xcodeproj.go` | migrated | 0 | 8 | 0 |
+| `xcrun` | SceneKit CLI utilities | `cc/xcrun.go` | migrated | 1 | 21 | 0 |
+| `zig` | Enable or disable colored message | `cc/zig.go` | migrated | 30 | 40 | 0 |
 
 ## Git version control and GitHub tools
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `gh` | GitHub command-line client | migrated | 0 | 0 | 0 |
-| `git` | distributed version control system | migrated | 22 | 18 | 16 |
-| `git-flow` | Git flow workflow extensions | migrated | 0 | 0 | 0 |
-| `git-lfs` | Git large file storage client | migrated | 0 | 0 | 0 |
-| `gitk` | Git repository history browser | migrated | 0 | 0 | 0 |
-| `glab` | GitLab command-line client | migrated | 0 | 0 | 0 |
-| `lazygit` | terminal Git client | migrated | 0 | 0 | 0 |
-| `tig` | terminal Git repository browser | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `ghq` | Clone/sync with a remote repository | `git/ghq.go` | migrated | 4 | 15 | 0 |
+| `git` | version control | `git/git.go` | migrated | 54 | 67 | 33 |
+| `git-cliff` | Increases the logging verbosity | `git/git_cliff.go` | migrated | 0 | 21 | 0 |
+| `git-flow` | Git extensions to provide high-level repository operations for Vincent Driessen | `git/git_flow.go` | migrated | 11 | 2 | 0 |
+| `git-profile` | Use profile | `git/git_profile.go` | migrated | 2 | 1 | 0 |
+| `git-quick-stats` | Show help for git-quick-stats | `git/git_quick_stats.go` | migrated | 0 | 19 | 0 |
+| `github` | Open a git repository in GitHub Desktop | `git/github.go` | migrated | 3 | 2 | 0 |
+| `svn` | Specify a username ARG | `git/svn.go` | migrated | 7 | 12 | 0 |
 
 ## System package managers
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `apk` | manage Alpine Linux packages | migrated | 0 | 0 | 0 |
-| `apt` | manage Debian packages | migrated | 11 | 3 | 4 |
-| `apt-cache` | query Debian package metadata | migrated | 0 | 0 | 0 |
-| `apt-get` | retrieve and install Debian packages | migrated | 0 | 0 | 0 |
-| `brew` | manage Homebrew packages | migrated | 0 | 0 | 0 |
-| `dnf` | manage RPM packages with DNF | migrated | 0 | 0 | 0 |
-| `dpkg` | install and inspect Debian packages | migrated | 0 | 0 | 0 |
-| `pacman` | manage Arch Linux packages | migrated | 0 | 0 | 0 |
-| `port` | manage MacPorts packages | migrated | 0 | 0 | 0 |
-| `rpm` | install and inspect RPM packages | migrated | 0 | 0 | 0 |
-| `yum` | manage RPM packages with Yum | migrated | 0 | 0 | 0 |
-| `zypper` | manage openSUSE packages | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `apt` | Debian/Ubuntu package manager | `pkginstaller/pkgmgr.go` | migrated | 16 | 8 | 4 |
+| `apt-get` | Debian/Ubuntu package manager (low-level) | `pkginstaller/pkgmgr.go` | migrated | 11 | 5 | 2 |
+| `brew` | Homebrew package manager | `pkginstaller/pkgmgr.go` | migrated | 26 | 5 | 6 |
+| `dnf` | Fedora/RHEL package manager | `pkginstaller/pkgmgr.go` | migrated | 15 | 5 | 1 |
+| `dpkg` | Debian package management system | `pkginstaller/dpkg.go` | migrated | 10 | 37 | 0 |
+| `flatpak` | flatpak package manager | `pkginstaller/pkgmgr.go` | migrated | 11 | 3 | 0 |
+| `pacman` | Arch package manager | `pkginstaller/pkgmgr.go` | migrated | 0 | 21 | 1 |
+| `paru` | AUR helper (feature-rich) | `pkginstaller/pkgmgr.go` | migrated | 0 | 10 | 1 |
+| `pkgutil` | Query and manipulate for macOS Installer packages and receipts | `pkginstaller/pkgutil.go` | migrated | 5 | 28 | 0 |
+| `snap` | snap package manager | `pkginstaller/pkgmgr.go` | migrated | 12 | 4 | 0 |
+| `yay` | AUR helper (pacman wrapper) | `pkginstaller/pkgmgr.go` | migrated | 0 | 17 | 1 |
+| `yum` | RHEL/CentOS package manager (legacy) | `pkginstaller/pkgmgr.go` | migrated | 8 | 2 | 1 |
 
 ## Filesystem, directory, and archive utilities
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `basename` | strip directory components from a path | migrated | 0 | 0 | 0 |
-| `bunzip2` | decompress bzip2 files | migrated | 0 | 0 | 0 |
-| `bzip2` | compress files with bzip2 | migrated | 0 | 0 | 0 |
-| `cp` | copy files and directories | migrated | 0 | 0 | 0 |
-| `df` | report filesystem space usage | migrated | 0 | 0 | 0 |
-| `dirname` | strip the final component from a path | migrated | 0 | 0 | 0 |
-| `du` | estimate file and directory usage | migrated | 0 | 0 | 0 |
-| `file` | identify file types | migrated | 0 | 0 | 0 |
-| `find` | search directory trees | migrated | 0 | 0 | 0 |
-| `gunzip` | decompress gzip files | migrated | 0 | 0 | 0 |
-| `gzip` | compress files with gzip | migrated | 0 | 0 | 0 |
-| `install` | copy files and set attributes | migrated | 0 | 0 | 0 |
-| `ln` | create filesystem links | migrated | 0 | 0 | 0 |
-| `locate` | find paths in a filename database | migrated | 0 | 0 | 0 |
-| `ls` | list directory contents | migrated | 0 | 13 | 1 |
-| `mkdir` | create directories | migrated | 0 | 0 | 0 |
-| `mv` | move or rename files | migrated | 0 | 0 | 0 |
-| `pwd` | print the working directory | migrated | 0 | 0 | 0 |
-| `readlink` | print a symbolic-link target | migrated | 0 | 0 | 0 |
-| `realpath` | resolve an absolute canonical path | migrated | 0 | 0 | 0 |
-| `rm` | remove files and directories | migrated | 0 | 0 | 0 |
-| `rmdir` | remove empty directories | migrated | 0 | 0 | 0 |
-| `stat` | show file or filesystem status | migrated | 0 | 0 | 0 |
-| `tar` | create and extract tar archives | migrated | 0 | 12 | 3 |
-| `touch` | create files or update timestamps | migrated | 0 | 0 | 0 |
-| `tree` | display a directory hierarchy | migrated | 0 | 0 | 0 |
-| `truncate` | resize a file | migrated | 0 | 0 | 0 |
-| `unzip` | extract ZIP archives | migrated | 0 | 0 | 0 |
-| `xz` | compress files with XZ | migrated | 0 | 0 | 0 |
-| `zip` | create ZIP archives | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `broot` | Show the last modified date of files and directories | `fs/broot.go` | migrated | 0 | 30 | 0 |
+| `cd` | change directory | `fs/cd.go` | migrated | 0 | 0 | 1 |
+| `chmod` | change file permissions | `fs/chmod.go` | migrated | 20 | 14 | 21 |
+| `chown` | change file owner | `fs/chown.go` | migrated | 0 | 1 | 1 |
+| `cp` | copy files and directories | `fs/cp.go` | migrated | 0 | 6 | 1 |
+| `df` | Display free disk space | `fs/df.go` | migrated | 0 | 8 | 0 |
+| `dust` | Like du but more intuitive | `fs/dust.go` | migrated | 0 | 17 | 0 |
+| `exa` | A modern replacement for ls | `fs/exa.go` | migrated | 0 | 0 | 0 |
+| `eza` | A modern replacement for ls | `fs/eza.go` | migrated | 0 | 40 | 0 |
+| `find` | Walk a file hierarchy | `fs/find.go` | merged into `find` | 0 | 0 | 0 |
+| `fold` | Fold long lines for finite width output device | `fs/fold.go` | migrated | 0 | 1 | 0 |
+| `ln` | create links | `fs/ln.go` | migrated | 0 | 2 | 1 |
+| `ls` | list directory contents | `fs/ls.go` | migrated | 0 | 13 | 1 |
+| `lsd` | An ls command with a lot of pretty colors and some other stuff | `fs/lsd.go` | migrated | 0 | 29 | 0 |
+| `mkdir` | make directories | `fs/mkdir.go` | migrated | 0 | 2 | 0 |
+| `mv` | move (rename) files | `fs/mv.go` | migrated | 0 | 4 | 1 |
+| `paper` | The Paper CLI | `fs/paper.go` | migrated | 19 | 40 | 0 |
+| `rclone` | Only list directories | `fs/rclone.go` | migrated | 50 | 40 | 0 |
+| `readlink` | Display file status | `fs/readlink.go` | migrated | 0 | 1 | 0 |
+| `rm` | remove files or directories | `fs/rm.go` | migrated | 0 | 5 | 1 |
+| `rmdir` | Remove directories | `fs/rmdir.go` | migrated | 0 | 1 | 0 |
+| `stow` | Manage farms of symbolic links | `fs/stow.go` | migrated | 0 | 4 | 0 |
+| `tar` | Use archive file or device ARCHIVE | `fs/tar.go` | migrated | 31 | 51 | 3 |
+| `touch` | create or update file timestamp | `fs/touch.go` | migrated | 0 | 0 | 1 |
+| `trash` | Trash, move files/folders to the trash | `fs/trash.go` | migrated | 0 | 5 | 0 |
+| `tree` | Display directories as trees (with optional color/HTML output) | `fs/tree.go` | migrated | 0 | 40 | 0 |
+| `unzip` | Extract compressed files in a ZIP archive | `fs/unzip.go` | migrated | 0 | 1 | 0 |
+| `z` | jump to directory | `fs/zoxide.go` | migrated | 0 | 0 | 2 |
+| `zi` | jump to directory interactively | `fs/zoxide.go` | migrated | 0 | 0 | 2 |
+| `zip` | Package and compress (archive) files into zip file | `fs/zip.go` | migrated | 0 | 2 | 0 |
 
 ## Editors, pagers, and file viewers
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `atom` | open the Atom editor | migrated | 0 | 0 | 0 |
-| `bat` | view files with syntax highlighting | migrated | 0 | 0 | 0 |
-| `code` | open Visual Studio Code | migrated | 0 | 0 | 0 |
-| `code-insiders` | open Visual Studio Code Insiders | migrated | 0 | 0 | 0 |
-| `ed` | edit text with the standard line editor | migrated | 0 | 0 | 0 |
-| `emacs` | edit text with Emacs | migrated | 0 | 0 | 0 |
-| `ex` | edit text with the ex line editor | migrated | 0 | 0 | 0 |
-| `geany` | open the Geany editor | migrated | 0 | 0 | 0 |
-| `gedit` | open the GNOME text editor | migrated | 0 | 0 | 0 |
-| `hx` | open the Helix editor | migrated | 0 | 0 | 0 |
-| `jed` | edit text with Jed | migrated | 0 | 0 | 0 |
-| `joe` | edit text with Joe | migrated | 0 | 0 | 0 |
-| `kak` | edit text with Kakoune | migrated | 0 | 0 | 0 |
-| `kate` | open the Kate editor | migrated | 0 | 0 | 0 |
-| `kwrite` | open the KWrite editor | migrated | 0 | 0 | 0 |
-| `leafpad` | open the Leafpad editor | migrated | 0 | 0 | 0 |
-| `less` | page through text interactively | migrated | 0 | 0 | 0 |
-| `micro` | edit text with Micro | migrated | 0 | 0 | 0 |
-| `more` | page through text one screen at a time | migrated | 0 | 0 | 0 |
-| `mousepad` | open the Mousepad editor | migrated | 0 | 0 | 0 |
-| `nano` | edit text with Nano | migrated | 0 | 0 | 0 |
-| `nvim` | edit text with Neovim | migrated | 0 | 0 | 0 |
-| `pico` | edit text with Pico | migrated | 0 | 0 | 0 |
-| `subl` | open Sublime Text | migrated | 0 | 0 | 0 |
-| `sublime_text` | open Sublime Text on Linux | aliased to `subl` | 0 | 0 | 0 |
-| `vi` | edit text with vi | migrated | 0 | 0 | 0 |
-| `vim` | edit text with Vim | migrated | 0 | 12 | 3 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `bat` | A cat(1) clone with syntax highlighting and Git integration | `view/bat.go` | migrated | 0 | 28 | 1 |
+| `cat` | concatenate and print | `view/cat.go` | migrated | 0 | 2 | 1 |
+| `code` | Read from stdin (e.g. | `view/code.go` | migrated | 0 | 24 | 1 |
+| `cot` | Command-line utility for CotEditor | `view/cot.go` | migrated | 0 | 0 | 1 |
+| `du` | estimate file space usage | `view/du.go` | migrated | 0 | 3 | 1 |
+| `emacs` | An extensible, customizable, free/libre text editor - and more | `view/emacs.go` | migrated | 0 | 0 | 1 |
+| `file` | determine file type | `view/file.go` | migrated | 0 | 0 | 1 |
+| `glow` | Render markdown on the CLI, with pizzazz! | `view/glow.go` | migrated | 3 | 9 | 1 |
+| `head` | output first lines of file | `view/head.go` | migrated | 0 | 1 | 1 |
+| `idea` | IntelliJ IDEA CLI | `view/idea.go` | migrated | 4 | 8 | 1 |
+| `less` | view file contents (scrollable) | `view/less.go` | migrated | 0 | 0 | 1 |
+| `lvim` | Hyperextensible Vim-based text editor | `view/lvim.go` | migrated | 0 | 29 | 1 |
+| `micro` | True/false | `view/micro.go` | migrated | 5 | 40 | 1 |
+| `more` | Opposite of less | `view/more.go` | migrated | 0 | 8 | 1 |
+| `nano` | Nano | `view/nano.go` | migrated | 0 | 0 | 1 |
+| `nvim` | Hyperextensible Vim-based text editor | `view/nvim.go` | migrated | 0 | 29 | 1 |
+| `rich` | Defined by terminal, appearance may differ | `view/rich.go` | migrated | 0 | 40 | 1 |
+| `stat` | display file status | `view/stat.go` | migrated | 0 | 0 | 1 |
+| `subl` | Sublime Text | `view/subl.go` | migrated | 0 | 11 | 1 |
+| `tail` | output last lines of file | `view/tail.go` | migrated | 0 | 2 | 1 |
+| `vi` | Print help message for vi and exit | `view/vi.go` | migrated | 0 | 1 | 1 |
+| `vim` | Vi IMproved, a programmer | `view/vim.go` | migrated | 0 | 38 | 3 |
+| `vimr` | VimR - Neovim GUI for macOS in Swift | `view/vimr.go` | migrated | 0 | 7 | 1 |
+| `wc` | word, line, character count | `view/wc.go` | migrated | 0 | 3 | 1 |
+| `xed` | Xcode text editor invocation tool | `view/xed.go` | migrated | 0 | 5 | 1 |
+| `xxd` | Make a hexdump or do the reverse | `view/xxd.go` | migrated | 0 | 16 | 1 |
+| `zed` | A lightning-fast, collaborative code editor written in Rust | `view/zed.go` | migrated | 0 | 4 | 1 |
 
 ## Text processing, JSON, and stream manipulation
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `awk` | scan and process text records | migrated | 0 | 0 | 0 |
-| `cat` | concatenate files to standard output | migrated | 0 | 0 | 0 |
-| `cmp` | compare files byte by byte | migrated | 0 | 0 | 0 |
-| `column` | format input into columns | migrated | 0 | 0 | 0 |
-| `comm` | compare sorted files by line | migrated | 0 | 0 | 0 |
-| `cut` | select fields from input lines | migrated | 0 | 0 | 0 |
-| `diff` | compare files line by line | migrated | 0 | 0 | 0 |
-| `egrep` | search text with extended patterns | aliased to `grep` | 0 | 0 | 0 |
-| `fgrep` | search text for fixed strings | aliased to `grep` | 0 | 0 | 0 |
-| `fmt` | reformat text paragraphs | migrated | 0 | 0 | 0 |
-| `fold` | wrap input lines | migrated | 0 | 0 | 0 |
-| `grep` | search text by pattern | migrated | 0 | 0 | 0 |
-| `head` | print the start of files | migrated | 0 | 0 | 0 |
-| `join` | join lines on a common field | migrated | 0 | 0 | 0 |
-| `jq` | query and transform JSON | migrated | 0 | 10 | 2 |
-| `nl` | number input lines | migrated | 0 | 0 | 0 |
-| `paste` | merge corresponding input lines | migrated | 0 | 0 | 0 |
-| `patch` | apply a diff to files | migrated | 0 | 0 | 0 |
-| `sed` | transform text streams | migrated | 0 | 0 | 0 |
-| `sort` | sort lines of text | migrated | 0 | 0 | 0 |
-| `tac` | concatenate files in reverse line order | migrated | 0 | 0 | 0 |
-| `tail` | print the end of files | migrated | 0 | 0 | 0 |
-| `tee` | copy input to files and standard output | migrated | 0 | 0 | 0 |
-| `tr` | translate or delete characters | migrated | 0 | 0 | 0 |
-| `uniq` | report or remove adjacent duplicate lines | migrated | 0 | 0 | 0 |
-| `wc` | count lines, words, and bytes | migrated | 0 | 0 | 0 |
-| `xargs` | build commands from standard input | migrated | 0 | 0 | 0 |
-| `yq` | query and transform YAML | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `awk` | pattern-directed scanning | `text/textproc.go` | migrated | 0 | 6 | 1 |
+| `cut` | extract columns from lines | `text/textproc.go` | migrated | 0 | 4 | 1 |
+| `diff` | Compare files line by line | `text/diff.go` | migrated | 0 | 40 | 0 |
+| `dos2unix` | DOS to Unix file format converter | `text/dos2unix.go` | migrated | 0 | 29 | 0 |
+| `egrep` | grep with extended regex | `text/grep.go` | migrated | 0 | 9 | 1 |
+| `fd` | fast find alternative | `text/rg.go` | migrated | 0 | 16 | 1 |
+| `find` | search for files | `text/find.go` | migrated | 0 | 25 | 1 |
+| `gawk` | GNU awk | `text/textproc.go` | migrated | 0 | 6 | 1 |
+| `grep` | search text in files | `text/grep.go` | migrated | 0 | 24 | 1 |
+| `iconv` | Character set conversion | `text/iconv.go` | migrated | 0 | 9 | 0 |
+| `jq` | Output the jq version and exit with zero | `text/jq.go` | migrated | 0 | 15 | 2 |
+| `pandoc` | A universal document converter | `text/pandoc.go` | migrated | 0 | 40 | 0 |
+| `rg` | ripgrep (fast search) | `text/rg.go` | migrated | 0 | 39 | 1 |
+| `sed` | stream editor | `text/textproc.go` | migrated | 0 | 8 | 1 |
+| `seq` | Print sequences of numbers. (Defaults to increments of 1) | `text/seq.go` | migrated | 0 | 3 | 0 |
+| `sha1sum` | Print or check SHA1 (160-bit) checksums | `text/sha1sum.go` | migrated | 0 | 12 | 0 |
+| `shasum` | Print or Check SHA Checksums | `text/shasum.go` | migrated | 0 | 14 | 0 |
+| `shred` | Overwrite a file to hide its contents, and optionally delete it | `text/shred.go` | migrated | 0 | 9 | 0 |
+| `sort` | sort lines of text | `text/textproc.go` | migrated | 0 | 10 | 1 |
+| `split` | Use suffix_length letters to form the suffix of the file name | `text/split.go` | migrated | 0 | 5 | 0 |
+| `tee` | read stdin, write to stdout and files | `text/textproc.go` | migrated | 0 | 2 | 1 |
+| `tr` | translate or delete characters | `text/textproc.go` | migrated | 0 | 3 | 0 |
+| `truncate` | Shrink or extend the size of a file to the specified size | `text/truncate.go` | migrated | 0 | 6 | 0 |
+| `typos` | Source code spelling correction | `text/typos.go` | migrated | 0 | 28 | 0 |
+| `uniq` | filter adjacent duplicate lines | `text/textproc.go` | migrated | 0 | 6 | 1 |
+| `unix2dos` | Unix to DOS text file format convertor | `text/unix2dos.go` | migrated | 0 | 0 | 0 |
+| `vale` | A syntax-aware linter for prose built with speed and extensibility in mind | `text/vale.go` | migrated | 3 | 10 | 0 |
+| `xargs` | build and run commands from stdin | `text/textproc.go` | migrated | 0 | 9 | 0 |
 
 ## Task runners and build automation
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `bazel` | run Bazel builds and tests | migrated | 0 | 0 | 0 |
-| `bmake` | run BSD Make build targets | migrated | 0 | 0 | 0 |
-| `buck` | run Buck builds | migrated | 0 | 0 | 0 |
-| `buck2` | run Buck2 builds | migrated | 0 | 0 | 0 |
-| `concurrently` | run commands concurrently | migrated | 0 | 0 | 0 |
-| `dagger` | run portable container pipelines | migrated | 0 | 0 | 0 |
-| `doit` | run Python automation tasks | migrated | 0 | 0 | 0 |
-| `earthly` | run reproducible container builds | migrated | 0 | 0 | 0 |
-| `gmake` | run GNU Make build targets | migrated | 0 | 0 | 0 |
-| `grunt` | run Grunt task pipelines | migrated | 0 | 0 | 0 |
-| `gulp` | run Gulp task pipelines | migrated | 0 | 0 | 0 |
-| `invoke` | run Python Invoke tasks | migrated | 0 | 0 | 0 |
-| `just` | run recipes from a justfile | migrated | 0 | 14 | 3 |
-| `lerna` | run tasks across JavaScript packages | migrated | 0 | 0 | 0 |
-| `mage` | run Go-based build targets | migrated | 0 | 0 | 0 |
-| `make` | run Makefile build targets | migrated | 0 | 1 | 1 |
-| `nx` | run Nx workspace tasks | migrated | 0 | 0 | 0 |
-| `pants` | run Pants builds | migrated | 0 | 0 | 0 |
-| `plz` | run Please builds | migrated | 0 | 0 | 0 |
-| `rollup` | bundle JavaScript modules | migrated | 0 | 0 | 0 |
-| `scons` | build software with SCons | migrated | 0 | 0 | 0 |
-| `task` | run tasks from a Taskfile | migrated | 0 | 0 | 0 |
-| `turbo` | run Turborepo tasks | migrated | 0 | 0 | 0 |
-| `waf` | configure and run Waf builds | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `ant` | Apache Ant - Java library and command-line build tool | `runner/ant.go` | migrated | 0 | 26 | 0 |
+| `composer` | Composer Command | `runner/composer.go` | migrated | 0 | 15 | 0 |
+| `dbt` | CLI for dbt - Data Build Tool | `runner/dbt.go` | migrated | 28 | 31 | 0 |
+| `drush` | Drush is a command line shell and Unix scripting interface for Drupal | `runner/drush.go` | migrated | 0 | 0 | 0 |
+| `elixir` | Elixir Language | `runner/elixir.go` | migrated | 0 | 24 | 0 |
+| `gem` | Use HTTP proxy for remote operations | `runner/gem.go` | migrated | 50 | 40 | 0 |
+| `hexo` | Draft for | `runner/hexo.go` | migrated | 24 | 22 | 0 |
+| `just` | command runner | `runner/justfile.go` | migrated | 0 | 14 | 3 |
+| `laravel` | The output format (txt, xml, json, or md) | `runner/laravel.go` | migrated | 1 | 16 | 0 |
+| `magento` | Open-source E-commerce | `runner/magento.go` | migrated | 0 | 0 | 0 |
+| `make` | build automation | `runner/makefile.go` | migrated | 0 | 1 | 1 |
+| `mix` | Build tool for Elixir | `runner/mix.go` | migrated | 4 | 19 | 0 |
+| `php` | Run the PHP interpreter | `runner/php.go` | migrated | 0 | 0 | 0 |
+| `phpunit` | Generate code coverage report in Clover XML format, | `runner/phpunit.go` | migrated | 0 | 38 | 0 |
+| `phpunit-watcher` | Automatically rerun PHPUnit tests when source code changes | `runner/phpunit_watcher.go` | migrated | 0 | 1 | 0 |
+| `rails` | Create a new rails application | `runner/rails.go` | migrated | 0 | 40 | 0 |
+| `rake` | A ruby build program with capabilities similar to make | `runner/rake.go` | migrated | 0 | 12 | 0 |
+| `rubocop` | Run only lint cops | `runner/rubocop.go` | migrated | 0 | 38 | 0 |
+| `ruby` | Interpreted object-oriented scripting language | `runner/ruby.go` | migrated | 0 | 13 | 0 |
+| `rvm` | Show version of rvm | `runner/rvm.go` | migrated | 13 | 8 | 0 |
+| `sidekiq` | Background job framework for Ruby | `runner/sidekiq.go` | migrated | 0 | 10 | 0 |
+| `symfony` | Symfony Binary | `runner/symfony.go` | migrated | 50 | 6 | 0 |
+| `valet` | Do not output any message | `runner/valet.go` | migrated | 36 | 30 | 0 |
+| `vapor` | Vapor Toolbox (Server-side Swift web framework) | `runner/vapor.go` | migrated | 11 | 8 | 0 |
 
 ## System administration, network, and process management
 
-| Command | Description | Status | Subcommands | Options | Generators |
-| --- | --- | --- | ---: | ---: | ---: |
-| `arp` | Inspect or change the ARP cache | migrated | 0 | 0 | 0 |
-| `arping` | Probe neighbors with ARP requests | migrated | 0 | 0 | 0 |
-| `atop` | Record and inspect system activity | migrated | 0 | 0 | 0 |
-| `auditctl` | Configure the Linux audit system | migrated | 0 | 0 | 0 |
-| `ausearch` | Search Linux audit records | migrated | 0 | 0 | 0 |
-| `bpftool` | Inspect and manage BPF objects | migrated | 0 | 0 | 0 |
-| `bridge` | Configure Ethernet bridge devices | migrated | 0 | 0 | 0 |
-| `btop` | Monitor system resources interactively | migrated | 0 | 0 | 0 |
-| `busctl` | Inspect and control D-Bus services | migrated | 0 | 0 | 0 |
-| `capsh` | Inspect and alter process capabilities | migrated | 0 | 0 | 0 |
-| `chage` | Manage password expiration policy | migrated | 0 | 0 | 0 |
-| `chpasswd` | Update passwords in batch | migrated | 0 | 0 | 0 |
-| `chrt` | Manage real-time process scheduling | migrated | 0 | 0 | 0 |
-| `conntrack` | Inspect connection-tracking state | migrated | 0 | 0 | 0 |
-| `coredumpctl` | Inspect saved process core dumps | migrated | 0 | 0 | 0 |
-| `crontab` | Manage recurring command schedules | migrated | 0 | 0 | 0 |
-| `curl` | Transfer data with network protocols | migrated | 0 | 0 | 0 |
-| `depmod` | Generate kernel module dependencies | migrated | 0 | 0 | 0 |
-| `dhclient` | Acquire network settings with DHCP | migrated | 0 | 0 | 0 |
-| `dig` | Query DNS servers | migrated | 0 | 0 | 0 |
-| `dmesg` | Inspect the kernel message buffer | migrated | 0 | 0 | 0 |
-| `dmidecode` | Decode system firmware hardware tables | migrated | 0 | 0 | 0 |
-| `dstat` | Report combined system resource statistics | migrated | 0 | 0 | 0 |
-| `ethtool` | Inspect and configure Ethernet devices | migrated | 0 | 0 | 0 |
-| `faillog` | Inspect or reset failed-login records | migrated | 0 | 0 | 0 |
-| `firewall-cmd` | Manage firewalld policy | migrated | 0 | 0 | 0 |
-| `free` | Show physical and swap memory use | migrated | 0 | 0 | 0 |
-| `fuser` | Identify processes using files or sockets | migrated | 0 | 0 | 0 |
-| `getcap` | Display file capabilities | migrated | 0 | 0 | 0 |
-| `getent` | Query system account databases | migrated | 0 | 0 | 0 |
-| `groupadd` | Create a system group | migrated | 0 | 0 | 0 |
-| `groupdel` | Delete a system group | migrated | 0 | 0 | 0 |
-| `groupmod` | Modify a system group | migrated | 0 | 0 | 0 |
-| `groups` | Show group memberships | migrated | 0 | 0 | 0 |
-| `halt` | Halt the system | migrated | 0 | 0 | 0 |
-| `host` | Look up DNS host information | migrated | 0 | 0 | 0 |
-| `hostname` | Show or set the system host name | migrated | 0 | 0 | 0 |
-| `hostnamectl` | Manage the system host name and identity | migrated | 0 | 0 | 0 |
-| `htop` | Interactively monitor system processes | migrated | 0 | 0 | 0 |
-| `id` | Show user and group identities | migrated | 0 | 0 | 0 |
-| `ifconfig` | Configure network interfaces | migrated | 0 | 0 | 0 |
-| `init` | Initialize the system or change its run state | migrated | 0 | 0 | 0 |
-| `insmod` | Insert a kernel module | migrated | 0 | 0 | 0 |
-| `ionice` | Set process I/O scheduling priority | migrated | 0 | 0 | 0 |
-| `iostat` | Report CPU and device I/O statistics | migrated | 0 | 0 | 0 |
-| `iotop` | Monitor process I/O activity | migrated | 0 | 0 | 0 |
-| `ip` | Configure network interfaces and routes | migrated | 0 | 0 | 0 |
-| `ip6tables` | Manage IPv6 packet-filter rules | migrated | 0 | 0 | 0 |
-| `ipcmk` | Create System V IPC resources | migrated | 0 | 0 | 0 |
-| `ipcrm` | Remove System V IPC resources | migrated | 0 | 0 | 0 |
-| `ipcs` | Report System V IPC resources | migrated | 0 | 0 | 0 |
-| `iptables` | Manage IPv4 packet-filter rules | migrated | 0 | 0 | 0 |
-| `iw` | Configure wireless network devices | migrated | 0 | 0 | 0 |
-| `iwconfig` | Configure legacy wireless interfaces | migrated | 0 | 0 | 0 |
-| `journalctl` | Query the systemd journal | migrated | 0 | 0 | 0 |
-| `kexec` | Load and boot another kernel | migrated | 0 | 0 | 0 |
-| `kill` | Send a signal to a process | migrated | 0 | 1 | 1 |
-| `killall` | Signal processes by name | migrated | 0 | 0 | 0 |
-| `last` | Show recent login sessions | migrated | 0 | 0 | 0 |
-| `lastlog` | Report the most recent user logins | migrated | 0 | 0 | 0 |
-| `launchctl` | Manage macOS launch services | migrated | 0 | 0 | 0 |
-| `localectl` | Manage system locale and keyboard settings | migrated | 0 | 0 | 0 |
-| `login` | Begin a user login session | migrated | 0 | 0 | 0 |
-| `loginctl` | Inspect and manage login sessions | migrated | 0 | 0 | 0 |
-| `logrotate` | Rotate and retain system logs | migrated | 0 | 0 | 0 |
-| `lscpu` | Report CPU architecture information | migrated | 0 | 0 | 0 |
-| `lsipc` | List inter-process communication resources | migrated | 0 | 0 | 0 |
-| `lsmod` | Show loaded kernel modules | migrated | 0 | 0 | 0 |
-| `lsof` | List open files and network sockets | migrated | 0 | 0 | 0 |
-| `lspci` | List PCI devices | migrated | 0 | 0 | 0 |
-| `lsusb` | List USB devices | migrated | 0 | 0 | 0 |
-| `ltrace` | Trace process library calls | migrated | 0 | 0 | 0 |
-| `machinectl` | Manage systemd machines and containers | migrated | 0 | 0 | 0 |
-| `modprobe` | Load or remove kernel modules | migrated | 0 | 0 | 0 |
-| `mpstat` | Report per-processor statistics | migrated | 0 | 0 | 0 |
-| `mtr` | Continuously diagnose network paths | migrated | 0 | 0 | 0 |
-| `nc` | Read and write network connections | migrated | 0 | 0 | 0 |
-| `ncat` | Relay data across network connections | migrated | 0 | 0 | 0 |
-| `netstat` | Display network status and connections | migrated | 0 | 0 | 0 |
-| `networkctl` | Inspect and configure network links | migrated | 0 | 0 | 0 |
-| `newgrp` | Switch the current group identity | migrated | 0 | 0 | 0 |
-| `nft` | Manage nftables firewall rules | migrated | 0 | 0 | 0 |
-| `nice` | Run a process with adjusted priority | migrated | 0 | 0 | 0 |
-| `nmap` | Scan hosts, ports, and services | migrated | 0 | 0 | 0 |
-| `nmcli` | Control NetworkManager from the terminal | migrated | 0 | 0 | 0 |
-| `nmtui` | Control NetworkManager interactively | migrated | 0 | 0 | 0 |
-| `nohup` | Run a command immune to hangups | migrated | 0 | 0 | 0 |
-| `nsenter` | Run a program in another process namespace | migrated | 0 | 0 | 0 |
-| `nslookup` | Query domain-name servers | migrated | 0 | 0 | 0 |
-| `numactl` | Control NUMA policy for processes | migrated | 0 | 0 | 0 |
-| `numastat` | Report NUMA memory statistics | migrated | 0 | 0 | 0 |
-| `openvpn` | Create an OpenVPN tunnel | migrated | 0 | 0 | 0 |
-| `passwd` | Change account passwords | migrated | 0 | 0 | 0 |
-| `perf` | Profile Linux system and process events | migrated | 0 | 0 | 0 |
-| `pgrep` | Find processes by name or attributes | migrated | 0 | 0 | 0 |
-| `pidof` | Find process identifiers by program name | migrated | 0 | 0 | 0 |
-| `pidstat` | Report statistics for selected processes | migrated | 0 | 0 | 0 |
-| `ping` | Test network reachability with ICMP | migrated | 0 | 0 | 0 |
-| `ping6` | Test IPv6 reachability with ICMP | migrated | 0 | 0 | 0 |
-| `pkill` | Signal processes selected by attributes | migrated | 0 | 0 | 0 |
-| `pmap` | Report a process memory map | migrated | 0 | 0 | 0 |
-| `pmset` | Manage macOS power settings | migrated | 0 | 0 | 0 |
-| `poweroff` | Power off the system | migrated | 0 | 0 | 0 |
-| `powertop` | Analyze system power consumption | migrated | 0 | 0 | 0 |
-| `prlimit` | Inspect or change process resource limits | migrated | 0 | 0 | 0 |
-| `ps` | List running processes | migrated | 1 | 6 | 1 |
-| `pstree` | Display processes as a tree | migrated | 0 | 0 | 0 |
-| `reboot` | Restart the system | migrated | 0 | 0 | 0 |
-| `renice` | Adjust a running process priority | migrated | 0 | 0 | 0 |
-| `resolvectl` | Inspect and configure DNS resolution | migrated | 0 | 0 | 0 |
-| `rfkill` | Enable or disable wireless transmitters | migrated | 0 | 0 | 0 |
-| `rmmod` | Remove a kernel module | migrated | 0 | 0 | 0 |
-| `route` | Inspect or change the routing table | migrated | 0 | 0 | 0 |
-| `runlevel` | Show the current system run level | migrated | 0 | 0 | 0 |
-| `sar` | Collect and report system activity | migrated | 0 | 0 | 0 |
-| `scp` | Copy files over SSH | migrated | 0 | 0 | 0 |
-| `scutil` | Manage macOS system configuration | migrated | 0 | 0 | 0 |
-| `service` | Control system services | migrated | 0 | 0 | 0 |
-| `sestatus` | Report SELinux policy status | migrated | 0 | 0 | 0 |
-| `setcap` | Set file capabilities | migrated | 0 | 0 | 0 |
-| `setpriv` | Run a program with changed privileges | migrated | 0 | 0 | 0 |
-| `setsid` | Run a program in a new session | migrated | 0 | 0 | 0 |
-| `sftp` | Transfer files over SSH | migrated | 0 | 0 | 0 |
-| `sg` | Run a command with another group identity | migrated | 0 | 0 | 0 |
-| `shutdown` | Schedule a system shutdown | migrated | 0 | 0 | 0 |
-| `slabtop` | Monitor kernel slab cache usage | migrated | 0 | 0 | 0 |
-| `smem` | Report proportional process memory use | migrated | 0 | 0 | 0 |
-| `socat` | Relay bidirectional data streams | migrated | 0 | 0 | 0 |
-| `ss` | Inspect network sockets | migrated | 0 | 0 | 0 |
-| `ssh` | Open a secure remote shell | migrated | 0 | 1 | 1 |
-| `ssh-add` | Load keys into an SSH agent | migrated | 0 | 0 | 0 |
-| `ssh-agent` | Hold private keys for SSH clients | migrated | 0 | 0 | 0 |
-| `ssh-keygen` | Create and manage SSH keys | migrated | 0 | 0 | 0 |
-| `ssh-keyscan` | Collect public SSH host keys | migrated | 0 | 0 | 0 |
-| `strace` | Trace process system calls | migrated | 0 | 0 | 0 |
-| `su` | Run a shell as another user | migrated | 0 | 0 | 0 |
-| `sudo` | Execute a command with delegated privileges | migrated | 0 | 0 | 0 |
-| `sysctl` | Read and write kernel parameters | migrated | 0 | 0 | 0 |
-| `sysdiagnose` | Collect macOS diagnostic information | migrated | 0 | 0 | 0 |
-| `systemctl` | Control systemd units and services | migrated | 17 | 12 | 14 |
-| `systemd-analyze` | Analyze systemd boot performance | migrated | 0 | 0 | 0 |
-| `systemd-cgls` | Show the systemd control-group tree | migrated | 0 | 0 | 0 |
-| `systemd-cgtop` | Monitor control-group resource use | migrated | 0 | 0 | 0 |
-| `systemd-run` | Run a command in a transient unit | migrated | 0 | 0 | 0 |
-| `taskset` | Set or inspect CPU affinity | migrated | 0 | 0 | 0 |
-| `tc` | Configure Linux traffic control | migrated | 0 | 0 | 0 |
-| `tcpdump` | Capture and inspect network packets | migrated | 0 | 0 | 0 |
-| `telinit` | Change the system run level | migrated | 0 | 0 | 0 |
-| `telnet` | Connect to Telnet services | migrated | 0 | 0 | 0 |
-| `timedatectl` | Manage system time and time zones | migrated | 0 | 0 | 0 |
-| `tload` | Graph system load in a terminal | migrated | 0 | 0 | 0 |
-| `top` | Monitor processes and system load | migrated | 0 | 0 | 0 |
-| `tracepath` | Discover a network path and MTU | migrated | 0 | 0 | 0 |
-| `traceroute` | Trace network paths to a host | migrated | 0 | 0 | 0 |
-| `traceroute6` | Trace IPv6 network paths | migrated | 0 | 0 | 0 |
-| `tshark` | Analyze network packets in a terminal | migrated | 0 | 0 | 0 |
-| `udevadm` | Manage and inspect device events | migrated | 0 | 0 | 0 |
-| `udhcpc` | Run a lightweight DHCP client | migrated | 0 | 0 | 0 |
-| `ufw` | Manage an uncomplicated firewall | migrated | 0 | 0 | 0 |
-| `uname` | Report kernel and system identity | migrated | 0 | 0 | 0 |
-| `unshare` | Run a program in new namespaces | migrated | 0 | 0 | 0 |
-| `uptime` | Show system uptime and load | migrated | 0 | 0 | 0 |
-| `useradd` | Create a user account | migrated | 0 | 0 | 0 |
-| `userdel` | Delete a user account | migrated | 0 | 0 | 0 |
-| `usermod` | Modify a user account | migrated | 0 | 0 | 0 |
-| `users` | List logged-in user names | migrated | 0 | 0 | 0 |
-| `visudo` | Safely edit sudo policy | migrated | 0 | 0 | 0 |
-| `vmstat` | Report virtual-memory statistics | migrated | 0 | 0 | 0 |
-| `w` | Show logged-in users and their activity | migrated | 0 | 0 | 0 |
-| `watch` | Run a command periodically and show its output | migrated | 0 | 0 | 0 |
-| `wg` | Configure WireGuard interfaces | migrated | 0 | 0 | 0 |
-| `wg-quick` | Bring up a WireGuard interface | migrated | 0 | 0 | 0 |
-| `wget` | Retrieve resources from the network | migrated | 0 | 0 | 0 |
-| `who` | Show logged-in users | migrated | 0 | 0 | 0 |
-| `whois` | Query internet registration records | migrated | 0 | 0 | 0 |
+| Command | Description | IRIS source | Status | Subcommands | Options | Generators |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `adb` | Forward-lock the app | `sys/adb.go` | migrated | 50 | 18 | 0 |
+| `ag` | Recursively search for PATTERN in PATH. Like grep or ack, but faster | `sys/ag.go` | migrated | 0 | 40 | 0 |
+| `airflow` | Subcommand | `sys/airflow.go` | migrated | 49 | 40 | 0 |
+| `aliases` | Prints help information | `sys/aliases.go` | migrated | 20 | 7 | 0 |
+| `asciinema` | Terminal session recorder | `sys/asciinema.go` | migrated | 7 | 15 | 0 |
+| `asr` | Can be a disk image, /dev entry, or volume mountpoint | `sys/asr.go` | migrated | 7 | 20 | 0 |
+| `atuin` | Magical shell history | `sys/atuin.go` | migrated | 18 | 30 | 0 |
+| `basename` | Return filename portion of pathname | `sys/basename.go` | migrated | 0 | 2 | 0 |
+| `bc` | An arbitrary precision calculator language | `sys/bc.go` | migrated | 0 | 7 | 0 |
+| `btop` | Beautifuler htop (interactive process viewer) | `sys/btop.go` | migrated | 0 | 7 | 0 |
+| `bundle` | Gem | `sys/bundle.go` | migrated | 16 | 40 | 0 |
+| `cal` | Displays a calendar and the date of Easter | `sys/cal.go` | migrated | 0 | 3 | 0 |
+| `cci` | CumulusCI command line interface | `sys/cci.go` | migrated | 39 | 36 | 0 |
+| `cdk8s` | CDK for K8s | `sys/cdk8s.go` | migrated | 5 | 13 | 0 |
+| `chezmoi` | Attribute modifier | `sys/chezmoi.go` | migrated | 43 | 40 | 0 |
+| `chsh` | Change your login shell | `sys/chsh.go` | migrated | 0 | 4 | 0 |
+| `codesign` | Create and manipulate code signatures | `sys/codesign.go` | migrated | 0 | 6 | 0 |
+| `croc` | Send file(s), or folder | `sys/croc.go` | migrated | 3 | 26 | 0 |
+| `crontab` | Maintain crontab file for individual users | `sys/crontab.go` | migrated | 0 | 4 | 0 |
+| `curl` | transfer data via URL | `sys/network.go` | migrated | 0 | 22 | 1 |
+| `date` | Display or set date and time | `sys/date.go` | migrated | 0 | 9 | 0 |
+| `dateseq` | Print help and exit | `sys/dateseq.go` | migrated | 0 | 4 | 0 |
+| `dcli` | Display help for command | `sys/dcli.go` | migrated | 26 | 15 | 0 |
+| `dd` | The same as | `sys/dd.go` | migrated | 0 | 0 | 0 |
+| `ddev` | DDEV-Local local development environment | `sys/ddev.go` | migrated | 44 | 40 | 0 |
+| `defaults` | Global domain | `sys/defaults.go` | migrated | 9 | 3 | 0 |
+| `degit` | Straightforward project scaffolding | `sys/degit.go` | migrated | 0 | 5 | 0 |
+| `deta` | Runtime | `sys/deta.go` | migrated | 31 | 13 | 0 |
+| `dig` | DNS lookup | `sys/network.go` | migrated | 4 | 1 | 0 |
+| `dirname` | Return directory portion of pathname | `sys/dirname.go` | migrated | 0 | 0 | 0 |
+| `do-release-upgrade` | Upgrade Ubuntu to latest release | `sys/do_release_upgrade.go` | migrated | 0 | 7 | 0 |
+| `dog` | Human-readable host names, nameservers, types, or classes | `sys/dog.go` | migrated | 7 | 16 | 0 |
+| `dotnet` | The dotnet cli | `sys/dotnet.go` | migrated | 0 | 5 | 0 |
+| `dscacheutil` | Utility for managing the Directory Service cache | `sys/dscacheutil.go` | migrated | 1 | 8 | 0 |
+| `dscl` | Prompt for password | `sys/dscl.go` | migrated | 13 | 8 | 0 |
+| `dtm` | Plugin | `sys/dtm.go` | migrated | 20 | 16 | 0 |
+| `echo` | Environment Variable | `sys/echo.go` | migrated | 0 | 3 | 0 |
+| `eleventy` | Eleventy is a simpler static site generator | `sys/eleventy.go` | migrated | 0 | 0 | 0 |
+| `env` | print environment | `sys/env.go` | migrated | 0 | 3 | 1 |
+| `exec` | Replace the current shell with a program | `sys/exec.go` | migrated | 0 | 0 | 0 |
+| `export` | set environment variable | `sys/env.go` | migrated | 0 | 0 | 1 |
+| `fastlane` | Helps you with your initial fastlane setup | `sys/fastlane.go` | migrated | 24 | 15 | 0 |
+| `fdisk` | Manipulate disk partition table | `sys/fdisk.go` | migrated | 0 | 15 | 0 |
+| `ffmpeg` | Play, record, convert, and stream audio and video | `sys/ffmpeg.go` | migrated | 0 | 40 | 0 |
+| `firefox` | Free open-source web browser developer by Mozilla | `sys/firefox.go` | migrated | 0 | 35 | 0 |
+| `fisher` | [Prompt] - 🌊 The ultimate Fish prompt | `sys/fisher.go` | migrated | 5 | 2 | 0 |
+| `fmt` | Simple text formatter | `sys/fmt.go` | migrated | 0 | 1 | 0 |
+| `forc` | Fuel Orchestrator | `sys/forc.go` | migrated | 30 | 21 | 0 |
+| `forge` | A command line interface for managing Atlassian-hosted apps | `sys/forge.go` | migrated | 21 | 16 | 0 |
+| `fzf` | A general-purpose command-line fuzzy finder | `sys/fzf.go` | migrated | 0 | 40 | 0 |
+| `fzf-tmux` | Opens a fuzzy finder in a tmux pane | `sys/fzf_tmux.go` | migrated | 0 | 40 | 0 |
+| `gltfjsx` | GLTF to JSX converter | `sys/gltfjsx.go` | migrated | 0 | 9 | 0 |
+| `goto` | Goto | `sys/goto.go` | migrated | 0 | 9 | 0 |
+| `gum` | Background Color | `sys/gum.go` | migrated | 17 | 40 | 0 |
+| `herd` | Display this application version | `sys/herd.go` | migrated | 6 | 19 | 0 |
+| `hop` | Interact with Hop in your terminal | `sys/hop.go` | migrated | 14 | 10 | 0 |
+| `hostname` | Set or print name of current host system | `sys/hostname.go` | migrated | 0 | 3 | 0 |
+| `htop` | Improved top (interactive process viewer) | `sys/htop.go` | migrated | 0 | 12 | 0 |
+| `http` | HTTPie: command-line HTTP client for the API era | `sys/http.go` | migrated | 0 | 22 | 0 |
+| `hyper` | Hyper is an Electron-based terminal | `sys/hyper.go` | migrated | 9 | 0 | 0 |
+| `hyperfine` | A command-line benchmarking tool | `sys/hyperfine.go` | migrated | 0 | 18 | 0 |
+| `ibus` | Set or get engine | `sys/ibus.go` | migrated | 12 | 0 | 0 |
+| `id` | Display the full name of the user | `sys/id.go` | migrated | 0 | 6 | 0 |
+| `ifconfig` | configure network interface | `sys/network.go` | migrated | 0 | 1 | 0 |
+| `ignite-cli` | Output usage information | `sys/ignite_cli.go` | migrated | 4 | 7 | 0 |
+| `install` | Use suffix as the backup suffix if -b is given | `sys/install.go` | migrated | 0 | 6 | 0 |
+| `ip` | show/manage network | `sys/network.go` | migrated | 5 | 4 | 0 |
+| `join` | The join utility performs an | `sys/join.go` | migrated | 0 | 4 | 0 |
+| `julia` | The Julia Programming Language | `sys/julia.go` | migrated | 0 | 37 | 0 |
+| `kafkactl` | Command-line interface for Apache Kafka | `sys/kafkactl.go` | migrated | 27 | 40 | 0 |
+| `kamal` | Skip image build and push | `sys/kamal.go` | migrated | 11 | 21 | 0 |
+| `kill` | send signal to process | `sys/ps.go` | migrated | 0 | 6 | 1 |
+| `killall` | kill by process name | `sys/ps.go` | migrated | 0 | 4 | 1 |
+| `kitty` | A cat like utility to display images in the terminal | `sys/kitty.go` | migrated | 11 | 30 | 0 |
+| `klist` | Credential cache to list | `sys/klist.go` | migrated | 0 | 8 | 0 |
+| `kool` | Script | `sys/kool.go` | migrated | 20 | 16 | 0 |
+| `launchctl` | Service or domain target | `sys/launchctl.go` | migrated | 49 | 23 | 0 |
+| `leaf` | Create and interact with your leaf projects | `sys/leaf.go` | migrated | 13 | 8 | 0 |
+| `lima` | Lima is an alias for | `sys/lima.go` | migrated | 0 | 1 | 0 |
+| `login` | Begin session on the system | `sys/login.go` | migrated | 0 | 4 | 0 |
+| `lsblk` | List block devices | `sys/lsblk.go` | migrated | 0 | 25 | 0 |
+| `lsof` | List open files | `sys/lsof.go` | migrated | 0 | 31 | 0 |
+| `man` | Format and display manual pages | `sys/man.go` | migrated | 0 | 20 | 0 |
+| `meroxa` | The Meroxa CLI | `sys/meroxa.go` | migrated | 32 | 37 | 0 |
+| `mkdocs` | Project documentation with Markdown | `sys/mkdocs.go` | migrated | 4 | 19 | 0 |
+| `mkfifo` | Make FIFOs (first-in, first-out) | `sys/mkfifo.go` | migrated | 0 | 1 | 0 |
+| `mkinitcpio` | Create an initial ramdisk environment | `sys/mkinitcpio.go` | migrated | 0 | 26 | 0 |
+| `mknod` | Create device special file | `sys/mknod.go` | migrated | 2 | 1 | 0 |
+| `mosh` | Address of remote machine to log into | `sys/mosh.go` | migrated | 0 | 11 | 0 |
+| `mount` | Mount disks and manage subtrees | `sys/mount.go` | migrated | 0 | 34 | 0 |
+| `nc` | netcat - TCP/UDP tool | `sys/network.go` | migrated | 0 | 7 | 0 |
+| `ncal` | Displays a calendar and the date of Easter | `sys/ncal.go` | migrated | 0 | 13 | 0 |
+| `neofetch` | The most complete system information CLI tool | `sys/neofetch.go` | migrated | 0 | 40 | 0 |
+| `netstat` | network statistics | `sys/network.go` | migrated | 0 | 7 | 0 |
+| `networkQuality` | Measure the different aspects of network quality | `sys/networkquality.go` | migrated | 0 | 6 | 0 |
+| `networksetup` | Configuration tool for network settings in macOS | `sys/networksetup.go` | migrated | 39 | 40 | 0 |
+| `nextflow` | Session ID | `sys/nextflow.go` | migrated | 17 | 40 | 0 |
+| `nhost` | Nhost | `sys/nhost.go` | migrated | 10 | 1 | 0 |
+| `nmap` | Network exploration tool and security / port scanner | `sys/nmap.go` | migrated | 0 | 21 | 0 |
+| `nrm` | Use the right package manage - remove | `sys/nrm.go` | migrated | 0 | 5 | 0 |
+| `ns` | Forces rebuilding the native application | `sys/ns.go` | migrated | 1 | 35 | 0 |
+| `nslookup` | query DNS | `sys/network.go` | migrated | 0 | 0 | 0 |
+| `nylas` | A command line interface for Nylas | `sys/nylas.go` | migrated | 50 | 40 | 0 |
+| `oh-my-posh` | The config file to use | `sys/oh_my_posh.go` | migrated | 13 | 14 | 0 |
+| `okta` | The Okta CLI is the easiest way to get started with Okta! | `sys/okta.go` | migrated | 11 | 14 | 0 |
+| `ollama` | A command-line tool for managing and deploying machine learning models | `sys/ollama.go` | migrated | 12 | 4 | 0 |
+| `omz` | Oh My Zsh | `sys/omz.go` | migrated | 17 | 0 | 0 |
+| `pac` | 7 | `sys/pac.go` | migrated | 50 | 40 | 0 |
+| `passwd` | Modify a user | `sys/passwd.go` | migrated | 0 | 3 | 0 |
+| `pathchk` | Check pathnames for POSIX portability | `sys/pathchk.go` | migrated | 0 | 1 | 0 |
+| `pdfunite` | Combine multiple pdfs | `sys/pdfunite.go` | migrated | 0 | 2 | 0 |
+| `pgrep` | find process by pattern | `sys/ps.go` | migrated | 0 | 4 | 0 |
+| `ping` | test network connectivity | `sys/network.go` | migrated | 0 | 5 | 0 |
+| `pkg-config` | Return metainformation about installed libraries | `sys/pkg_config.go` | migrated | 0 | 20 | 0 |
+| `pkill` | kill by pattern | `sys/ps.go` | migrated | 0 | 3 | 0 |
+| `pmset` | Display sleep timer (value in minutes, or 0 to disable) | `sys/pmset.go` | migrated | 21 | 5 | 0 |
+| `pocketbase` | PocketBase CLI | `sys/pocketbase.go` | migrated | 11 | 8 | 0 |
+| `printenv` | print environment variables | `sys/env.go` | migrated | 0 | 1 | 1 |
+| `prisma` | Display this help message | `sys/prisma.go` | migrated | 9 | 36 | 0 |
+| `pro` | Manage Ubuntu Pro services from Canonical | `sys/pro.go` | migrated | 8 | 5 | 0 |
+| `pry` | Interactive Ruby | `sys/pry.go` | migrated | 0 | 16 | 0 |
+| `ps` | report processes | `sys/ps.go` | migrated | 1 | 6 | 1 |
+| `publish` | Set up a new website in the current folder | `sys/publish.go` | migrated | 3 | 2 | 0 |
+| `pwd` | Return working directory name | `sys/pwd.go` | migrated | 0 | 2 | 0 |
+| `rancher` | Output format: | `sys/rancher.go` | migrated | 46 | 16 | 0 |
+| `repeat` | Interpret the result as a number and repeat the commands this many times | `sys/repeat.go` | migrated | 0 | 0 | 0 |
+| `rscript` | Scripting Front-End for R | `sys/rscript.go` | migrated | 0 | 13 | 0 |
+| `sam` | Host of locally emulated Lambda container | `sys/sam.go` | migrated | 17 | 40 | 0 |
+| `sanity` | Displays help information about Sanity | `sys/sanity.go` | migrated | 38 | 40 | 0 |
+| `screen` | Screen manager with VT100/ANSI terminal emulation | `sys/screen.go` | migrated | 1 | 29 | 0 |
+| `shell-config` | Display help for command | `sys/shell_config.go` | migrated | 10 | 4 | 0 |
+| `shortcuts` | Run a shortcut | `sys/shortcuts.go` | migrated | 1 | 8 | 0 |
+| `simctl` | Add photos, live photos, videos, or contacts to the library of a device | `sys/simctl.go` | migrated | 48 | 29 | 0 |
+| `source` | Source files in shell | `sys/source.go` | migrated | 0 | 0 | 0 |
+| `speedtest-cli` | Command line interface for testing internet bandwidth using speedtest.net | `sys/speedtest_cli.go` | migrated | 0 | 14 | 0 |
+| `spotify` | CLI to use Spotify from the terminal | `sys/spotify.go` | migrated | 23 | 1 | 0 |
+| `ss` | socket statistics | `sys/network.go` | migrated | 0 | 8 | 0 |
+| `st2` | Show this help and exit | `sys/st2.go` | migrated | 8 | 40 | 0 |
+| `stack` | The Haskell Tool Stack | `sys/stack.go` | migrated | 15 | 35 | 0 |
+| `starkli` | Starkli, a ⚡ blazing ⚡ fast ⚡ CLI tool for Starknet powered by 🦀 starknet-rs 🦀 | `sys/starkli.go` | migrated | 49 | 27 | 0 |
+| `su` | (no letter) The same as -l | `sys/su.go` | migrated | 0 | 1 | 0 |
+| `sudo` | Execute a command as the superuser or another user | `sys/sudo.go` | migrated | 0 | 3 | 0 |
+| `sysctl` | Variable name | `sys/sysctl.go` | migrated | 0 | 11 | 0 |
+| `systemctl` | Control the systemd system and service manager | `sys/systemctl.go` | migrated | 51 | 46 | 14 |
+| `tac` | Concatenate and print files in reverse | `sys/tac.go` | migrated | 0 | 5 | 0 |
+| `tailcall` | TailCall CLI for managing and optimizing GraphQL configurations | `sys/tailcall.go` | migrated | 4 | 3 | 0 |
+| `tailwindcss` | Display usage information | `sys/tailwindcss.go` | migrated | 2 | 11 | 0 |
+| `time` | Time how long a command takes! | `sys/time.go` | migrated | 0 | 0 | 0 |
+| `tldr` | Tldr page | `sys/tldr.go` | migrated | 0 | 9 | 0 |
+| `tmux` | Format output | `sys/tmux.go` | migrated | 50 | 40 | 0 |
+| `tmuxinator` | Project | `sys/tmuxinator.go` | migrated | 23 | 4 | 0 |
+| `top` | Display Linux tasks | `sys/top.go` | migrated | 0 | 5 | 0 |
+| `traceroute` | Print the route packets take to network host | `sys/traceroute.go` | migrated | 0 | 11 | 0 |
+| `trap` | Prints all defined signal handlers | `sys/trap.go` | migrated | 0 | 2 | 0 |
+| `trex` | trex script | `sys/trex.go` | migrated | 9 | 11 | 0 |
+| `tsh` | Remote host login | `sys/tsh.go` | migrated | 26 | 15 | 0 |
+| `tuist` | Build the project in the current directory | `sys/tuist.go` | migrated | 5 | 19 | 0 |
+| `twilio` | Level of logging messages | `sys/twilio.go` | migrated | 2 | 39 | 0 |
+| `uname` | Print operating system name | `sys/uname.go` | migrated | 0 | 7 | 0 |
+| `unset` | unset variable | `sys/env.go` | migrated | 0 | 0 | 1 |
+| `visudo` | Checking existing sudoers file for syntax errors | `sys/visudo.go` | migrated | 0 | 9 | 0 |
+| `vultr-cli` | Bare Metal ID | `sys/vultr_cli.go` | migrated | 50 | 4 | 0 |
+| `wezterm` | Wez | `sys/wezterm.go` | migrated | 17 | 27 | 0 |
+| `wget` | non-interactive downloader | `sys/network.go` | migrated | 0 | 13 | 1 |
+| `where` | For each name, indicate how it should be interpreted | `sys/where.go` | migrated | 0 | 6 | 0 |
+| `whereis` | Locate the binary, source, and manual page files for a command | `sys/whereis.go` | migrated | 0 | 8 | 0 |
+| `which` | Executable file | `sys/which.go` | migrated | 0 | 2 | 0 |
+| `who` | Display who is logged in | `sys/who.go` | migrated | 1 | 12 | 0 |
+| `wing` | Runs a Wing executable in the Wing Console | `sys/wing.go` | migrated | 6 | 3 | 0 |
+| `wp` | Path to the WordPress files | `sys/wp.go` | migrated | 50 | 40 | 0 |
+| `wrk` | Wrk - a HTTP benchmarking tool | `sys/wrk.go` | migrated | 0 | 9 | 0 |
+| `wscat` | Communicate over websocket | `sys/wscat.go` | migrated | 0 | 21 | 0 |
+| `yank` | Yank terminal output to clipboard | `sys/yank.go` | migrated | 0 | 6 | 0 |
+| `ykman` | Configure your YubiKey via the command line | `sys/ykman.go` | migrated | 50 | 39 | 0 |
+| `zapier` | Change the way structured data is presented. If | `sys/zapier.go` | migrated | 40 | 14 | 0 |
 
 ## Supplemental runtime specifications
 
-These installed tools extend the frozen migration baseline with required local generators.
+These live IRIS registry roots were absent from its generated inventory, or are Argmax-specific local integrations.
 
 | Command | Description | Subcommands | Options | Generators |
 | --- | --- | ---: | ---: | ---: |
+| `pip` | python packages | 18 | 13 | 4 |
+| `pip3` | python packages | 12 | 9 | 2 |
+| `py` | python interpreter | 0 | 8 | 1 |
+| `python` | python interpreter | 0 | 8 | 1 |
+| `python3` | python interpreter | 0 | 8 | 1 |
+| `ssh-add` | load keys into an SSH agent | 0 | 0 | 0 |
+| `ssh-agent` | hold private keys for SSH clients | 0 | 0 | 0 |
+| `ssh-keyscan` | collect public SSH host keys | 0 | 0 | 0 |
+| `sshd` | OpenSSH server daemon | 0 | 0 | 0 |
 | `zoxide` | query the zoxide directory database | 3 | 0 | 1 |
-| `printenv` | print selected environment variables | 0 | 1 | 1 |
-| `fd` | find filesystem entries | 0 | 1 | 1 |
