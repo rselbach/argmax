@@ -18,6 +18,7 @@ clap = { version = "=4.6.4", default-features = false, features = [
 directories = "=6.0.0"
 nix = { version = "=0.28.0", default-features = false, features = [
   "fs",
+  "poll",
   "process",
   "signal",
   "socket",

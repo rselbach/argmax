@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::io::{self, Read};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -17,7 +17,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use directories::BaseDirs;
-use nix::fcntl::{FcntlArg, OFlag, fcntl};
+use nix::errno::Errno;
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::unistd::isatty;
 
 use crate::ai_lifecycle::{CancellationReason, SessionId as AiSessionId};
@@ -76,8 +77,6 @@ pub enum RuntimeError {
     TerminalRequired,
     /// A terminal, PTY, reducer, or shell-selection operation failed.
     Setup(String),
-    /// Parent standard-input flags could not be changed or restored.
-    InputFlags(io::ErrorKind),
     /// Reading parent standard input failed.
     Input(io::ErrorKind),
     /// PTY output or integration input failed.
@@ -109,7 +108,6 @@ impl fmt::Display for RuntimeError {
                 "argmax requires usable terminals on standard input and standard output",
             ),
             Self::Setup(error) => write!(formatter, "interactive runtime setup failed: {error}"),
-            Self::InputFlags(kind) => write!(formatter, "standard-input flags failed: {kind}"),
             Self::Input(kind) => write!(formatter, "standard-input read failed: {kind}"),
             Self::Read(error) => write!(formatter, "interactive transport read failed: {error}"),
             Self::Write(error) => write!(formatter, "interactive transport write failed: {error}"),
@@ -303,7 +301,6 @@ fn run_prepared_runtime(
     )
     .map_err(|error| RuntimeError::Setup(error.to_string()))?;
 
-    let mut input_flags = NonblockingInput::enable(io::stdin().as_raw_fd())?;
     let reader_stop = Arc::new(AtomicBool::new(false));
     let (output_sender, output_receiver) = mpsc::sync_channel(OUTPUT_CHANNEL_CAPACITY);
     let reader_thread = spawn_reader(reader, output_sender, Arc::clone(&reader_stop))?;
@@ -330,7 +327,6 @@ fn run_prepared_runtime(
             &mut driver,
             &mut reducer,
             &mut terminal,
-            &mut input_flags,
             &mut live_configuration,
             diagnostics,
         )
@@ -349,25 +345,17 @@ fn run_prepared_runtime(
     let reader_result = reader_thread
         .join()
         .map_err(|_| RuntimeError::ReaderPanicked);
-    let flags_result = input_flags.restore();
     let terminal_result = terminal
         .restore()
         .map_err(|error| RuntimeError::Restore(error.to_string()));
 
-    finish_runtime(
-        result,
-        overlay_result,
-        reader_result,
-        flags_result,
-        terminal_result,
-    )
+    finish_runtime(result, overlay_result, reader_result, terminal_result)
 }
 
 fn finish_runtime(
     result: thread::Result<Result<ChildExit, RuntimeError>>,
     overlay_result: Result<(), RuntimeError>,
     reader_result: Result<(), RuntimeError>,
-    flags_result: Result<(), RuntimeError>,
     terminal_result: Result<(), RuntimeError>,
 ) -> Result<ChildExit, RuntimeError> {
     match result {
@@ -375,14 +363,12 @@ fn finish_runtime(
             let exit = result?;
             overlay_result?;
             reader_result?;
-            flags_result?;
             terminal_result?;
             Ok(exit)
         }
         Err(payload) => {
             drop(overlay_result);
             drop(reader_result);
-            drop(flags_result);
             drop(terminal_result);
             panic::resume_unwind(payload);
         }
@@ -579,42 +565,21 @@ const fn configured_initial_mode(
     }
 }
 
-struct NonblockingInput {
-    descriptor: RawFd,
-    original: OFlag,
-    active: bool,
-}
-
-impl NonblockingInput {
-    fn enable(descriptor: RawFd) -> Result<Self, RuntimeError> {
-        let original = fcntl(descriptor, FcntlArg::F_GETFL)
-            .map(OFlag::from_bits_truncate)
-            .map_err(|error| RuntimeError::InputFlags(io::Error::from(error).kind()))?;
-        fcntl(descriptor, FcntlArg::F_SETFL(original | OFlag::O_NONBLOCK))
-            .map_err(|error| RuntimeError::InputFlags(io::Error::from(error).kind()))?;
-        Ok(Self {
-            descriptor,
-            original,
-            active: true,
-        })
-    }
-
-    fn restore(&mut self) -> Result<(), RuntimeError> {
-        if !self.active {
-            return Ok(());
-        }
-        fcntl(self.descriptor, FcntlArg::F_SETFL(self.original))
-            .map_err(|error| RuntimeError::InputFlags(io::Error::from(error).kind()))?;
-        self.active = false;
-        Ok(())
-    }
-}
-
-impl Drop for NonblockingInput {
-    fn drop(&mut self) {
-        if self.active {
-            let _ = fcntl(self.descriptor, FcntlArg::F_SETFL(self.original));
-        }
+fn read_if_ready<R: Read + AsFd>(
+    input: &mut R,
+    buffer: &mut [u8],
+) -> Result<Option<io::Result<usize>>, RuntimeError> {
+    // Poll without changing file status flags: terminal stdin and stdout can
+    // share one open-file description, so O_NONBLOCK on input can corrupt a
+    // partially written overlay frame when output backpressure occurs.
+    let ready = {
+        let mut descriptors = [PollFd::new(input.as_fd(), PollFlags::POLLIN)];
+        poll(&mut descriptors, PollTimeout::ZERO)
+    };
+    match ready {
+        Ok(0) | Err(Errno::EINTR) => Ok(None),
+        Ok(_) => Ok(Some(input.read(buffer))),
+        Err(error) => Err(RuntimeError::Input(io::Error::from(error).kind())),
     }
 }
 
@@ -1000,7 +965,6 @@ fn drive_session(
     driver: &mut SessionDriver,
     reducer: &mut SessionReducer,
     terminal: &mut TerminalGuard<io::Stdin, io::Stdout>,
-    input_flags: &mut NonblockingInput,
     live_configuration: &mut LiveConfiguration,
     diagnostics: Option<&dyn RuntimeDiagnosticSink>,
 ) -> Result<ChildExit, RuntimeError> {
@@ -1010,7 +974,7 @@ fn drive_session(
 
     loop {
         let mut progress = false;
-        progress |= driver.handle_signals(session, terminal, input_flags)?;
+        progress |= driver.handle_signals(session, terminal)?;
         progress |= live_configuration.poll(driver, reducer, diagnostics)?;
         progress |= driver.flush_pending(session)?;
         progress |= driver.drain_output(reducer)?;
@@ -1069,7 +1033,6 @@ impl SessionDriver {
         &mut self,
         session: &PtySession,
         terminal: &mut TerminalGuard<io::Stdin, io::Stdout>,
-        input_flags: &mut NonblockingInput,
     ) -> Result<bool, RuntimeError> {
         let mut events = [None; 7];
         let count = self.signals.drain_pending(&mut events);
@@ -1084,7 +1047,7 @@ impl SessionDriver {
                 SignalEvent::Terminate => ForwardSignal::Terminate,
                 SignalEvent::Hangup => ForwardSignal::Hangup,
                 SignalEvent::Suspend => {
-                    self.suspend(session, terminal, input_flags)?;
+                    self.suspend(session, terminal)?;
                     continue;
                 }
                 SignalEvent::Continue => ForwardSignal::Continue,
@@ -1124,10 +1087,8 @@ impl SessionDriver {
         &mut self,
         session: &PtySession,
         terminal: &mut TerminalGuard<io::Stdin, io::Stdout>,
-        input_flags: &mut NonblockingInput,
     ) -> Result<(), RuntimeError> {
         self.clear_overlay()?;
-        input_flags.restore()?;
         terminal
             .restore()
             .map_err(|error| RuntimeError::Restore(error.to_string()))?;
@@ -1141,7 +1102,6 @@ impl SessionDriver {
             .map_err(|error| RuntimeError::Setup(error.to_string()))?;
         let resumed_terminal = TerminalGuard::enter_stdio(dimensions)
             .map_err(|error| RuntimeError::Setup(error.to_string()))?;
-        let resumed_flags = NonblockingInput::enable(io::stdin().as_raw_fd())?;
         session
             .resize(dimensions.size())
             .map_err(|error| RuntimeError::Setup(error.to_string()))?;
@@ -1149,7 +1109,6 @@ impl SessionDriver {
             .map_err(|error| RuntimeError::Setup(error.to_string()))?;
         let _ = self.screen.resize(size);
         *terminal = resumed_terminal;
-        *input_flags = resumed_flags;
         session
             .forward_signal(ForwardSignal::Continue)
             .map_err(|error| RuntimeError::Write(error.to_string()))?;
@@ -1500,7 +1459,10 @@ impl SessionDriver {
         {
             return Ok(false);
         }
-        match input.read(buffer) {
+        let Some(read) = read_if_ready(input, buffer)? else {
+            return Ok(false);
+        };
+        match read {
             Ok(0) => {
                 self.input_state = InputState::EofPending { written: 0 };
                 self.escape_deadline = None;
@@ -1786,6 +1748,12 @@ impl SessionDriver {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::Write;
+
+    use nix::fcntl::{FcntlArg, OFlag, fcntl};
+    use nix::pty::openpty;
+
     use super::*;
 
     fn suggestion(query: &CompletionQuery, suffix: &str, identity: &str) -> Suggestion {
@@ -1887,23 +1855,48 @@ mod tests {
     }
 
     #[test]
-    fn nonblocking_input_restores_exact_descriptor_flags() {
-        let (reader, _writer) = nix::unistd::pipe().unwrap();
-        let descriptor = reader.as_raw_fd();
-        let before = fcntl(descriptor, FcntlArg::F_GETFL)
+    fn input_readiness_does_not_change_shared_terminal_flags() {
+        let pair = openpty(None, None).unwrap();
+        let _master = File::from(pair.master);
+        let mut input = File::from(pair.slave);
+        let output = input.try_clone().unwrap();
+        let before = fcntl(input.as_raw_fd(), FcntlArg::F_GETFL)
             .map(OFlag::from_bits_truncate)
             .unwrap();
 
-        let mut guard = NonblockingInput::enable(descriptor).unwrap();
-        let enabled = fcntl(descriptor, FcntlArg::F_GETFL)
+        let mut buffer = [0_u8; 1];
+        assert!(read_if_ready(&mut input, &mut buffer).unwrap().is_none());
+        let after_read = fcntl(output.as_raw_fd(), FcntlArg::F_GETFL)
             .map(OFlag::from_bits_truncate)
             .unwrap();
-        assert!(enabled.contains(OFlag::O_NONBLOCK));
+        assert_eq!(after_read, before);
+    }
 
-        guard.restore().unwrap();
-        let restored = fcntl(descriptor, FcntlArg::F_GETFL)
-            .map(OFlag::from_bits_truncate)
-            .unwrap();
-        assert_eq!(restored, before);
+    #[test]
+    fn input_readiness_reads_available_bytes_and_reports_eof() {
+        let (reader, writer) = nix::unistd::pipe().unwrap();
+        let mut input = File::from(reader);
+        let mut source = File::from(writer);
+        let mut buffer = [0_u8; 8];
+
+        assert!(read_if_ready(&mut input, &mut buffer).unwrap().is_none());
+        source.write_all(b"Troy").unwrap();
+        assert_eq!(
+            read_if_ready(&mut input, &mut buffer)
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            4
+        );
+        assert_eq!(&buffer[..4], b"Troy");
+
+        drop(source);
+        assert_eq!(
+            read_if_ready(&mut input, &mut buffer)
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            0
+        );
     }
 }
