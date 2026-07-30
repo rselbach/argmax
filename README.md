@@ -52,7 +52,7 @@ To select an absolute directory instead:
 ARGMAX_INSTALL_DIR="$HOME/.local/bin" sh argmax-install.sh
 ```
 
-If the chosen directory is not on `PATH`, the installer prints an exact command
+The installer does not edit shell configuration itself.
 
 Then install one marked shell hook and create the default config if it is absent:
 
