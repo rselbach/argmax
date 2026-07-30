@@ -938,6 +938,31 @@ impl CompletionCoordinator {
         Self::with_next_generation(providers, ui_max_suggestions, Some(0))
     }
 
+    /// Applies a new validated UI result limit and cancels current work.
+    ///
+    /// The next authoritative buffer snapshot starts a fresh generation under
+    /// the new bound, so an old oversized selection cannot remain visible.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistrationError::InvalidUiLimit`] without changing state
+    /// when `ui_max_suggestions` is outside one through 500.
+    pub fn reconfigure_ui_limit(
+        &mut self,
+        ui_max_suggestions: usize,
+    ) -> Result<(), RegistrationError> {
+        if !(1..=MAX_UI_SUGGESTIONS).contains(&ui_max_suggestions) {
+            return Err(RegistrationError::InvalidUiLimit {
+                value: ui_max_suggestions,
+                maximum: MAX_UI_SUGGESTIONS,
+            });
+        }
+        self.ui_max_suggestions = ui_max_suggestions;
+        self.abandon_active_query();
+        self.clear_selection();
+        Ok(())
+    }
+
     fn with_next_generation(
         providers: impl IntoIterator<Item = &'static str>,
         ui_max_suggestions: usize,
@@ -1739,6 +1764,22 @@ mod tests {
 
     fn coordinator(max_suggestions: usize) -> CompletionCoordinator {
         CompletionCoordinator::new(PROVIDERS, max_suggestions).unwrap()
+    }
+
+    #[test]
+    fn live_result_limit_cancels_old_authority_and_validates_atomically() {
+        let mut coordinator = coordinator(100);
+        let generation = start(&mut coordinator, "git").query().generation;
+        coordinator.reconfigure_ui_limit(5).unwrap();
+        assert!(coordinator.active_query().is_none());
+        assert!(matches!(
+            coordinator.merged_candidates(generation),
+            Err(AuthorityRejection::Cancelled { .. })
+        ));
+        assert!(matches!(
+            coordinator.reconfigure_ui_limit(0),
+            Err(RegistrationError::InvalidUiLimit { .. })
+        ));
     }
 
     fn start(coordinator: &mut CompletionCoordinator, line: &str) -> QueryWork {

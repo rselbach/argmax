@@ -9,7 +9,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::completion::{CompletionQuery, ProviderBatch, Suggestion, SuggestionSource};
+use crate::completion::{CompletionQuery, ProviderBatch, Suggestion, SuggestionSource, TextEdit};
 use crate::coordinator::{
     AuthorityRejection, BatchOutcome, CompletionCoordinator, MAX_QUERY_CWD_BYTES,
     MAX_QUERY_LINE_BYTES, PresentationOutcome, QueryStartError, QueryWork, RegistrationError,
@@ -169,6 +169,11 @@ pub enum SessionEffect {
     StartQuery {
         /// Mode that selected the provider set for this query.
         mode: SessionMode,
+        /// Whether this query followed an exact, non-pasted typed ASCII space.
+        ///
+        /// Providers still validate alias syntax and configuration off the
+        /// input path before proposing any edit.
+        alias_expansion: bool,
         /// Immutable query and observer-only cancellation handle.
         work: QueryWork,
     },
@@ -195,9 +200,14 @@ impl fmt::Debug for SessionEffect {
                 .debug_tuple("RequestBufferSync")
                 .field(nonce)
                 .finish(),
-            Self::StartQuery { mode, work } => formatter
+            Self::StartQuery {
+                mode,
+                alias_expansion,
+                work,
+            } => formatter
                 .debug_struct("StartQuery")
                 .field("mode", mode)
+                .field("alias_expansion", alias_expansion)
                 .field("work", work)
                 .finish(),
             Self::ModeChanged(mode) => formatter.debug_tuple("ModeChanged").field(mode).finish(),
@@ -420,6 +430,7 @@ impl Error for CwdUpdateError {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReplacementKind {
     Acceptance,
+    AliasExpansion,
     Ghost,
     HistoryPreview,
     HistoryRestore,
@@ -454,6 +465,7 @@ pub struct SessionReducer {
     history_origin: Option<BufferReplacement>,
     history_preview_active: bool,
     recall_history_when_ready: bool,
+    alias_expansion_pending: bool,
     paste_active: bool,
     probe_needed: bool,
     input_boundary_fence: bool,
@@ -477,6 +489,7 @@ impl fmt::Debug for SessionReducer {
             .field("history_origin", &self.history_origin)
             .field("history_preview_active", &self.history_preview_active)
             .field("recall_history_when_ready", &self.recall_history_when_ready)
+            .field("alias_expansion_pending", &self.alias_expansion_pending)
             .field("paste_active", &self.paste_active)
             .field("probe_needed", &self.probe_needed)
             .field("input_boundary_fence", &self.input_boundary_fence)
@@ -504,6 +517,34 @@ impl SessionReducer {
         ui_max_suggestions: usize,
         cwd: impl Into<PathBuf>,
     ) -> Result<Self, SessionBuildError> {
+        Self::new_with_mode(
+            epoch,
+            toggle_mode,
+            toggle_menu,
+            providers,
+            ui_max_suggestions,
+            cwd,
+            SessionMode::Spec,
+        )
+    }
+
+    /// Creates a bounded reducer with an explicitly resolved initial mode.
+    ///
+    /// This is the startup boundary for fixed-mode configuration and persisted
+    /// `last` mode. Later changes still flow through normal input actions.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation failures as [`Self::new`].
+    pub fn new_with_mode(
+        epoch: StreamEpoch,
+        toggle_mode: &[u8],
+        toggle_menu: &[u8],
+        providers: impl IntoIterator<Item = &'static str>,
+        ui_max_suggestions: usize,
+        cwd: impl Into<PathBuf>,
+        initial_mode: SessionMode,
+    ) -> Result<Self, SessionBuildError> {
         let cwd = validate_cwd(cwd.into()).map_err(|error| match error {
             CwdUpdateError::TooLarge { bytes, limit } => {
                 SessionBuildError::CwdTooLarge { bytes, limit }
@@ -516,11 +557,12 @@ impl SessionReducer {
             shell: ShellSessionState::new(epoch),
             completion: CompletionCoordinator::new(providers, ui_max_suggestions)?,
             cwd,
-            mode: SessionMode::Spec,
+            mode: initial_mode,
             pending_replacement: None,
             history_origin: None,
             history_preview_active: false,
             recall_history_when_ready: false,
+            alias_expansion_pending: false,
             paste_active: false,
             probe_needed: false,
             input_boundary_fence: false,
@@ -586,6 +628,37 @@ impl SessionReducer {
         Ok(effects)
     }
 
+    /// Applies live keybinding and result-limit settings without replacing the
+    /// shell, stream epoch, authoritative buffer, or current directory.
+    ///
+    /// A retained partial configurable key sequence defers the whole change so
+    /// already received input keeps its original interpretation. `Ok(None)`
+    /// asks the event loop to retry after that prefix resolves.
+    ///
+    /// # Errors
+    ///
+    /// Returns a construction-style validation failure without discarding
+    /// shell authority.
+    pub fn reconfigure(
+        &mut self,
+        toggle_mode: &[u8],
+        toggle_menu: &[u8],
+        ui_max_suggestions: usize,
+    ) -> Result<Option<EffectBatch>, SessionBuildError> {
+        if !self.input.reconfigure(toggle_mode, toggle_menu)? {
+            return Ok(None);
+        }
+        self.completion.reconfigure_ui_limit(ui_max_suggestions)?;
+        let mut effects = EffectBatch::default();
+        self.clear_completion(&mut effects);
+        if self.actions_are_safe() {
+            self.start_query_from_authority(&mut effects);
+        } else {
+            self.query_restart_deferred = true;
+        }
+        Ok(Some(effects))
+    }
+
     /// Returns whether accepted context is waiting for safe buffer authority.
     ///
     /// The reducer consumes this restart after paste ends or a later shell
@@ -638,6 +711,17 @@ impl SessionReducer {
             }
             StateUpdate::PromptReady { .. } => {
                 self.handle_authoritative_update(true, &mut effects);
+            }
+            StateUpdate::WorkingDirectoryChanged(directory) => {
+                if self.cwd != directory.as_path() {
+                    self.cwd = directory.as_path().to_path_buf();
+                    self.clear_completion(&mut effects);
+                    self.query_restart_deferred = true;
+                }
+            }
+            StateUpdate::ReloadRequested(_) => {
+                self.clear_completion(&mut effects);
+                self.clear_history_preview_authority();
             }
             StateUpdate::SnapshotRejected(_) => {
                 self.clear_completion(&mut effects);
@@ -727,6 +811,61 @@ impl SessionReducer {
         PresentationReduction { outcome, effects }
     }
 
+    /// Applies one background-validated alias edit through the normal inert
+    /// shell-buffer replacement protocol.
+    ///
+    /// Stale, cancelled, malformed, or currently unsafe results are ignored.
+    /// The returned batch is empty in those cases. A successful reduction
+    /// clears completion UI, replaces the real shell-native edit buffer, and
+    /// requests a correlated authoritative snapshot without executing it.
+    #[must_use]
+    pub fn apply_alias_expansion(&mut self, generation: u64, edit: TextEdit) -> EffectBatch {
+        let mut effects = EffectBatch::default();
+        if !self.actions_are_safe() {
+            return effects;
+        }
+        let Some(query) = self.completion.active_query() else {
+            return effects;
+        };
+        let TextEdit { range, replacement } = edit;
+        if query.generation != generation
+            || range.start > range.end
+            || range.end > query.cursor
+            || !query.line.is_char_boundary(range.start)
+            || !query.line.is_char_boundary(range.end)
+        {
+            return effects;
+        }
+
+        let Some(removed_bytes) = range.end.checked_sub(range.start) else {
+            return effects;
+        };
+        let Some(cursor) = query
+            .cursor
+            .checked_sub(removed_bytes)
+            .and_then(|cursor| cursor.checked_add(replacement.len()))
+        else {
+            return effects;
+        };
+        let mut text = String::with_capacity(
+            query
+                .line
+                .len()
+                .saturating_sub(removed_bytes)
+                .saturating_add(replacement.len()),
+        );
+        text.push_str(&query.line[..range.start]);
+        text.push_str(&replacement);
+        text.push_str(&query.line[range.end..]);
+        let Ok(replacement) = BufferReplacement::new(text, cursor) else {
+            return effects;
+        };
+        if self.begin_replacement(replacement, ReplacementKind::AliasExpansion, &mut effects) {
+            self.issue_probe_if_safe(&mut effects, false);
+        }
+        effects
+    }
+
     fn reduce_route_batch(&mut self, batch: RouteBatch) -> InputReduction {
         let consumed_bytes = batch.consumed_bytes();
         let mut effects = EffectBatch::default();
@@ -735,6 +874,8 @@ impl SessionReducer {
             let (bytes, forwarding, action) = event.into_parts();
             self.release_unconfirmed_boundaries_for_local_toggle(action, &mut effects);
             let fenced_before = self.input_boundary_fence;
+            let typed_alias_space =
+                action == Some(InputAction::Printable(' ')) && self.actions_are_safe();
             let handled = action.is_some_and(|action| self.handle_action(action, &mut effects));
             let restoring_before_escape = action == Some(InputAction::Escape)
                 && self
@@ -754,7 +895,7 @@ impl SessionReducer {
                 && !restoring_before_escape
                 && !matches!(action, InputAction::PasteStart | InputAction::PasteEnd)
             {
-                self.observe_forwarded_edit(&mut effects);
+                self.observe_forwarded_edit(&mut effects, typed_alias_space);
             }
             effects.forward(bytes);
         }
@@ -1047,7 +1188,10 @@ impl SessionReducer {
             replacement: replacement.clone(),
             kind,
         });
-        if matches!(kind, ReplacementKind::Acceptance | ReplacementKind::Ghost) {
+        if matches!(
+            kind,
+            ReplacementKind::Acceptance | ReplacementKind::AliasExpansion | ReplacementKind::Ghost
+        ) {
             self.clear_history_preview_authority();
         }
         self.probe_needed = true;
@@ -1056,11 +1200,12 @@ impl SessionReducer {
         true
     }
 
-    fn observe_forwarded_edit(&mut self, effects: &mut EffectBatch) {
+    fn observe_forwarded_edit(&mut self, effects: &mut EffectBatch, typed_alias_space: bool) {
         if let Err(InputGenerationError::Exhausted) = self.shell.observe_local_input() {
             effects.push(SessionEffect::Fault(SessionFault::InputGenerationExhausted));
         }
         self.clear_completion(effects);
+        self.alias_expansion_pending = typed_alias_space;
         self.pending_replacement = None;
         self.probe_needed = true;
         self.clear_history_preview_authority();
@@ -1069,6 +1214,7 @@ impl SessionReducer {
     fn start_query_from_authority(&mut self, effects: &mut EffectBatch) {
         self.query_restart_deferred = false;
         let _ = self.completion.cancel_active_query();
+        let alias_expansion = std::mem::take(&mut self.alias_expansion_pending);
         let Some((line, cursor)) = self.query_text_and_cursor() else {
             return;
         };
@@ -1079,6 +1225,7 @@ impl SessionReducer {
         match self.completion.start_query(line, cursor, self.cwd.clone()) {
             Ok(work) => effects.push(SessionEffect::StartQuery {
                 mode: self.mode,
+                alias_expansion,
                 work,
             }),
             Err(error) => effects.push(SessionEffect::Fault(SessionFault::QueryStart(error))),
@@ -1297,6 +1444,7 @@ impl SessionReducer {
     fn clear_completion(&mut self, effects: &mut EffectBatch) {
         let _ = self.completion.cancel_active_query();
         self.completion.dismiss_suggestions();
+        self.alias_expansion_pending = false;
         effects.push(SessionEffect::ClearOverlay);
     }
 
@@ -1462,6 +1610,21 @@ mod tests {
         ));
     }
 
+    fn query_effect(effects: &[EffectBatch]) -> (&QueryWork, bool) {
+        effects
+            .iter()
+            .flat_map(EffectBatch::effects)
+            .find_map(|effect| match effect {
+                SessionEffect::StartQuery {
+                    work,
+                    alias_expansion,
+                    ..
+                } => Some((work, *alias_expansion)),
+                _ => None,
+            })
+            .unwrap()
+    }
+
     fn request_history_preview(reducer: &mut SessionReducer, original: &str, preview: &str) -> u64 {
         let toggle = reducer.route_input(b"\x12");
         let generation = toggle
@@ -1469,7 +1632,7 @@ mod tests {
             .effects()
             .iter()
             .find_map(|effect| match effect {
-                SessionEffect::StartQuery { mode, work } if *mode == SessionMode::History => {
+                SessionEffect::StartQuery { mode, work, .. } if *mode == SessionMode::History => {
                     Some(work.query().generation)
                 }
                 _ => None,
@@ -1652,7 +1815,7 @@ mod tests {
             .iter()
             .flat_map(EffectBatch::effects)
             .find_map(|effect| match effect {
-                SessionEffect::StartQuery { mode, work } if *mode == SessionMode::History => {
+                SessionEffect::StartQuery { mode, work, .. } if *mode == SessionMode::History => {
                     Some(work.query())
                 }
                 _ => None,
@@ -1678,7 +1841,7 @@ mod tests {
             .iter()
             .flat_map(EffectBatch::effects)
             .find_map(|effect| match effect {
-                SessionEffect::StartQuery { mode, work } if *mode == SessionMode::History => {
+                SessionEffect::StartQuery { mode, work, .. } if *mode == SessionMode::History => {
                     Some(work.query())
                 }
                 _ => None,
@@ -1793,6 +1956,87 @@ mod tests {
                 .flat_map(EffectBatch::effects)
                 .all(|effect| !matches!(effect, SessionEffect::StartQuery { .. }))
         );
+    }
+
+    #[test]
+    fn typed_alias_space_requests_background_validation_and_inert_replacement() {
+        let (mut reducer, mut decoder) = ready();
+        let _ = synchronize(&mut reducer, &mut decoder, b"gs", "gs", 2);
+
+        let space = reducer.route_input(b" ");
+        assert_eq!(forwarded(space.effects()), b" ");
+        let nonce = space
+            .effects()
+            .effects()
+            .iter()
+            .find_map(|effect| match effect {
+                SessionEffect::RequestBufferSync(nonce) => Some(nonce.get()),
+                _ => None,
+            })
+            .unwrap();
+        let frame = format!("probe-buffer:b:{nonce}:3:gs \0");
+        let effects = apply_wire(&mut reducer, &mut decoder, frame.as_bytes());
+        let (work, alias_expansion) = query_effect(&effects);
+        assert!(alias_expansion);
+        assert_eq!(work.query().line, "gs ");
+        let generation = work.query().generation;
+
+        let replacement = reducer.apply_alias_expansion(
+            generation,
+            TextEdit {
+                range: 0..2,
+                replacement: "git status".into(),
+            },
+        );
+        assert!(matches!(
+            replacement.effects(),
+            [
+                SessionEffect::ClearOverlay,
+                SessionEffect::ReplaceBuffer(value),
+                SessionEffect::RequestBufferSync(_)
+            ] if value.as_str() == "git status " && value.cursor() == 11
+        ));
+        assert!(reducer.replacement_pending());
+        assert!(reducer.active_query().is_none());
+    }
+
+    #[test]
+    fn pasted_space_never_requests_alias_expansion() {
+        let (mut reducer, mut decoder) = ready();
+        let paste = reducer.route_input(b"\x1b[200~gs \x1b[201~");
+        assert_eq!(forwarded(paste.effects()), b"\x1b[200~gs \x1b[201~");
+        let nonce = paste
+            .effects()
+            .effects()
+            .iter()
+            .find_map(|effect| match effect {
+                SessionEffect::RequestBufferSync(nonce) => Some(nonce.get()),
+                _ => None,
+            })
+            .unwrap();
+        let frame = format!("probe-buffer:b:{nonce}:3:gs \0");
+        let effects = apply_wire(&mut reducer, &mut decoder, frame.as_bytes());
+        let (_, alias_expansion) = query_effect(&effects);
+        assert!(!alias_expansion);
+    }
+
+    #[test]
+    fn stale_or_cancelled_alias_expansion_is_ignored() {
+        let (mut reducer, mut decoder) = ready();
+        let generation = synchronize(&mut reducer, &mut decoder, b"gs ", "gs ", 3);
+        let edit = TextEdit {
+            range: 0..2,
+            replacement: "git status".into(),
+        };
+
+        assert!(
+            reducer
+                .apply_alias_expansion(generation.saturating_add(1), edit.clone())
+                .is_empty()
+        );
+        let _ = reducer.observe_shell_output();
+        assert!(reducer.apply_alias_expansion(generation, edit).is_empty());
+        assert!(!reducer.replacement_pending());
     }
 
     #[test]
@@ -2404,7 +2648,7 @@ mod tests {
             .effects()
             .iter()
             .find_map(|effect| match effect {
-                SessionEffect::StartQuery { mode, work } if *mode == SessionMode::History => {
+                SessionEffect::StartQuery { mode, work, .. } if *mode == SessionMode::History => {
                     Some(work.query().generation)
                 }
                 _ => None,

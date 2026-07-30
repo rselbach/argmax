@@ -1,9 +1,9 @@
 //! Panic containment and explicit rescue-shell recovery for interactive sessions.
 //!
-//! The boundary suppresses the process panic hook only for the protected thread,
-//! restores terminal state before performing diagnostic I/O, and leaves process
-//! creation to the caller. Rescue commands deliberately bypass shell startup
-//! files so a broken argmax integration cannot recurse during recovery.
+//! The boundary suppresses process panic output while the protected wrapper owns
+//! raw terminal state, restores terminal state before performing diagnostic I/O,
+//! and leaves process creation to the caller. Rescue commands deliberately bypass
+//! shell startup files so a broken argmax integration cannot recurse during recovery.
 //!
 //! Panic hooks are process-global. Boundary calls are serialized, and the
 //! executable runtime must not replace the process panic hook concurrently.
@@ -17,7 +17,7 @@ use std::io::{self, Write};
 use std::panic::{self, AssertUnwindSafe, PanicHookInfo};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
-use std::thread::{self, ThreadId};
+use std::thread;
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -460,10 +460,10 @@ where
             hook.restore();
             return CrashBoundaryOutcome::Completed(value);
         }
-        Ok(Err(failure)) => PanicSnapshot {
+        Ok(Err(failure)) => take_capture(&capture).unwrap_or_else(|| PanicSnapshot {
             failure: failure.description.into(),
             backtrace: capture_backtrace_safely(),
-        },
+        }),
         Err(payload) => {
             let incident =
                 take_capture(&capture).unwrap_or_else(|| snapshot_from_payload(payload.as_ref()));
@@ -546,10 +546,8 @@ struct ScopedPanicHook {
 impl ScopedPanicHook {
     fn install(capture: Arc<Mutex<Option<PanicSnapshot>>>) -> Self {
         let previous = Arc::new(Mutex::new(Some(panic::take_hook())));
-        let hook_previous = Arc::clone(&previous);
-        let owner = thread::current().id();
         panic::set_hook(Box::new(move |information| {
-            route_panic(information, owner, &capture, &hook_previous);
+            route_panic(information, &capture);
         }));
         Self {
             previous,
@@ -578,22 +576,14 @@ impl Drop for ScopedPanicHook {
     }
 }
 
-fn route_panic(
-    information: &PanicHookInfo<'_>,
-    owner: ThreadId,
-    capture: &Mutex<Option<PanicSnapshot>>,
-    previous: &Mutex<Option<Box<PanicHook>>>,
-) {
-    if thread::current().id() == owner {
-        let mut capture = recover_lock(capture);
-        if capture.is_none() {
-            *capture = Some(snapshot_from_hook(information));
-        }
-        return;
-    }
-
-    if let Some(previous) = recover_lock(previous).as_ref() {
-        previous(information);
+fn route_panic(information: &PanicHookInfo<'_>, capture: &Mutex<Option<PanicSnapshot>>) {
+    // Any argmax worker may panic while the owner thread has the terminal in
+    // raw mode. Capture the first incident without invoking a prior hook; the
+    // owner observes worker failure through its bounded channel/join path and
+    // completes terminal restoration before diagnostics are emitted.
+    let mut capture = recover_lock(capture);
+    if capture.is_none() {
+        *capture = Some(snapshot_from_hook(information));
     }
 }
 

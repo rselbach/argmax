@@ -611,6 +611,33 @@ impl InputRouter {
         })
     }
 
+    /// Replaces configurable bindings without discarding retained input bytes.
+    ///
+    /// A partial configurable sequence keeps the old bindings until its next
+    /// routing decision, so live configuration cannot reinterpret or lose an
+    /// already received prefix. Callers may retry after more input or the
+    /// standalone-Escape timeout resolves it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same bounded validation errors as [`Self::new`].
+    pub fn reconfigure(
+        &mut self,
+        toggle_mode: &[u8],
+        toggle_menu: &[u8],
+    ) -> Result<bool, InputRouterError> {
+        validate_binding(toggle_mode, ConfiguredInputAction::ToggleMode)?;
+        validate_binding(toggle_menu, ConfiguredInputAction::ToggleMenu)?;
+        if !self.sequence_prefix.is_empty() {
+            return Ok(false);
+        }
+        self.toggle_mode.clear();
+        self.toggle_mode.extend_from_slice(toggle_mode);
+        self.toggle_menu.clear();
+        self.toggle_menu.extend_from_slice(toggle_menu);
+        Ok(true)
+    }
+
     /// Routes at most [`MAX_ROUTE_BATCH_INPUT_BYTES`] bytes from `input`.
     ///
     /// Complete decisions are returned in byte-stream order. A possible Escape,
@@ -1123,6 +1150,21 @@ mod tests {
 
     fn router() -> InputRouter {
         InputRouter::new(CTRL_SPACE, CTRL_R).unwrap()
+    }
+
+    #[test]
+    fn live_binding_change_waits_for_a_retained_sequence_prefix() {
+        let mut router = InputRouter::new(b"\x1b[1;2P", CTRL_R).unwrap();
+        assert!(router.route(b"\x1b[1;").events().is_empty());
+        assert!(!router.reconfigure(CTRL_SPACE, b"\x1b[Z").unwrap());
+
+        let completed = router.route(b"2P");
+        assert_eq!(actions(completed.events()), [InputAction::ToggleMode]);
+        assert!(router.reconfigure(CTRL_SPACE, b"\x1b[Z").unwrap());
+        assert_eq!(
+            actions(router.route(b"\x1b[Z").events()),
+            [InputAction::ToggleMenu]
+        );
     }
 
     fn routed_bytes(events: &[RouteEvent]) -> Vec<u8> {

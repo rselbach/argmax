@@ -92,14 +92,14 @@ impl Settings {
     /// Validates all known settings and returns every responsible field.
     ///
     /// Keybindings are validated against their terminal byte sequences, including
-    /// protected controls, encoded aliases, and prefix conflicts. Incomplete
-    /// provider stanzas are allowed while AI is disabled, which permits a
-    /// commented template to be filled in incrementally.
+    /// protected controls, encoded aliases, and prefix conflicts. Optional AI
+    /// provider readiness is checked separately so an incomplete provider can
+    /// never prevent local completion from starting.
     ///
     /// # Errors
     ///
     /// Returns field-specific errors for unsupported schema versions, invalid
-    /// bounds, invalid keybinding names, or unusable enabled AI configuration.
+    /// bounds, invalid keybinding names, or malformed provider definitions.
     pub fn validate(&self) -> Result<(), ValidationErrors> {
         let mut errors = Vec::new();
 
@@ -173,8 +173,6 @@ impl Settings {
                 MAX_AI_PROVIDER_TIMEOUT_MS,
             );
         }
-
-        validate_ai_selection(&self.ai, &mut errors);
 
         if errors.is_empty() {
             Ok(())
@@ -383,6 +381,82 @@ pub struct Ai {
     pub min_interval_ms: u64,
     /// Named OpenAI-compatible provider definitions.
     pub providers: BTreeMap<String, AiProvider>,
+}
+
+/// Why enabled AI cannot safely issue provider requests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AiReadinessError {
+    /// No provider name is selected.
+    MissingProvider,
+    /// The selected provider name contains no non-whitespace text.
+    BlankProvider,
+    /// The selected provider has no matching configuration stanza.
+    UnknownProvider,
+    /// The selected provider has no usable endpoint.
+    MissingEndpoint,
+    /// The selected provider has no usable model.
+    MissingModel,
+}
+
+impl fmt::Display for AiReadinessError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingProvider => formatter.write_str("ai.provider is required"),
+            Self::BlankProvider => formatter.write_str("ai.provider must not be blank"),
+            Self::UnknownProvider => {
+                formatter.write_str("ai.provider has no matching provider configuration")
+            }
+            Self::MissingEndpoint => {
+                formatter.write_str("the selected AI provider endpoint is missing or blank")
+            }
+            Self::MissingModel => {
+                formatter.write_str("the selected AI provider model is missing or blank")
+            }
+        }
+    }
+}
+
+impl Error for AiReadinessError {}
+
+impl Ai {
+    /// Reports whether enabled AI has the minimum provider fields needed to
+    /// attempt a request. Disabled AI is always operationally ready.
+    ///
+    /// This is intentionally separate from [`Settings::validate`]: an
+    /// incomplete optional provider must not prevent local completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns a value-free, actionable reason when enabled AI is incomplete.
+    pub fn readiness(&self) -> Result<(), AiReadinessError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let Some(name) = self.provider.as_deref() else {
+            return Err(AiReadinessError::MissingProvider);
+        };
+        if name.trim().is_empty() {
+            return Err(AiReadinessError::BlankProvider);
+        }
+        let Some(provider) = self.providers.get(name) else {
+            return Err(AiReadinessError::UnknownProvider);
+        };
+        if provider
+            .endpoint
+            .as_deref()
+            .is_none_or(|endpoint| endpoint.trim().is_empty())
+        {
+            return Err(AiReadinessError::MissingEndpoint);
+        }
+        if provider
+            .model
+            .as_deref()
+            .is_none_or(|model| model.trim().is_empty())
+        {
+            return Err(AiReadinessError::MissingModel);
+        }
+        Ok(())
+    }
 }
 
 impl Default for Ai {
@@ -704,66 +778,6 @@ fn validate_keybindings(keybindings: &Keybindings, errors: &mut Vec<ValidationEr
     }
 }
 
-fn validate_ai_selection(ai: &Ai, errors: &mut Vec<ValidationError>) {
-    let Some(name) = ai.provider.as_deref() else {
-        if ai.enabled {
-            errors.push(ValidationError::new(
-                "ai.provider",
-                ValidationProblem::Missing,
-            ));
-        }
-        return;
-    };
-
-    if name.trim().is_empty() {
-        errors.push(ValidationError::new(
-            "ai.provider",
-            ValidationProblem::Blank,
-        ));
-        return;
-    }
-
-    if !ai.enabled {
-        return;
-    }
-
-    let Some(provider) = ai.providers.get(name) else {
-        errors.push(ValidationError::new(
-            "ai.provider",
-            ValidationProblem::UnknownProvider {
-                name: name.to_string(),
-            },
-        ));
-        return;
-    };
-
-    validate_required_text(
-        errors,
-        format!("ai.providers.{name}.endpoint"),
-        provider.endpoint.as_deref(),
-    );
-    validate_required_text(
-        errors,
-        format!("ai.providers.{name}.model"),
-        provider.model.as_deref(),
-    );
-}
-
-fn validate_required_text(
-    errors: &mut Vec<ValidationError>,
-    field: impl Into<String>,
-    value: Option<&str>,
-) {
-    let field = field.into();
-    match value {
-        None => errors.push(ValidationError::new(field, ValidationProblem::Missing)),
-        Some(value) if value.trim().is_empty() => {
-            errors.push(ValidationError::new(field, ValidationProblem::Blank));
-        }
-        Some(_) => {}
-    }
-}
-
 fn validate_inclusive(
     errors: &mut Vec<ValidationError>,
     field: impl Into<String>,
@@ -1033,7 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn abed_requires_a_complete_selected_provider_only_when_enabled() {
+    fn abed_keeps_incomplete_optional_ai_from_blocking_local_settings() {
         enum Case {
             DisabledIncomplete,
             MissingSelection,
@@ -1079,20 +1093,15 @@ mod tests {
                     .insert("greendale".to_string(), provider);
             }
 
-            let result = settings.validate();
-            if matches!(case, Case::DisabledIncomplete | Case::Complete) {
-                assert_eq!(result, Ok(()), "{label}");
-            } else {
-                let errors = result.expect_err(label);
-                assert!(!errors.errors().is_empty(), "{label}");
-                assert!(
-                    errors
-                        .errors()
-                        .iter()
-                        .all(|error| error.field.starts_with("ai.")),
-                    "{label}: {errors}"
-                );
-            }
+            assert_eq!(settings.validate(), Ok(()), "{label}");
+            let want = match case {
+                Case::DisabledIncomplete | Case::Complete => Ok(()),
+                Case::MissingSelection => Err(AiReadinessError::MissingProvider),
+                Case::UnknownSelection => Err(AiReadinessError::UnknownProvider),
+                Case::MissingEndpoint => Err(AiReadinessError::MissingEndpoint),
+                Case::BlankModel => Err(AiReadinessError::MissingModel),
+            };
+            assert_eq!(settings.ai.readiness(), want, "{label}");
         }
     }
 

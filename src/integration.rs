@@ -80,17 +80,13 @@ pub struct IntegrationCapabilities {
 ///
 /// Probe-based adapters announce `capability:unavailable` at runtime when the
 /// reserved sequence already has a user binding or installation fails.
-/// Bash command text is deliberately unavailable: PS0 cannot prove that a
-/// prior snapshot is the command submitted by a custom Return binding or a
-/// multiline editor action, so Bash completions must not feed exact learning.
+/// Bash uses the history entry added immediately before PS0 expansion. The
+/// generated adapter emits an unknown start instead when history did not
+/// advance, or when Bash normalized a multiline entry without `lithist`.
 #[must_use]
 pub const fn integration_capabilities(shell: Shell) -> IntegrationCapabilities {
     match shell {
-        Shell::Bash => IntegrationCapabilities {
-            buffer_sync: BufferSyncAdapter::ReservedProbe,
-            command_text: CommandTextAdapter::Unavailable,
-        },
-        Shell::Zsh | Shell::Fish => IntegrationCapabilities {
+        Shell::Bash | Shell::Zsh | Shell::Fish => IntegrationCapabilities {
             buffer_sync: BufferSyncAdapter::ReservedProbe,
             command_text: CommandTextAdapter::ExactPreexec,
         },
@@ -126,6 +122,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
     elif declare -F __argmax_emit >/dev/null ||
         declare -F __argmax_preexec >/dev/null ||
         declare -F __argmax_precmd >/dev/null ||
+        declare -F __argmax_postprompt >/dev/null ||
         declare -F __argmax_sync >/dev/null ||
         declare -F __argmax_control_apply >/dev/null ||
         declare -F __argmax_control_drain >/dev/null ||
@@ -134,13 +131,17 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
         [[ -n ${__ARGMAX_BASH_HOOKS+x} ||
            -n ${__ARGMAX_BASH_CAPABILITY+x} ||
            -n ${__ARGMAX_BASH_COMMAND_ACTIVE+x} ||
+           -n ${__ARGMAX_BASH_HISTORY_INDEX+x} ||
+           -n ${__ARGMAX_BASH_MULTILINE+x} ||
            -n ${__ARGMAX_BASH_PROBE+x} ||
            -n ${__ARGMAX_BASH_PROBE_NONCE+x} ||
            -n ${__ARGMAX_BASH_CONTROL_PENDING+x} ||
            -n ${__ARGMAX_BASH_CONTROL_DISCARDING+x} ||
            -n ${__ARGMAX_BASH_CONTROL_LAST_ID+x} ||
            ${PS0-} == *'__argmax_preexec'* ||
-           ${PROMPT_COMMAND[*]-} == *'__argmax_precmd'* ]]; then
+           ${PS2-} == *'__ARGMAX_BASH_MULTILINE'* ||
+           ${PROMPT_COMMAND[*]-} == *'__argmax_precmd'* ||
+           ${PROMPT_COMMAND[*]-} == *'__argmax_postprompt'* ]]; then
       if [[ ${ARGMAX_EVENT_FD-} =~ ^[0-9]+$ ]] &&
           (( 10#$ARGMAX_EVENT_FD >= 3 )); then
         printf '%s\0' capability:unavailable \
@@ -152,8 +153,12 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
         local argmax_ps0_set=0
         local argmax_ps0_value=
         local argmax_ps0_declaration
+        local argmax_ps2_set=0
+        local argmax_ps2_value=
+        local argmax_ps2_declaration
         local argmax_prompt_kind=unset
         local argmax_prompt_scalar=
+        local argmax_prompt_value=
         local argmax_prompt_declaration
         local -a argmax_prompt_indices=()
         local -a argmax_prompt_values=()
@@ -161,6 +166,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
         local argmax_vi_insert_attempted=0
         local argmax_vi_command_attempted=0
         local argmax_ps0_attempted=0
+        local argmax_ps2_attempted=0
         local argmax_prompt_attempted=0
         local argmax_index
         local argmax_restore_index
@@ -172,6 +178,14 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           fi
           argmax_ps0_set=1
           argmax_ps0_value=$PS0
+        fi
+        if argmax_ps2_declaration=$(builtin declare -p PS2 2>/dev/null); then
+          if [[ $argmax_ps2_declaration != 'declare -- PS2' &&
+                $argmax_ps2_declaration != 'declare -- PS2='* ]]; then
+            return 1
+          fi
+          argmax_ps2_set=1
+          argmax_ps2_value=$PS2
         fi
         if argmax_prompt_declaration=$(
             builtin declare -p PROMPT_COMMAND 2>/dev/null
@@ -194,6 +208,8 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
         fi
 
         if ! __ARGMAX_BASH_HOOKS=argmax-owned-bash-v1 ||
+            ! __ARGMAX_BASH_HISTORY_INDEX=0 ||
+            ! __ARGMAX_BASH_MULTILINE=0 ||
             ! __ARGMAX_BASH_PROBE=$'\e[argmax-sync~' ||
             ! __ARGMAX_BASH_PROBE_NONCE=0 ||
             ! __ARGMAX_BASH_CONTROL_PENDING= ||
@@ -215,9 +231,44 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
         }
 
         __argmax_preexec() {
+          local argmax_status=$?
           : argmax-owned-bash-v1
-          # PS0 cannot verify custom Return bindings or multiline submissions.
-          __argmax_emit command-start-unknown
+          local argmax_history_index=${HISTCMD-}
+          local argmax_history_output=
+          local argmax_command=
+          local argmax_exact=0
+
+          if [[ -o history &&
+                $argmax_history_index =~ ^[1-9][0-9]{0,17}$ &&
+                $__ARGMAX_BASH_HISTORY_INDEX =~ ^(0|[1-9][0-9]{0,17})$ ]] &&
+              (( 10#$argmax_history_index >
+                 10#$__ARGMAX_BASH_HISTORY_INDEX )) &&
+              { (( __ARGMAX_BASH_MULTILINE == 0 )) ||
+                builtin shopt -q lithist; }; then
+            argmax_history_output=$(
+              builtin fc -ln -0 2>/dev/null
+              argmax_fc_status=$?
+              builtin printf '\001%s' "$argmax_fc_status"
+            )
+            if [[ $argmax_history_output == *$'\0010' ]]; then
+              argmax_history_output=${argmax_history_output%$'\0010'}
+              if [[ $argmax_history_output == $'\t '*$'\n' ]]; then
+                argmax_command=${argmax_history_output#$'\t '}
+                argmax_command=${argmax_command%$'\n'}
+                if [[ -n $argmax_command &&
+                      ${#argmax_command} -le 16384 ]]; then
+                  argmax_exact=1
+                fi
+              fi
+            fi
+          fi
+
+          if (( argmax_exact )); then
+            __argmax_emit "command-start:$argmax_command"
+          else
+            __argmax_emit command-start-unknown
+          fi
+          return "$argmax_status"
         }
 
         __argmax_precmd() {
@@ -227,7 +278,16 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
             __argmax_emit "command-stop:$argmax_status"
             builtin unset __ARGMAX_BASH_COMMAND_ACTIVE
           fi
+          __argmax_emit "cwd:${PWD-}"
           __argmax_emit prompt-ready
+          return "$argmax_status"
+        }
+
+        __argmax_postprompt() {
+          local argmax_status=$?
+          : argmax-owned-bash-v1
+          __ARGMAX_BASH_HISTORY_INDEX=${HISTCMD-}
+          __ARGMAX_BASH_MULTILINE=0
           return "$argmax_status"
         }
 
@@ -472,6 +532,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
             (! builtin declare -F __argmax_emit >/dev/null ||
              ! builtin declare -F __argmax_preexec >/dev/null ||
              ! builtin declare -F __argmax_precmd >/dev/null ||
+             ! builtin declare -F __argmax_postprompt >/dev/null ||
              ! builtin declare -F __argmax_sync >/dev/null ||
              ! builtin declare -F __argmax_control_apply >/dev/null ||
              ! builtin declare -F __argmax_control_drain >/dev/null ||
@@ -510,13 +571,28 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
             argmax_install_ok=0
         fi
         if (( argmax_install_ok )); then
+          argmax_ps2_attempted=1
+          # Mark parser continuations without changing the visible prompt.
+          # shellcheck disable=SC2016 # deliberately deferred to Bash
+          PS2=${PS2-}'${__ARGMAX_BASH_HOOKS:$((__ARGMAX_BASH_MULTILINE=1)):0}' ||
+            argmax_install_ok=0
+        fi
+        if (( argmax_install_ok )); then
           argmax_prompt_attempted=1
           if [[ $argmax_prompt_kind == array ]]; then
-            PROMPT_COMMAND=(__argmax_precmd "${PROMPT_COMMAND[@]}") ||
+            PROMPT_COMMAND=(
+              __argmax_precmd
+              "${PROMPT_COMMAND[@]}"
+              __argmax_postprompt
+            ) ||
               argmax_install_ok=0
           else
-            # shellcheck disable=SC2128,SC2178 # scalar form
-            PROMPT_COMMAND="__argmax_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ||
+            argmax_prompt_value=__argmax_precmd
+            # shellcheck disable=SC2128 # scalar form
+            argmax_prompt_value+=${PROMPT_COMMAND:+;$PROMPT_COMMAND}
+            argmax_prompt_value+=$'\n__argmax_postprompt'
+            # shellcheck disable=SC2178 # scalar form
+            PROMPT_COMMAND=$argmax_prompt_value ||
               argmax_install_ok=0
           fi
         fi
@@ -546,6 +622,13 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
             unset) builtin unset PROMPT_COMMAND 2>/dev/null || : ;;
           esac
         fi
+        if (( argmax_ps2_attempted )); then
+          if (( argmax_ps2_set )); then
+            PS2=$argmax_ps2_value
+          else
+            builtin unset PS2 2>/dev/null || :
+          fi
+        fi
         if (( argmax_ps0_attempted )); then
           if (( argmax_ps0_set )); then
             PS0=$argmax_ps0_value
@@ -563,10 +646,11 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           builtin bind -m emacs-standard -r "$__ARGMAX_BASH_PROBE" \
             2>/dev/null || :
         builtin unset -f __argmax_emit __argmax_preexec __argmax_precmd \
-          __argmax_sync __argmax_control_apply __argmax_control_drain \
-          __argmax_probe_is_unbound
+          __argmax_postprompt __argmax_sync __argmax_control_apply \
+          __argmax_control_drain __argmax_probe_is_unbound
         builtin unset __ARGMAX_BASH_HOOKS __ARGMAX_BASH_CAPABILITY \
-          __ARGMAX_BASH_COMMAND_ACTIVE __ARGMAX_BASH_PROBE \
+          __ARGMAX_BASH_COMMAND_ACTIVE __ARGMAX_BASH_HISTORY_INDEX \
+          __ARGMAX_BASH_MULTILINE __ARGMAX_BASH_PROBE \
           __ARGMAX_BASH_PROBE_NONCE __ARGMAX_BASH_CONTROL_PENDING \
           __ARGMAX_BASH_CONTROL_DISCARDING __ARGMAX_BASH_CONTROL_LAST_ID
         return 1
@@ -589,6 +673,8 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
             *argmax-owned-bash-v1* &&
           $(declare -f __argmax_precmd 2>/dev/null) == \
             *argmax-owned-bash-v1* &&
+          $(declare -f __argmax_postprompt 2>/dev/null) == \
+            *argmax-owned-bash-v1* &&
           $(declare -f __argmax_sync 2>/dev/null) == \
             *argmax-owned-bash-v1* &&
           $(declare -f __argmax_control_apply 2>/dev/null) == \
@@ -598,10 +684,14 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           $(declare -f __argmax_probe_is_unbound 2>/dev/null) == \
             *argmax-owned-bash-v1* &&
           ${__ARGMAX_BASH_COMMAND_ACTIVE-} == '' &&
+          ${__ARGMAX_BASH_HISTORY_INDEX-} =~ ^[0-9]+$ &&
+          ${__ARGMAX_BASH_MULTILINE-} == 0 &&
           ${__ARGMAX_BASH_CONTROL_DISCARDING-} =~ ^[01]$ &&
           ${__ARGMAX_BASH_CONTROL_LAST_ID-} =~ ^[0-9]+$ &&
           ${PS0-} == *'__argmax_preexec'* &&
+          ${PS2-} == *'__ARGMAX_BASH_MULTILINE'* &&
           ${PROMPT_COMMAND[*]-} == *'__argmax_precmd'* &&
+          ${PROMPT_COMMAND[*]-} == *'__argmax_postprompt'* &&
           $(bind -m emacs-standard -X 2>/dev/null) == \
             *argmax-sync~*__argmax_sync* &&
           $(bind -m vi-insert -X 2>/dev/null) == \
@@ -709,6 +799,7 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
           __argmax_emit "command-stop:$argmax_status"
           __ARGMAX_ZSH_COMMAND_ACTIVE=0
         fi
+        __argmax_emit "cwd:${PWD-}"
         __argmax_emit prompt-ready
         return $argmax_status
       }
@@ -1161,6 +1252,7 @@ if status is-interactive; and test -t 0; and test -t 1
     function __argmax_prompt --on-event fish_prompt
       set -l __argmax_fish_owner argmax-owned-fish-v1
       set -g __ARGMAX_FISH_COMMAND_ACTIVE 0
+      __argmax_emit "cwd:$PWD"
       __argmax_emit prompt-ready
     end
 
@@ -2140,10 +2232,13 @@ mod tests {
         }
 
         assert!(!init_script(Shell::Bash).contains("$BASH_COMMAND"));
-        assert!(!init_script(Shell::Bash).contains("command-start:"));
+        assert!(init_script(Shell::Bash).contains("command-start:$argmax_command"));
         assert!(!init_script(Shell::Bash).contains("__ARGMAX_BASH_SUBMITTED"));
         assert!(!init_script(Shell::Bash).contains("__ARGMAX_BASH_READY"));
         assert!(init_script(Shell::Bash).contains("__ARGMAX_BASH_COMMAND_ACTIVE"));
+        assert!(init_script(Shell::Bash).contains("__ARGMAX_BASH_HISTORY_INDEX"));
+        assert!(init_script(Shell::Bash).contains("builtin fc -ln -0"));
+        assert!(init_script(Shell::Bash).contains("builtin shopt -q lithist"));
         assert!(init_script(Shell::Bash).contains("command-start-unknown"));
         assert!(init_script(Shell::Bash).contains("BASH_VERSINFO[1] < 4"));
         assert!(init_script(Shell::Bash).contains("probe-buffer:$argmax_unit:"));
@@ -2175,7 +2270,7 @@ mod tests {
             integration_capabilities(Shell::Bash),
             IntegrationCapabilities {
                 buffer_sync: BufferSyncAdapter::ReservedProbe,
-                command_text: CommandTextAdapter::Unavailable,
+                command_text: CommandTextAdapter::ExactPreexec,
             }
         );
         assert_eq!(
@@ -2203,6 +2298,7 @@ mod tests {
         assert!(bash.contains("__argmax_probe_is_unbound vi-command"));
         assert!(bash.contains("argmax_prompt_attempted"));
         assert!(bash.contains("argmax_ps0_attempted"));
+        assert!(bash.contains("argmax_ps2_attempted"));
         assert!(bash.contains("argmax_vi_command_attempted"));
 
         let zsh = init_script(Shell::Zsh);
@@ -2397,6 +2493,96 @@ mod tests {
             output.status,
             String::from_utf8_lossy(&output.stderr)
         );
+        Some(
+            events
+                .split(|byte| *byte == 0)
+                .filter(|frame| !frame.is_empty())
+                .map(<[u8]>::to_vec)
+                .collect(),
+        )
+    }
+
+    fn bash_command_text_events() -> Option<Vec<Vec<u8>>> {
+        if !expect_is_available() || !shell_is_available("bash") {
+            return None;
+        }
+        if !Command::new("bash")
+            .args([
+                "-c",
+                "(( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) ))",
+            ])
+            .status()
+            .expect("inspect Bash version")
+            .success()
+        {
+            return None;
+        }
+
+        let directory = HarnessDirectory::create(Shell::Bash);
+        let init_path = directory.0.join("init");
+        let events_path = directory.0.join("events");
+        fs::write(&init_path, init_script(Shell::Bash)).expect("write Bash init");
+        let expect_program = r#"
+          set timeout 10
+          log_user 0
+          spawn sh -c {exec 3>"$ARGMAX_TEST_EVENTS"; exec bash --noprofile --norc -i}
+          send -- "HISTFILE=/dev/null; history -c; HISTCONTROL=; HISTIGNORE=; "
+          send -- "PS1='ARGMAX''> '; PS2='MORE''> '; "
+          send -- "source \"$env(ARGMAX_TEST_INIT)\"\r"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 2 }
+            eof { exit 3 }
+          }
+          send -- {printf '%s\n' "Troy's 世界"}
+          send -- "\r"
+          expect "ARGMAX> "
+          send -- "HISTCONTROL=ignorespace\r"
+          expect "ARGMAX> "
+          send -- " echo ignored\r"
+          expect "ARGMAX> "
+          send -- "set +o history\r"
+          expect "ARGMAX> "
+          send -- "echo disabled\r"
+          expect "ARGMAX> "
+          send -- "set -o history\r"
+          expect "ARGMAX> "
+          send -- "shopt -u lithist\r"
+          expect "ARGMAX> "
+          send -- "if true; then\r"
+          expect "MORE> "
+          send -- "  printf default\r"
+          expect "MORE> "
+          send -- "fi\r"
+          expect "ARGMAX> "
+          send -- "shopt -s lithist\r"
+          expect "ARGMAX> "
+          send -- "if true; then\r"
+          expect "MORE> "
+          send -- "  printf exact\r"
+          expect "MORE> "
+          send -- "fi\r"
+          expect "ARGMAX> "
+          send -- "exit\r"
+          expect eof
+        "#;
+        let output = Command::new("expect")
+            .args(["-c", expect_program])
+            .env("ARGMAX_PRIVATE_SESSION", "1")
+            .env("ARGMAX_EVENT_FD", "3")
+            .env("ARGMAX_TEST_EVENTS", &events_path)
+            .env("ARGMAX_TEST_INIT", &init_path)
+            .env("LC_ALL", "en_US.UTF-8")
+            .output()
+            .expect("run Bash command-text harness");
+        assert!(
+            output.status.success(),
+            "Bash command-text harness failed with {}:\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let events = fs::read(&events_path).unwrap_or_default();
         Some(
             events
                 .split(|byte| *byte == 0)
@@ -2797,19 +2983,24 @@ mod tests {
         fs::write(
             &check_path,
             r#"PS0=user-ps0
+PS2=user-ps2
 PROMPT_COMMAND=:
 readonly "$ARGMAX_TEST_READONLY"
 source "$ARGMAX_TEST_INIT"
 if test "$PS0" = user-ps0 &&
+    test "$PS2" = user-ps2 &&
     test "$PROMPT_COMMAND" = : &&
     test -z "${__ARGMAX_BASH_HOOKS+x}" &&
     test -z "${__ARGMAX_BASH_CAPABILITY+x}" &&
     test -z "${__ARGMAX_BASH_COMMAND_ACTIVE+x}" &&
+    test -z "${__ARGMAX_BASH_HISTORY_INDEX+x}" &&
+    test -z "${__ARGMAX_BASH_MULTILINE+x}" &&
     test -z "${__ARGMAX_BASH_PROBE+x}" &&
     test -z "${__ARGMAX_BASH_PROBE_NONCE+x}" &&
     ! declare -F __argmax_emit >/dev/null &&
     ! declare -F __argmax_preexec >/dev/null &&
     ! declare -F __argmax_precmd >/dev/null &&
+    ! declare -F __argmax_postprompt >/dev/null &&
     ! declare -F __argmax_sync >/dev/null &&
     ! declare -F __argmax_probe_is_unbound >/dev/null &&
     ! declare -F __argmax_install >/dev/null &&
@@ -2953,7 +3144,7 @@ fi
         let mut active = false;
         let mut stops = 0;
         for frame in events {
-            if frame == b"command-start-unknown" {
+            if frame == b"command-start-unknown" || frame.starts_with(b"command-start:") {
                 assert!(!active, "duplicate Bash command start in {events:?}");
                 active = true;
             } else if frame.starts_with(b"command-stop:") {
@@ -2966,7 +3157,7 @@ fi
     }
 
     #[test]
-    fn bash_live_harness_reports_correlated_probe_and_unknown_start() {
+    fn bash_live_harness_reports_correlated_probe_and_exact_start() {
         let Some(events) = live_shell_events(Shell::Bash) else {
             return;
         };
@@ -2983,9 +3174,56 @@ fi
                 && frame.windows(b":1:".len()).any(|window| window == b":1:")
                 && frame.ends_with(b":echo hi")
         }));
-        assert!(events.iter().any(|frame| frame == b"command-start-unknown"));
-        assert!(!events.iter().any(|frame| frame == b"command-start:echo hi"));
+        assert!(events.iter().any(|frame| frame == b"command-start:echo hi"));
         assert!(events.iter().any(|frame| frame == b"command-stop:0"));
+    }
+
+    #[test]
+    fn bash_attributes_only_exact_history_entries() {
+        let Some(events) = bash_command_text_events() else {
+            return;
+        };
+        assert_bash_lifecycle_is_paired(&events);
+        assert!(
+            events
+                .iter()
+                .any(|frame| frame == "command-start:printf '%s\\n' \"Troy's 世界\"".as_bytes()),
+            "quoted Unicode command was not attributed exactly: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .filter(|frame| frame.as_slice() == b"command-start-unknown")
+                .count()
+                >= 4,
+            "ignored, disabled, and normalized history was attributed: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|frame| frame == b"command-start: echo ignored"),
+            "HISTCONTROL-filtered command was attributed"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|frame| frame == b"command-start:echo disabled"),
+            "history-disabled command was attributed"
+        );
+        assert!(
+            !events.iter().any(|frame| {
+                frame.starts_with(b"command-start:")
+                    && frame
+                        .windows(b"printf default".len())
+                        .any(|window| window == b"printf default")
+            }),
+            "cmdhist-normalized multiline command was attributed"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|frame| { frame == b"command-start:if true; then\n  printf exact\nfi" })
+        );
     }
 
     #[test]
@@ -3156,7 +3394,7 @@ fi
 
     #[test]
     fn bash_readonly_prompt_variables_fail_before_any_mutation() {
-        for variable in ["PS0", "PROMPT_COMMAND"] {
+        for variable in ["PS0", "PS2", "PROMPT_COMMAND"] {
             let Some(events) = bash_readonly_harness(variable) else {
                 return;
             };

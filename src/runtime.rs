@@ -4,31 +4,54 @@
 //! work is cancelled immediately until an application-level dispatcher is
 //! wired; ordinary input and child output remain byte-for-byte transparent.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::io::{self, Read};
 use std::os::fd::{AsRawFd, RawFd};
+use std::panic::{self, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use directories::BaseDirs;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::unistd::isatty;
 
-use crate::config::{Settings, Shell};
+use crate::ai_lifecycle::{CancellationReason, SessionId as AiSessionId};
+use crate::completion::{CompletionQuery, ProviderBatch, Suggestion};
+use crate::config::{Mode, Settings, Shell};
+use crate::coordinator::BatchOutcome;
+use crate::history::HistoryFormat;
 use crate::keybindings::KeybindingAction;
+use crate::learning::CommandOutcome;
+use crate::learning_store::LearningStore;
+use crate::overlay::{OverlayOptions, OverlayRenderer, OverlayRequest, RenderTransaction};
+use crate::providers::{ShellKind as ProviderShellKind, alias_config_paths};
 use crate::pty::{
     ChildExit, ForegroundState, ForwardSignal, IntegrationRead, PrivateSessionId, PtyClose,
     PtyIntegration, PtyRead, PtyReadError, PtyReader, PtySession, PtySpawnRequest, PtyStartup,
-    ShellKind, ShellSelectionRequest, SignalEvent, SignalEvents, select_shell,
+    SelectedShell, ShellKind, ShellSelectionRequest, SignalEvent, SignalEvents, select_shell,
 };
+use crate::reload::{ConfigReloader, RELOAD_ACK_PREFIX, ReloadChange, ReloadPoll};
+use crate::runtime_ai::{
+    AI_COMPLETION_PROVIDER, AiCompletionDispatcher, AiCompletionOptions, MAX_AI_DRAIN_BATCHES,
+};
+use crate::runtime_completion::{
+    HistorySource, LOCAL_COMPLETION_PROVIDER, LocalCompletionDispatcher, LocalCompletionOptions,
+    MAX_ALIAS_EXPANSION_DRAIN, MAX_COMPLETION_DRAIN_BATCHES,
+};
+use crate::runtime_update::{RuntimeUpdateOptions, RuntimeUpdateWorker};
+use crate::screen::{ScreenObserver, TerminalSize};
 use crate::session::{EffectBatch, SessionEffect, SessionReducer};
 use crate::shell_control::{ControlRequestId, ReplacementControl};
 use crate::shell_events::{
-    DecodedFrame, ForegroundCommandState, SYNC_PROBE_SEQUENCE, ShellEventDecoder, StreamEpoch,
+    DecodedFrame, ForegroundCommandState, ReloadRequest, SYNC_PROBE_SEQUENCE, ShellEventDecoder,
+    StateUpdate, StreamEpoch,
 };
+use crate::state::{LastMode, RuntimeStateStore};
 use crate::terminal::{SerializedOutput, TerminalDimensions, TerminalGuard};
 
 const INPUT_CHUNK_BYTES: usize = 4 * 1024;
@@ -38,6 +61,7 @@ const MAX_PENDING_WRITE_BYTES: usize = 512 * 1024;
 const IDLE_POLL: Duration = Duration::from_millis(1);
 const STANDALONE_ESCAPE_TIMEOUT: Duration = Duration::from_millis(25);
 const MAX_DRAIN_PER_TICK: usize = 64;
+const COMPLETION_PROVIDERS: [&str; 2] = [LOCAL_COMPLETION_PROVIDER, AI_COMPLETION_PROVIDER];
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -107,6 +131,12 @@ impl fmt::Display for RuntimeError {
 
 impl Error for RuntimeError {}
 
+/// Optional content-safe diagnostic destination for isolated runtime workers.
+pub trait RuntimeDiagnosticSink {
+    /// Records one sanitized component event without affecting the session.
+    fn record(&self, component: &'static str, message: &str);
+}
+
 /// Runs one supported shell under the transparent interactive wrapper.
 ///
 /// Shell selection applies CLI, documented environment, resolved
@@ -121,6 +151,71 @@ pub fn run_interactive(
     settings: &Settings,
     cli_shell: Option<Shell>,
 ) -> Result<ChildExit, RuntimeError> {
+    run_interactive_inner(settings, cli_shell, None, None)
+}
+
+/// Runs one supported shell with automatic and explicit live configuration.
+///
+/// The reloader's initial validated snapshot selects runtime behavior. Later
+/// generations update session settings without replacing the shell process or
+/// its working directory.
+///
+/// # Errors
+///
+/// Returns the same bounded failures as [`run_interactive`].
+pub fn run_interactive_with_reloader(
+    reloader: ConfigReloader,
+    cli_shell: Option<Shell>,
+) -> Result<ChildExit, RuntimeError> {
+    let initial = reloader.shared_settings().snapshot();
+    run_interactive_inner(initial.settings(), cli_shell, Some(reloader), None)
+}
+
+/// Runs an interactive session while reporting sanitized worker failures.
+///
+/// # Errors
+///
+/// Returns the same bounded failures as [`run_interactive_with_reloader`].
+pub fn run_interactive_with_diagnostics(
+    reloader: ConfigReloader,
+    cli_shell: Option<Shell>,
+    diagnostics: &dyn RuntimeDiagnosticSink,
+) -> Result<ChildExit, RuntimeError> {
+    let initial = reloader.shared_settings().snapshot();
+    run_interactive_inner(
+        initial.settings(),
+        cli_shell,
+        Some(reloader),
+        Some(diagnostics),
+    )
+}
+
+fn run_interactive_inner(
+    settings: &Settings,
+    cli_shell: Option<Shell>,
+    reloader: Option<ConfigReloader>,
+    diagnostics: Option<&dyn RuntimeDiagnosticSink>,
+) -> Result<ChildExit, RuntimeError> {
+    run_prepared_runtime(prepare_runtime(settings, cli_shell, reloader)?, diagnostics)
+}
+
+struct PreparedRuntime {
+    settings: Settings,
+    keybindings: crate::keybindings::ResolvedKeybindings,
+    dimensions: TerminalDimensions,
+    working_directory: PathBuf,
+    selected_shell: SelectedShell,
+    reloader: Option<ConfigReloader>,
+    private_session: PrivateSessionId,
+    ai_session: AiSessionId,
+    initial_mode: crate::session::SessionMode,
+}
+
+fn prepare_runtime(
+    settings: &Settings,
+    cli_shell: Option<Shell>,
+    reloader: Option<ConfigReloader>,
+) -> Result<PreparedRuntime, RuntimeError> {
     settings
         .validate()
         .map_err(|error| RuntimeError::Configuration(error.to_string()))?;
@@ -141,7 +236,37 @@ pub fn run_interactive(
         settings.core.shell.map(shell_kind),
     ))
     .map_err(|error| RuntimeError::Setup(error.to_string()))?;
-    let private_session = private_session_id()?;
+    let (private_session, ai_session) = session_identity()?;
+    let initial_mode = initial_session_mode(settings);
+    Ok(PreparedRuntime {
+        settings: settings.clone(),
+        keybindings,
+        dimensions,
+        working_directory,
+        selected_shell,
+        reloader,
+        private_session,
+        ai_session,
+        initial_mode,
+    })
+}
+
+fn run_prepared_runtime(
+    prepared: PreparedRuntime,
+    diagnostics: Option<&dyn RuntimeDiagnosticSink>,
+) -> Result<ChildExit, RuntimeError> {
+    let PreparedRuntime {
+        settings,
+        keybindings,
+        dimensions,
+        working_directory,
+        selected_shell,
+        reloader,
+        private_session,
+        ai_session,
+        initial_mode,
+    } = prepared;
+    let selected_shell_kind = selected_shell.kind();
 
     let mut startup =
         PtyStartup::acquire().map_err(|error| RuntimeError::Setup(error.to_string()))?;
@@ -166,13 +291,15 @@ pub fn run_interactive(
     let integration = session
         .take_integration()
         .map_err(|error| RuntimeError::Setup(error.to_string()))?;
-    let mut reducer = SessionReducer::new(
+    let services = spawn_runtime_services(selected_shell_kind, &settings, ai_session);
+    let mut reducer = SessionReducer::new_with_mode(
         StreamEpoch::INITIAL,
         keybindings.binding(KeybindingAction::ToggleMode).sequence(),
         keybindings.binding(KeybindingAction::ToggleMenu).sequence(),
-        std::iter::empty(),
+        COMPLETION_PROVIDERS,
         usize::from(settings.ui.max_suggestions),
         working_directory,
+        initial_mode,
     )
     .map_err(|error| RuntimeError::Setup(error.to_string()))?;
 
@@ -180,18 +307,43 @@ pub fn run_interactive(
     let reader_stop = Arc::new(AtomicBool::new(false));
     let (output_sender, output_receiver) = mpsc::sync_channel(OUTPUT_CHANNEL_CAPACITY);
     let reader_thread = spawn_reader(reader, output_sender, Arc::clone(&reader_stop))?;
-    let output = terminal.output();
-    let mut driver = SessionDriver::new(integration, signals, output_receiver);
-
-    let result = drive_session(
-        &mut session,
-        &mut driver,
-        &mut reducer,
-        &output,
-        &mut terminal,
-        &mut input_flags,
+    let mut driver = SessionDriver::new(
+        DriverTransport {
+            integration,
+            signals,
+            output_receiver,
+            output: terminal.output(),
+        },
+        InitialOverlay {
+            screen_size: TerminalSize::new(dimensions.size().cols, dimensions.size().rows)
+                .map_err(|error| RuntimeError::Setup(error.to_string()))?,
+            options: OverlayOptions::from_ui(settings.ui),
+            footer_hint: footer_hint(&keybindings),
+        },
+        services,
     );
+    let mut live_configuration = LiveConfiguration::new(settings, reloader);
 
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        drive_session(
+            &mut session,
+            &mut driver,
+            &mut reducer,
+            &mut terminal,
+            &mut input_flags,
+            &mut live_configuration,
+            diagnostics,
+        )
+    }));
+
+    let overlay_result = if result.is_ok() {
+        driver.clear_overlay()
+    } else {
+        driver.clear_overlay_after_failure()
+    };
+    if let Some(ai) = driver.ai.as_ref() {
+        ai.cancel(CancellationReason::SessionExit);
+    }
     reader_stop.store(true, Ordering::Release);
     drop(session);
     let reader_result = reader_thread
@@ -202,11 +354,47 @@ pub fn run_interactive(
         .restore()
         .map_err(|error| RuntimeError::Restore(error.to_string()));
 
-    let exit = result?;
-    reader_result?;
-    flags_result?;
-    terminal_result?;
-    Ok(exit)
+    finish_runtime(
+        result,
+        overlay_result,
+        reader_result,
+        flags_result,
+        terminal_result,
+    )
+}
+
+fn finish_runtime(
+    result: thread::Result<Result<ChildExit, RuntimeError>>,
+    overlay_result: Result<(), RuntimeError>,
+    reader_result: Result<(), RuntimeError>,
+    flags_result: Result<(), RuntimeError>,
+    terminal_result: Result<(), RuntimeError>,
+) -> Result<ChildExit, RuntimeError> {
+    match result {
+        Ok(result) => {
+            let exit = result?;
+            overlay_result?;
+            reader_result?;
+            flags_result?;
+            terminal_result?;
+            Ok(exit)
+        }
+        Err(payload) => {
+            drop(overlay_result);
+            drop(reader_result);
+            drop(flags_result);
+            drop(terminal_result);
+            panic::resume_unwind(payload);
+        }
+    }
+}
+
+fn footer_hint(keybindings: &crate::keybindings::ResolvedKeybindings) -> String {
+    format!(
+        "{} history  {} menu  Tab insert  Esc hide",
+        keybindings.footer_hint(KeybindingAction::ToggleMode),
+        keybindings.footer_hint(KeybindingAction::ToggleMenu)
+    )
 }
 
 fn validate_stdio_ttys() -> Result<(), RuntimeError> {
@@ -227,6 +415,127 @@ const fn shell_kind(shell: Shell) -> ShellKind {
     }
 }
 
+const fn provider_shell_kind(shell: ShellKind) -> ProviderShellKind {
+    match shell {
+        ShellKind::Bash => ProviderShellKind::Bash,
+        ShellKind::Zsh => ProviderShellKind::Zsh,
+        ShellKind::Fish => ProviderShellKind::Fish,
+    }
+}
+
+fn local_completion_options(
+    shell: ProviderShellKind,
+    settings: Settings,
+    shared_settings: Option<crate::reload::SharedSettings>,
+) -> LocalCompletionOptions {
+    let mut options = LocalCompletionOptions::new(
+        shell,
+        settings,
+        std::env::var_os("PATH").unwrap_or_default(),
+    )
+    .with_environment_names(std::env::vars_os().filter_map(|(name, _)| name.into_string().ok()));
+    if let Some(shared_settings) = shared_settings {
+        options = options.with_shared_settings(shared_settings);
+    }
+    if let Some(base) = BaseDirs::new() {
+        let home = base.home_dir();
+        let alias_paths = alias_config_paths(
+            shell,
+            home,
+            std::env::var_os("ZDOTDIR").as_deref(),
+            std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+        );
+        options = options
+            .with_home_directory(home)
+            .with_alias_paths(alias_paths)
+            .with_history(history_source(shell, home));
+    }
+    if let Ok(store) = LearningStore::discover() {
+        options = options.with_learning_store(store);
+    }
+    options
+}
+
+fn spawn_local_completion(
+    shell: ProviderShellKind,
+    settings: Settings,
+    shared_settings: Option<crate::reload::SharedSettings>,
+) -> Option<LocalCompletionDispatcher> {
+    LocalCompletionDispatcher::spawn(local_completion_options(shell, settings, shared_settings))
+        .ok()
+}
+
+fn spawn_ai_completion(
+    shell: ShellKind,
+    settings: Settings,
+    shared_settings: Option<crate::reload::SharedSettings>,
+    session: AiSessionId,
+) -> Option<AiCompletionDispatcher> {
+    let mut options = AiCompletionOptions::new(shell.as_str(), settings).with_session_id(session);
+    if let Some(shared_settings) = shared_settings {
+        options = options.with_shared_settings(shared_settings);
+    }
+    AiCompletionDispatcher::spawn(options).ok()
+}
+
+fn spawn_runtime_updater(
+    settings: &Settings,
+    shared_settings: Option<crate::reload::SharedSettings>,
+) -> Option<RuntimeUpdateWorker> {
+    let mut options = RuntimeUpdateOptions::discover(settings.updater).ok()?;
+    if let Some(shared_settings) = shared_settings {
+        options = options.with_shared_settings(shared_settings);
+    }
+    RuntimeUpdateWorker::spawn(options).ok()
+}
+
+fn spawn_runtime_services(
+    shell: ShellKind,
+    settings: &Settings,
+    session: AiSessionId,
+) -> RuntimeServices {
+    RuntimeServices {
+        completion: spawn_local_completion(provider_shell_kind(shell), settings.clone(), None),
+        ai: spawn_ai_completion(shell, settings.clone(), None, session),
+        updater: spawn_runtime_updater(settings, None),
+        persist_mode: settings.core.mode == Mode::Last,
+    }
+}
+
+fn history_source(shell: ProviderShellKind, home: &Path) -> HistorySource {
+    match shell {
+        ProviderShellKind::Bash => HistorySource::new(
+            configured_history_path(home, ".bash_history"),
+            HistoryFormat::Bash,
+        ),
+        ProviderShellKind::Zsh => HistorySource::new(
+            configured_history_path(home, ".zsh_history"),
+            HistoryFormat::Zsh,
+        ),
+        ProviderShellKind::Fish => {
+            let data_home = std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .unwrap_or_else(|| home.join(".local/share"));
+            HistorySource::new(data_home.join("fish/fish_history"), HistoryFormat::Fish)
+        }
+    }
+}
+
+fn configured_history_path(home: &Path, fallback: &str) -> PathBuf {
+    std::env::var_os("HISTFILE")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(fallback))
+}
+
+fn unix_seconds_now() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+}
+
 fn environment_shell_override() -> Result<Option<ShellKind>, RuntimeError> {
     let Some(value) = std::env::var_os(crate::pty::ENV_SHELL_OVERRIDE) else {
         return Ok(None);
@@ -239,10 +548,35 @@ fn environment_shell_override() -> Result<Option<ShellKind>, RuntimeError> {
     }
 }
 
-fn private_session_id() -> Result<PrivateSessionId, RuntimeError> {
+fn session_identity() -> Result<(PrivateSessionId, AiSessionId), RuntimeError> {
     let sequence = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
-    PrivateSessionId::new(format!("argmax-{}-{sequence}", std::process::id()))
-        .map_err(|error| RuntimeError::Setup(error.to_string()))
+    let private = PrivateSessionId::new(format!("argmax-{}-{sequence}", std::process::id()))
+        .map_err(|error| RuntimeError::Setup(error.to_string()))?;
+    Ok((private, AiSessionId::new(sequence)))
+}
+
+fn initial_session_mode(settings: &Settings) -> crate::session::SessionMode {
+    let last = (settings.core.mode == Mode::Last)
+        .then(|| {
+            RuntimeStateStore::discover()
+                .and_then(|store| store.load())
+                .ok()
+                .and_then(|loaded| loaded.state.last_mode())
+        })
+        .flatten();
+    configured_initial_mode(settings.core.mode, last)
+}
+
+const fn configured_initial_mode(
+    configured: Mode,
+    last: Option<LastMode>,
+) -> crate::session::SessionMode {
+    match (configured, last) {
+        (Mode::History, _) | (Mode::Last, Some(LastMode::History)) => {
+            crate::session::SessionMode::History
+        }
+        (Mode::Spec | Mode::Last, _) => crate::session::SessionMode::Spec,
+    }
 }
 
 struct NonblockingInput {
@@ -424,6 +758,87 @@ struct SessionDriver {
     input_state: InputState,
     child_exit: Option<ChildExit>,
     escape_deadline: Option<Instant>,
+    reload_request: Option<ReloadRequest>,
+    output: SerializedOutput<io::Stdout>,
+    screen: ScreenObserver,
+    renderer: OverlayRenderer,
+    overlay_options: OverlayOptions,
+    footer_hint: String,
+    completion: Option<LocalCompletionDispatcher>,
+    ai: Option<AiCompletionDispatcher>,
+    ai_configured: bool,
+    updater: Option<RuntimeUpdateWorker>,
+    persist_mode: bool,
+    local_ranking: Option<LocalRankingSnapshot>,
+    worker_diagnostics: WorkerDiagnosticState,
+}
+
+struct DriverTransport {
+    integration: PtyIntegration,
+    signals: SignalEvents,
+    output_receiver: mpsc::Receiver<ReaderMessage>,
+    output: SerializedOutput<io::Stdout>,
+}
+
+struct RuntimeServices {
+    completion: Option<LocalCompletionDispatcher>,
+    ai: Option<AiCompletionDispatcher>,
+    updater: Option<RuntimeUpdateWorker>,
+    persist_mode: bool,
+}
+
+#[derive(Default)]
+struct WorkerDiagnosticState {
+    completion_unavailable_reported: bool,
+    ai_unavailable_reported: bool,
+    updater_unavailable_reported: bool,
+    learning_failures: u64,
+    update_network_failures: u64,
+    update_persistence_failures: u64,
+}
+
+struct LocalRankingSnapshot {
+    generation: u64,
+    candidates: Vec<Suggestion>,
+}
+
+fn order_merged_candidates(
+    candidates: &mut [Suggestion],
+    query: &CompletionQuery,
+    local: Option<&LocalRankingSnapshot>,
+) {
+    let local_positions = local.map_or_else(BTreeMap::new, |snapshot| {
+        snapshot
+            .candidates
+            .iter()
+            .filter_map(|candidate| candidate.resulting_line(query).ok())
+            .enumerate()
+            .map(|(position, line)| (line, position))
+            .collect::<BTreeMap<_, _>>()
+    });
+    candidates.sort_by(|left, right| {
+        let left_position = left
+            .resulting_line(query)
+            .ok()
+            .and_then(|line| local_positions.get(&line).copied())
+            .unwrap_or(usize::MAX);
+        let right_position = right
+            .resulting_line(query)
+            .ok()
+            .and_then(|line| local_positions.get(&line).copied())
+            .unwrap_or(usize::MAX);
+        left_position
+            .cmp(&right_position)
+            .then_with(|| right.static_priority().total_cmp(&left.static_priority()))
+            .then_with(|| right.confidence().total_cmp(&left.confidence()))
+            .then_with(|| left.identity().cmp(right.identity()))
+    });
+}
+
+struct InitialOverlay {
+    screen_size: TerminalSize,
+    options: OverlayOptions,
+    footer_hint: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -439,13 +854,155 @@ enum InputState {
     Closed,
 }
 
+struct PendingConfiguration {
+    settings: Settings,
+    acknowledgment: Option<ReloadRequest>,
+}
+
+struct LiveConfiguration {
+    settings: Settings,
+    reloader: Option<ConfigReloader>,
+    pending: Option<PendingConfiguration>,
+    reported_failure: Option<String>,
+    started: Instant,
+}
+
+impl LiveConfiguration {
+    fn new(settings: Settings, reloader: Option<ConfigReloader>) -> Self {
+        Self {
+            settings,
+            reloader,
+            pending: None,
+            reported_failure: None,
+            started: Instant::now(),
+        }
+    }
+
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn poll(
+        &mut self,
+        driver: &mut SessionDriver,
+        reducer: &mut SessionReducer,
+        diagnostics: Option<&dyn RuntimeDiagnosticSink>,
+    ) -> Result<bool, RuntimeError> {
+        if self.apply_pending(driver, reducer)? {
+            return Ok(true);
+        }
+
+        let request = driver.reload_request.take();
+        let now_ms = self.now_ms();
+        let Some(reloader) = self.reloader.as_mut() else {
+            if let Some(request) = request {
+                driver.enqueue_reload_ack(request, false)?;
+                return Ok(true);
+            }
+            return Ok(false);
+        };
+        let outcome = if request.is_some() {
+            reloader.reload_now(now_ms)
+        } else {
+            reloader.poll(now_ms)
+        };
+        match outcome {
+            ReloadPoll::Applied { delta, .. } => {
+                self.reported_failure = None;
+                if let Some(diagnostics) = diagnostics {
+                    diagnostics.record("reload", "configuration replacement applied");
+                    if delta.contains(ReloadChange::ShellForNextSession) {
+                        diagnostics.record(
+                            "reload",
+                            "configured shell changed; the change applies to the next wrapper session",
+                        );
+                    }
+                }
+                let settings = reloader.shared_settings().snapshot().settings().clone();
+                if let (Some(diagnostics), Err(error)) = (diagnostics, settings.ai.readiness()) {
+                    diagnostics.record(
+                        "ai",
+                        &format!("AI completion is unavailable after reload: {error}"),
+                    );
+                }
+                self.pending = Some(PendingConfiguration {
+                    settings,
+                    acknowledgment: request,
+                });
+                self.apply_pending(driver, reducer)
+            }
+            ReloadPoll::Unchanged => {
+                self.reported_failure = None;
+                if let Some(request) = request {
+                    driver.enqueue_reload_ack(request, true)?;
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            ReloadPoll::Rejected => {
+                if let Some(failure) = reloader.last_failure() {
+                    let message = format!("configuration replacement rejected: {failure}");
+                    if self.reported_failure.as_deref() != Some(&message) {
+                        if let Some(diagnostics) = diagnostics {
+                            diagnostics.record("reload", &message);
+                        }
+                        self.reported_failure = Some(message);
+                    }
+                }
+                if let Some(request) = request {
+                    driver.enqueue_reload_ack(request, false)?;
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            ReloadPoll::NotDue { .. } => Ok(false),
+        }
+    }
+
+    fn apply_pending(
+        &mut self,
+        driver: &mut SessionDriver,
+        reducer: &mut SessionReducer,
+    ) -> Result<bool, RuntimeError> {
+        let Some(pending) = self.pending.take() else {
+            return Ok(false);
+        };
+        let keybindings = pending
+            .settings
+            .keybindings
+            .resolve()
+            .map_err(|error| RuntimeError::Configuration(error.to_string()))?;
+        let effects = reducer
+            .reconfigure(
+                keybindings.binding(KeybindingAction::ToggleMode).sequence(),
+                keybindings.binding(KeybindingAction::ToggleMenu).sequence(),
+                usize::from(pending.settings.ui.max_suggestions),
+            )
+            .map_err(|error| RuntimeError::Configuration(error.to_string()))?;
+        let Some(effects) = effects else {
+            self.pending = Some(pending);
+            return Ok(false);
+        };
+        driver.configure_runtime(&pending.settings, &keybindings);
+        driver.apply_effects(reducer, effects)?;
+        self.settings = pending.settings;
+        if let Some(request) = pending.acknowledgment {
+            driver.enqueue_reload_ack(request, true)?;
+        }
+        Ok(true)
+    }
+}
+
 fn drive_session(
     session: &mut PtySession,
     driver: &mut SessionDriver,
     reducer: &mut SessionReducer,
-    output: &SerializedOutput<io::Stdout>,
     terminal: &mut TerminalGuard<io::Stdin, io::Stdout>,
     input_flags: &mut NonblockingInput,
+    live_configuration: &mut LiveConfiguration,
+    diagnostics: Option<&dyn RuntimeDiagnosticSink>,
 ) -> Result<ChildExit, RuntimeError> {
     let mut input = io::stdin();
     let mut input_buffer = [0_u8; INPUT_CHUNK_BYTES];
@@ -454,9 +1011,12 @@ fn drive_session(
     loop {
         let mut progress = false;
         progress |= driver.handle_signals(session, terminal, input_flags)?;
+        progress |= live_configuration.poll(driver, reducer, diagnostics)?;
         progress |= driver.flush_pending(session)?;
-        progress |= driver.drain_output(output, reducer)?;
+        progress |= driver.drain_output(reducer)?;
         progress |= driver.drain_integration(reducer, &mut integration_buffer)?;
+        progress |= driver.drain_completion(reducer, diagnostics)?;
+        driver.report_worker_diagnostics(diagnostics);
         progress |= driver.poll_child(session)?;
         progress |= driver.read_input(session, reducer, &mut input, &mut input_buffer)?;
         progress |= driver.flush_timed_input(reducer)?;
@@ -476,22 +1036,32 @@ fn drive_session(
 }
 
 impl SessionDriver {
-    fn new(
-        integration: PtyIntegration,
-        signals: SignalEvents,
-        output_receiver: mpsc::Receiver<ReaderMessage>,
-    ) -> Self {
+    fn new(transport: DriverTransport, overlay: InitialOverlay, services: RuntimeServices) -> Self {
+        let ai_configured = services.ai.is_some();
         Self {
-            integration,
-            signals,
+            integration: transport.integration,
+            signals: transport.signals,
             decoder: ShellEventDecoder::new(StreamEpoch::INITIAL),
             pending: PendingWrites::default(),
-            output_receiver,
+            output_receiver: transport.output_receiver,
             reader_state: ReadState::Open,
             integration_state: ReadState::Open,
             input_state: InputState::Open,
             child_exit: None,
             escape_deadline: None,
+            reload_request: None,
+            output: transport.output,
+            screen: ScreenObserver::new(overlay.screen_size),
+            renderer: OverlayRenderer::new(),
+            overlay_options: overlay.options,
+            footer_hint: overlay.footer_hint,
+            completion: services.completion,
+            ai: services.ai,
+            ai_configured,
+            updater: services.updater,
+            persist_mode: services.persist_mode,
+            local_ranking: None,
+            worker_diagnostics: WorkerDiagnosticState::default(),
         }
     }
 
@@ -506,7 +1076,7 @@ impl SessionDriver {
         for event in events.into_iter().take(count).flatten() {
             let signal = match event {
                 SignalEvent::Resize => {
-                    Self::resize(session, terminal)?;
+                    self.resize(session, terminal)?;
                     continue;
                 }
                 SignalEvent::Interrupt => ForwardSignal::Interrupt,
@@ -514,7 +1084,7 @@ impl SessionDriver {
                 SignalEvent::Terminate => ForwardSignal::Terminate,
                 SignalEvent::Hangup => ForwardSignal::Hangup,
                 SignalEvent::Suspend => {
-                    Self::suspend(session, terminal, input_flags)?;
+                    self.suspend(session, terminal, input_flags)?;
                     continue;
                 }
                 SignalEvent::Continue => ForwardSignal::Continue,
@@ -527,6 +1097,7 @@ impl SessionDriver {
     }
 
     fn resize(
+        &mut self,
         session: &PtySession,
         terminal: &mut TerminalGuard<io::Stdin, io::Stdout>,
     ) -> Result<(), RuntimeError> {
@@ -537,14 +1108,25 @@ impl SessionDriver {
             .map_err(|error| RuntimeError::Setup(error.to_string()))?;
         terminal
             .update_dimensions(dimensions)
-            .map_err(|error| RuntimeError::Setup(error.to_string()))
+            .map_err(|error| RuntimeError::Setup(error.to_string()))?;
+        let size = TerminalSize::new(dimensions.size().cols, dimensions.size().rows)
+            .map_err(|error| RuntimeError::Setup(error.to_string()))?;
+        let _ = self.screen.resize(size);
+        let frame = self
+            .renderer
+            .on_resize(self.screen.snapshot())
+            .map_err(|error| RuntimeError::Output(error.to_string()))?;
+        let (transaction, _) = frame.into_parts();
+        self.write_overlay_transaction(&transaction)
     }
 
     fn suspend(
+        &mut self,
         session: &PtySession,
         terminal: &mut TerminalGuard<io::Stdin, io::Stdout>,
         input_flags: &mut NonblockingInput,
     ) -> Result<(), RuntimeError> {
+        self.clear_overlay()?;
         input_flags.restore()?;
         terminal
             .restore()
@@ -563,6 +1145,9 @@ impl SessionDriver {
         session
             .resize(dimensions.size())
             .map_err(|error| RuntimeError::Setup(error.to_string()))?;
+        let size = TerminalSize::new(dimensions.size().cols, dimensions.size().rows)
+            .map_err(|error| RuntimeError::Setup(error.to_string()))?;
+        let _ = self.screen.resize(size);
         *terminal = resumed_terminal;
         *input_flags = resumed_flags;
         session
@@ -593,18 +1178,16 @@ impl SessionDriver {
         }
     }
 
-    fn drain_output(
-        &mut self,
-        output: &SerializedOutput<io::Stdout>,
-        reducer: &mut SessionReducer,
-    ) -> Result<bool, RuntimeError> {
+    fn drain_output(&mut self, reducer: &mut SessionReducer) -> Result<bool, RuntimeError> {
         let mut progress = false;
         for _ in 0..MAX_DRAIN_PER_TICK {
             match self.output_receiver.try_recv() {
                 Ok(ReaderMessage::Bytes(bytes)) => {
                     let effects = reducer.observe_shell_output();
                     self.apply_effects(reducer, effects)?;
-                    output
+                    self.clear_overlay()?;
+                    let _ = self.screen.observe(&bytes);
+                    self.output
                         .write_shell(&bytes)
                         .map_err(|error| RuntimeError::Output(error.to_string()))?;
                     progress = true;
@@ -665,6 +1248,136 @@ impl SessionDriver {
         Ok(progress)
     }
 
+    fn drain_completion(
+        &mut self,
+        reducer: &mut SessionReducer,
+        diagnostics: Option<&dyn RuntimeDiagnosticSink>,
+    ) -> Result<bool, RuntimeError> {
+        let alias_expansions = self
+            .completion
+            .as_ref()
+            .map_or_else(Vec::new, |completion| {
+                completion.drain_alias_expansions(MAX_ALIAS_EXPANSION_DRAIN)
+            });
+        let mut progress = !alias_expansions.is_empty();
+        for expansion in alias_expansions {
+            let (generation, edit) = expansion.into_parts();
+            let effects = reducer.apply_alias_expansion(generation, edit);
+            self.apply_effects(reducer, effects)?;
+        }
+
+        let mut batches = Vec::new();
+        if let Some(completion) = self.completion.as_ref() {
+            batches.extend(completion.drain_batches(MAX_COMPLETION_DRAIN_BATCHES));
+        }
+        if let Some(ai) = self.ai.as_ref() {
+            batches.extend(ai.drain_batches(MAX_AI_DRAIN_BATCHES));
+        }
+        progress |= !batches.is_empty();
+        for batch in batches {
+            if let (Some(diagnostics), Some(error)) = (diagnostics, batch.error.as_deref()) {
+                diagnostics.record(batch.provider, error);
+            }
+            self.accept_provider_batch(reducer, batch)?;
+        }
+        Ok(progress)
+    }
+
+    fn report_worker_diagnostics(&mut self, diagnostics: Option<&dyn RuntimeDiagnosticSink>) {
+        let Some(diagnostics) = diagnostics else {
+            return;
+        };
+        let completion_alive = self
+            .completion
+            .as_ref()
+            .is_some_and(|completion| completion.status().alive);
+        if !completion_alive && !self.worker_diagnostics.completion_unavailable_reported {
+            diagnostics.record(
+                "completion",
+                "local completion worker is unavailable; shell forwarding continues",
+            );
+            self.worker_diagnostics.completion_unavailable_reported = true;
+        }
+        if let Some(completion) = self.completion.as_ref() {
+            let failures = completion.status().learning_failures;
+            if failures > self.worker_diagnostics.learning_failures {
+                diagnostics.record(
+                    "learning",
+                    "local learning operation failed; in-memory completion continues",
+                );
+                self.worker_diagnostics.learning_failures = failures;
+            }
+        }
+
+        let ai_alive = self.ai.as_ref().is_some_and(|ai| ai.status().alive);
+        if !ai_alive && !self.worker_diagnostics.ai_unavailable_reported {
+            diagnostics.record(
+                "ai",
+                "AI completion worker is unavailable; local completion continues",
+            );
+            self.worker_diagnostics.ai_unavailable_reported = true;
+        }
+
+        let update_alive = self
+            .updater
+            .as_ref()
+            .is_some_and(|updater| updater.status().alive);
+        if !update_alive && !self.worker_diagnostics.updater_unavailable_reported {
+            diagnostics.record(
+                "updater",
+                "automatic update worker is unavailable; the manual update command remains usable",
+            );
+            self.worker_diagnostics.updater_unavailable_reported = true;
+        }
+        if let Some(updater) = self.updater.as_ref() {
+            let status = updater.status();
+            if status.network_failures > self.worker_diagnostics.update_network_failures {
+                diagnostics.record("updater", "automatic release check failed");
+                self.worker_diagnostics.update_network_failures = status.network_failures;
+            }
+            if status.persistence_failures > self.worker_diagnostics.update_persistence_failures {
+                diagnostics.record("updater", "automatic update state persistence failed");
+                self.worker_diagnostics.update_persistence_failures = status.persistence_failures;
+            }
+        }
+    }
+
+    fn accept_provider_batch(
+        &mut self,
+        reducer: &mut SessionReducer,
+        batch: ProviderBatch,
+    ) -> Result<(), RuntimeError> {
+        let generation = batch.generation;
+        if batch.provider == LOCAL_COMPLETION_PROVIDER {
+            self.local_ranking = Some(LocalRankingSnapshot {
+                generation,
+                candidates: batch.suggestions.clone(),
+            });
+        }
+        if !matches!(
+            reducer.accept_provider_batch(batch),
+            BatchOutcome::Accepted(_)
+        ) {
+            return Ok(());
+        }
+        let Ok(mut ranked) = reducer.merged_candidates(generation) else {
+            return Ok(());
+        };
+        if let Some(query) = reducer.active_query() {
+            order_merged_candidates(
+                &mut ranked,
+                query,
+                self.local_ranking
+                    .as_ref()
+                    .filter(|snapshot| snapshot.generation == generation),
+            );
+        }
+        let (_, effects) = reducer
+            .apply_ranked_candidates(generation, ranked)
+            .into_parts();
+        self.apply_effects(reducer, effects)
+    }
+
     fn finish_decoder(&mut self, reducer: &mut SessionReducer) -> Result<(), RuntimeError> {
         if let Some(frame) = self.decoder.finish() {
             self.apply_frame(reducer, frame)?;
@@ -678,8 +1391,99 @@ impl SessionDriver {
         reducer: &mut SessionReducer,
         frame: DecodedFrame,
     ) -> Result<(), RuntimeError> {
-        let (_, effects) = reducer.apply_shell_frame(frame);
+        let (update, effects) = reducer.apply_shell_frame(frame);
         self.apply_effects(reducer, effects)
+            .and_then(|()| self.observe_state_update(&update, reducer))
+    }
+
+    fn observe_state_update(
+        &mut self,
+        update: &StateUpdate,
+        reducer: &SessionReducer,
+    ) -> Result<(), RuntimeError> {
+        match update {
+            StateUpdate::WorkingDirectoryChanged(directory) => {
+                if let Some(completion) = self.completion.as_ref() {
+                    let _ignored = completion.update_cwd(directory.as_path());
+                }
+            }
+            StateUpdate::CommandStopped(completed) => {
+                if let (Some(command), Some(timestamp)) =
+                    (completed.command().as_str(), unix_seconds_now())
+                {
+                    let outcome = if completed.status().success() {
+                        CommandOutcome::Success
+                    } else {
+                        CommandOutcome::Failure
+                    };
+                    if let Some(completion) = self.completion.as_ref() {
+                        let _ignored = completion.record_completed_command(
+                            command,
+                            reducer.cwd(),
+                            timestamp,
+                            outcome,
+                        );
+                    }
+                    if let Some(ai) = self.ai.as_ref() {
+                        let _ignored = ai.record_completed_command(command);
+                    }
+                }
+                self.completed_command_boundary()?;
+            }
+            StateUpdate::CommandStoppedWithoutAttribution(_) => {
+                self.completed_command_boundary()?;
+            }
+            StateUpdate::CommandStarted { .. } => {
+                if let Some(ai) = self.ai.as_ref() {
+                    ai.cancel(CancellationReason::CommandExecution);
+                }
+            }
+            StateUpdate::ReloadRequested(request) => {
+                if self.reload_request.is_some() {
+                    self.enqueue_reload_ack(*request, false)?;
+                } else {
+                    self.reload_request = Some(*request);
+                }
+            }
+            StateUpdate::BufferSynchronized { .. }
+            | StateUpdate::PromptReady { .. }
+            | StateUpdate::CapabilityChanged(_)
+            | StateUpdate::FrameRejected(_)
+            | StateUpdate::LifecycleRejected(_)
+            | StateUpdate::LifecycleSuppressed
+            | StateUpdate::SnapshotRejected(_)
+            | StateUpdate::StreamOrderRejected { .. } => {}
+        }
+        Ok(())
+    }
+
+    fn completed_command_boundary(&mut self) -> Result<(), RuntimeError> {
+        let notice = self.updater.as_ref().and_then(|updater| {
+            let _admission = updater.completed_command();
+            updater.take_notification()
+        });
+        let Some(notice) = notice else {
+            return Ok(());
+        };
+        self.clear_overlay()?;
+        let line = format!("\r\n{notice}\r\n");
+        let _ = self.screen.observe(line.as_bytes());
+        self.output
+            .write_shell(line.as_bytes())
+            .map_err(|error| RuntimeError::Output(error.to_string()))
+    }
+
+    fn enqueue_reload_ack(
+        &mut self,
+        request: ReloadRequest,
+        accepted: bool,
+    ) -> Result<(), RuntimeError> {
+        let disposition = if accepted { "ok" } else { "rejected" };
+        let prefix = std::str::from_utf8(RELOAD_ACK_PREFIX)
+            .map_err(|_| RuntimeError::ProtocolInvariant("reload prefix is not UTF-8"))?;
+        let frame = format!("{prefix}{}:{disposition}\0", request.nonce());
+        self.pending
+            .push(WriteDestination::Control, frame.into_bytes())
     }
 
     fn read_input(
@@ -742,7 +1546,6 @@ impl SessionDriver {
                 ..
             }
         ) && reducer.shell().foreground() == ForegroundCommandState::Idle
-            && !reducer.selection().candidates().is_empty()
     }
 
     fn route_input(
@@ -750,6 +1553,9 @@ impl SessionDriver {
         reducer: &mut SessionReducer,
         input: &[u8],
     ) -> Result<(), RuntimeError> {
+        if let Some(ai) = self.ai.as_ref() {
+            ai.cancel(CancellationReason::BufferChanged);
+        }
         let mut consumed = 0;
         while consumed < input.len() {
             let reduction = reducer.route_input(&input[consumed..]);
@@ -772,7 +1578,6 @@ impl SessionDriver {
     ) -> Result<(), RuntimeError> {
         let mut replacement = None;
         let mut staged = Vec::new();
-        let mut cancel_query = false;
 
         for effect in effects.into_effects() {
             match effect {
@@ -784,6 +1589,9 @@ impl SessionDriver {
                     }
                 }
                 SessionEffect::ReplaceBuffer(value) => {
+                    if let Some(ai) = self.ai.as_ref() {
+                        ai.cancel(CancellationReason::BufferChanged);
+                    }
                     if replacement.replace(value).is_some() {
                         return Err(RuntimeError::ProtocolInvariant(
                             "multiple replacements preceded one synchronization request",
@@ -800,13 +1608,41 @@ impl SessionDriver {
                     self.pending
                         .push(WriteDestination::Pty, SYNC_PROBE_SEQUENCE)?;
                 }
-                SessionEffect::StartQuery { work, .. } => {
-                    drop(work);
-                    cancel_query = true;
+                SessionEffect::StartQuery {
+                    mode,
+                    alias_expansion,
+                    work,
+                } => {
+                    if let Some(completion) = self.completion.as_ref() {
+                        let _admission = completion.submit_query_with_alias_expansion(
+                            mode,
+                            work.clone(),
+                            alias_expansion,
+                        );
+                    }
+                    if let Some(ai) = self.ai.as_ref() {
+                        if self.ai_configured && mode == crate::session::SessionMode::Spec {
+                            let _admission = ai.submit_query(work);
+                        } else {
+                            ai.cancel(CancellationReason::ModeChanged);
+                        }
+                    }
                 }
-                SessionEffect::ClearOverlay
-                | SessionEffect::RefreshOverlay
-                | SessionEffect::ModeChanged(_) => {}
+                SessionEffect::ClearOverlay => self.clear_overlay()?,
+                SessionEffect::RefreshOverlay => {
+                    self.refresh_overlay(reducer)?;
+                }
+                SessionEffect::ModeChanged(mode) => {
+                    if let Some(ai) = self.ai.as_ref() {
+                        ai.cancel(CancellationReason::ModeChanged);
+                    }
+                    if self.persist_mode {
+                        if let Some(updater) = self.updater.as_ref() {
+                            let _admission = updater.record_mode(mode);
+                        }
+                    }
+                    self.refresh_overlay(reducer)?;
+                }
                 SessionEffect::Fault(_) => {
                     return Err(RuntimeError::ProtocolInvariant(
                         "session reducer entered a closed fault state",
@@ -819,10 +1655,76 @@ impl SessionDriver {
                 "buffer replacement lacked a following synchronization request",
             ));
         }
-        if cancel_query {
-            drop(reducer.observe_shell_output());
-        }
         Ok(())
+    }
+
+    fn refresh_overlay(&mut self, reducer: &SessionReducer) -> Result<(), RuntimeError> {
+        let Some(query) = reducer.active_query() else {
+            return self.clear_overlay();
+        };
+        let frame = self
+            .renderer
+            .render(
+                self.screen.snapshot(),
+                OverlayRequest::new(query, reducer.selection()).with_footer_hint(&self.footer_hint),
+                self.overlay_options,
+            )
+            .map_err(|error| RuntimeError::Output(error.to_string()))?;
+        let (transaction, _) = frame.into_parts();
+        self.write_overlay_transaction(&transaction)
+    }
+
+    fn clear_overlay(&mut self) -> Result<(), RuntimeError> {
+        let frame = self
+            .renderer
+            .clear(self.screen.snapshot())
+            .map_err(|error| RuntimeError::Output(error.to_string()))?;
+        let (transaction, _) = frame.into_parts();
+        self.write_overlay_transaction(&transaction)
+    }
+
+    fn clear_overlay_after_failure(&mut self) -> Result<(), RuntimeError> {
+        let frame = self
+            .renderer
+            .on_failure(self.screen.snapshot())
+            .map_err(|error| RuntimeError::Output(error.to_string()))?;
+        let (transaction, _) = frame.into_parts();
+        self.write_overlay_transaction(&transaction)
+    }
+
+    fn write_overlay_transaction(
+        &mut self,
+        transaction: &RenderTransaction,
+    ) -> Result<(), RuntimeError> {
+        if !transaction.is_empty() {
+            self.output
+                .write_overlay(transaction.bytes())
+                .map_err(|error| RuntimeError::Output(error.to_string()))?;
+        }
+        self.renderer
+            .acknowledge_transaction(transaction)
+            .map_err(|error| RuntimeError::Output(error.to_string()))
+    }
+
+    fn configure_runtime(
+        &mut self,
+        settings: &Settings,
+        keybindings: &crate::keybindings::ResolvedKeybindings,
+    ) {
+        self.overlay_options = OverlayOptions::from_ui(settings.ui);
+        self.footer_hint = footer_hint(keybindings);
+        self.persist_mode = settings.core.mode == Mode::Last;
+        if let Some(completion) = self.completion.as_ref() {
+            let _accepted = completion.reconfigure(settings.clone());
+        }
+        if let Some(ai) = self.ai.as_ref() {
+            self.ai_configured = ai.reconfigure(settings.clone());
+        } else {
+            self.ai_configured = false;
+        }
+        if let Some(updater) = self.updater.as_ref() {
+            let _accepted = updater.reconfigure(settings.updater);
+        }
     }
 
     fn enqueue_replacement(
@@ -886,6 +1788,21 @@ impl SessionDriver {
 mod tests {
     use super::*;
 
+    fn suggestion(query: &CompletionQuery, suffix: &str, identity: &str) -> Suggestion {
+        Suggestion::new(
+            crate::completion::TextEdit {
+                range: query.cursor..query.cursor,
+                replacement: suffix.to_owned(),
+            },
+            format!("{}{suffix}", query.line),
+            "candidate",
+            "test",
+            crate::completion::SuggestionSource::Spec,
+            crate::completion::InsertionBehavior::Exact,
+            identity,
+        )
+    }
+
     #[test]
     fn pending_writes_preserve_destination_order_and_exact_progress() {
         let mut pending = PendingWrites::default();
@@ -923,6 +1840,50 @@ mod tests {
         assert_eq!(shell_kind(Shell::Bash), ShellKind::Bash);
         assert_eq!(shell_kind(Shell::Zsh), ShellKind::Zsh);
         assert_eq!(shell_kind(Shell::Fish), ShellKind::Fish);
+    }
+
+    #[test]
+    fn fixed_mode_overrides_persisted_mode_and_last_defaults_to_spec() {
+        assert_eq!(
+            configured_initial_mode(Mode::Spec, Some(LastMode::History)),
+            crate::session::SessionMode::Spec
+        );
+        assert_eq!(
+            configured_initial_mode(Mode::History, Some(LastMode::Spec)),
+            crate::session::SessionMode::History
+        );
+        assert_eq!(
+            configured_initial_mode(Mode::Last, Some(LastMode::History)),
+            crate::session::SessionMode::History
+        );
+        assert_eq!(
+            configured_initial_mode(Mode::Last, None),
+            crate::session::SessionMode::Spec
+        );
+    }
+
+    #[test]
+    fn late_ai_candidate_preserves_the_complete_local_ranking() {
+        let query = CompletionQuery::new("git ch", 6, "/tmp", 7).unwrap();
+        let cherry = suggestion(&query, "erry-pick", "cherry");
+        let checkout = suggestion(&query, "eckout", "checkout");
+        let ai = suggestion(&query, "at --amend", "ai");
+        let local = LocalRankingSnapshot {
+            generation: query.generation,
+            candidates: vec![cherry.clone(), checkout.clone()],
+        };
+        let mut merged = vec![ai, checkout, cherry];
+
+        order_merged_candidates(&mut merged, &query, Some(&local));
+
+        let lines = merged
+            .iter()
+            .map(|candidate| candidate.resulting_line(&query).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            lines,
+            ["git cherry-pick", "git checkout", "git chat --amend"]
+        );
     }
 
     #[test]

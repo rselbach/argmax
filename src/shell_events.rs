@@ -6,7 +6,10 @@
 //! frame so a rejected frame cannot leave stale suggestions authoritative.
 
 use std::error::Error;
+use std::ffi::OsString;
 use std::fmt;
+use std::os::unix::ffi::OsStringExt as _;
+use std::path::{Path, PathBuf};
 
 /// Hard maximum size of one frame, excluding its NUL terminator.
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
@@ -29,7 +32,10 @@ const CAPABILITY_UNAVAILABLE: &[u8] = b"capability:unavailable";
 const COMMAND_START_PREFIX: &[u8] = b"command-start:";
 const COMMAND_START_UNKNOWN: &[u8] = b"command-start-unknown";
 const COMMAND_STOP_PREFIX: &[u8] = b"command-stop:";
+const WORKING_DIRECTORY_PREFIX: &[u8] = b"cwd:";
 const PROMPT_READY: &[u8] = b"prompt-ready";
+const RELOAD_REQUEST_PREFIX: &[u8] = crate::reload::RELOAD_REQUEST_PREFIX;
+const MAX_WORKING_DIRECTORY_BYTES: usize = 16 * 1024;
 
 /// Exact submitted command bytes reported by a shell lifecycle hook.
 #[derive(Clone, Eq, PartialEq)]
@@ -183,6 +189,45 @@ impl ShellExitStatus {
     }
 }
 
+/// Validated absolute working directory reported at a shell prompt boundary.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ShellWorkingDirectory(PathBuf);
+
+impl ShellWorkingDirectory {
+    /// Returns the exact path without lossy decoding.
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+
+    /// Consumes the event and returns its exact path.
+    #[must_use]
+    pub fn into_path(self) -> PathBuf {
+        self.0
+    }
+}
+
+impl fmt::Debug for ShellWorkingDirectory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ShellWorkingDirectory")
+            .field("path_bytes", &self.0.as_os_str().as_encoded_bytes().len())
+            .finish()
+    }
+}
+
+/// Correlation nonce carried by an explicit active-session reload request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReloadRequest(u32);
+
+impl ReloadRequest {
+    /// Returns the request nonce echoed by the wrapper acknowledgment.
+    #[must_use]
+    pub const fn nonce(self) -> u32 {
+        self.0
+    }
+}
+
 /// Runtime shell-adapter support for authoritative editing snapshots.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BufferSyncCapability {
@@ -243,6 +288,10 @@ pub enum ShellEvent {
     CommandStop(ShellExitStatus),
     /// The shell adapter announced its live synchronization capability.
     Capability(CapabilityAnnouncement),
+    /// The shell reported its current absolute working directory.
+    WorkingDirectory(ShellWorkingDirectory),
+    /// An inherited child requested a correlated live configuration reload.
+    ReloadRequest(ReloadRequest),
 }
 
 /// Monotonic identifier for one decoder stream lifetime.
@@ -363,6 +412,10 @@ pub enum FrameError {
     NonDecimalExitStatus,
     /// A decimal command status was outside the shell's 0 through 255 range.
     ExitStatusOutOfRange,
+    /// A working-directory frame was empty, relative, or exceeded its bound.
+    InvalidWorkingDirectory,
+    /// A reload request nonce was missing or not an unsigned 32-bit integer.
+    InvalidReloadRequest,
     /// A lifecycle frame claimed an empty submitted command.
     EmptySubmittedCommand,
     /// The frame exceeded the configured byte limit.
@@ -409,6 +462,12 @@ impl fmt::Display for FrameError {
             }
             Self::ExitStatusOutOfRange => {
                 formatter.write_str("shell exit status is outside 0 through 255")
+            }
+            Self::InvalidWorkingDirectory => {
+                formatter.write_str("shell working directory is not a bounded absolute path")
+            }
+            Self::InvalidReloadRequest => {
+                formatter.write_str("active-session reload request is invalid")
             }
             Self::EmptySubmittedCommand => formatter.write_str("submitted command is empty"),
             Self::FrameTooLarge {
@@ -716,6 +775,31 @@ fn parse_frame(mut frame: Vec<u8>) -> Result<ShellEvent, FrameError> {
     if frame == PROMPT_READY {
         return Ok(ShellEvent::PromptReady);
     }
+    if let Some(path) = frame.strip_prefix(WORKING_DIRECTORY_PREFIX) {
+        if path.is_empty() || path.len() > MAX_WORKING_DIRECTORY_BYTES {
+            return Err(FrameError::InvalidWorkingDirectory);
+        }
+        let path = PathBuf::from(OsString::from_vec(path.to_vec()));
+        if !path.is_absolute() {
+            return Err(FrameError::InvalidWorkingDirectory);
+        }
+        return Ok(ShellEvent::WorkingDirectory(ShellWorkingDirectory(path)));
+    }
+    if let Some(nonce) = frame.strip_prefix(RELOAD_REQUEST_PREFIX) {
+        if nonce.is_empty()
+            || nonce.len() > 10
+            || !nonce.iter().all(u8::is_ascii_digit)
+            || nonce.first() == Some(&b'0') && nonce.len() != 1
+        {
+            return Err(FrameError::InvalidReloadRequest);
+        }
+        let nonce = std::str::from_utf8(nonce)
+            .ok()
+            .and_then(|nonce| nonce.parse::<u32>().ok())
+            .filter(|nonce| *nonce != 0)
+            .ok_or(FrameError::InvalidReloadRequest)?;
+        return Ok(ShellEvent::ReloadRequest(ReloadRequest(nonce)));
+    }
     if frame == COMMAND_START_UNKNOWN {
         return Ok(ShellEvent::CommandStartUnknown);
     }
@@ -980,6 +1064,10 @@ pub enum StateUpdate {
     CommandStoppedWithoutAttribution(ShellExitStatus),
     /// Adapter live-buffer capability changed.
     CapabilityChanged(BufferSyncCapability),
+    /// The shell reported an authoritative prompt working directory.
+    WorkingDirectoryChanged(ShellWorkingDirectory),
+    /// An active-session child requested a correlated configuration reload.
+    ReloadRequested(ReloadRequest),
     /// A rejected protocol frame desynchronized state.
     FrameRejected(FrameError),
     /// A duplicate or impossible lifecycle transition desynchronized state.
@@ -1268,6 +1356,10 @@ impl ShellSessionState {
             ShellEvent::CommandStart(command) => self.start_command(Some(command)),
             ShellEvent::CommandStartUnknown => self.start_command(None),
             ShellEvent::CommandStop(status) => self.stop_command(status),
+            ShellEvent::WorkingDirectory(directory) => {
+                StateUpdate::WorkingDirectoryChanged(directory)
+            }
+            ShellEvent::ReloadRequest(request) => StateUpdate::ReloadRequested(request),
         }
     }
 
@@ -1516,6 +1608,38 @@ mod tests {
         assert_eq!(
             event(&frames[4]),
             &ShellEvent::CommandStop(ShellExitStatus(17))
+        );
+    }
+
+    #[test]
+    fn decodes_bounded_cwd_and_correlated_reload_control_events() {
+        let mut decoder = decoder();
+        let frames = decode(
+            &mut decoder,
+            b"cwd:/tmp/Greendale Community College\0reload-request:42\0",
+        );
+        let ShellEvent::WorkingDirectory(directory) = event(&frames[0]) else {
+            panic!("expected working directory");
+        };
+        assert_eq!(
+            directory.as_path(),
+            Path::new("/tmp/Greendale Community College")
+        );
+        assert_eq!(
+            event(&frames[1]),
+            &ShellEvent::ReloadRequest(ReloadRequest(42))
+        );
+
+        let rejected = decode(
+            &mut decoder,
+            b"cwd:relative\0cwd:\0reload-request:\0reload-request:01\0reload-request:4294967296\0",
+        );
+        assert_eq!(error(&rejected[0]), &FrameError::InvalidWorkingDirectory);
+        assert_eq!(error(&rejected[1]), &FrameError::InvalidWorkingDirectory);
+        assert!(
+            rejected[2..]
+                .iter()
+                .all(|frame| error(frame) == &FrameError::InvalidReloadRequest)
         );
     }
 

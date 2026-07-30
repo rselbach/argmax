@@ -7,6 +7,9 @@ pub mod unix {
     use std::io;
     use std::num::NonZeroI32;
     use std::ptr;
+    use std::time::{Duration, Instant};
+
+    const MAX_INHERITED_FRAME_BYTES: usize = 4 * 1024;
 
     /// Reports whether an exact child has exited without reaping it.
     ///
@@ -44,8 +47,219 @@ pub mod unix {
         Ok(unsafe { information.si_pid() } != 0)
     }
 
+    /// Exchanges one bounded NUL-framed message over an inherited nonblocking
+    /// Unix stream descriptor.
+    ///
+    /// The descriptor is accepted only when it is an open `AF_UNIX`,
+    /// `SOCK_STREAM`, nonblocking socket. `request` must exclude the terminator;
+    /// the returned length identifies response bytes before its terminator.
+    /// This narrow capability is used by a session child to request work from
+    /// its owning wrapper without reconstructing an unsafe borrowed Rust handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-input error for an empty, oversized, or NUL-bearing
+    /// request, an invalid-data error for the wrong descriptor type or an
+    /// oversized response, a timeout error when the deadline expires, or the
+    /// underlying descriptor error.
+    pub fn exchange_inherited_unix_frame(
+        descriptor: NonZeroI32,
+        request: &[u8],
+        response: &mut [u8],
+        timeout: Duration,
+    ) -> io::Result<usize> {
+        if request.is_empty()
+            || request.len() > MAX_INHERITED_FRAME_BYTES
+            || request.contains(&0)
+            || response.is_empty()
+            || response.len() > MAX_INHERITED_FRAME_BYTES
+        {
+            return Err(io::Error::from(io::ErrorKind::InvalidInput));
+        }
+        validate_inherited_unix_stream(descriptor.get())?;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        write_frame(descriptor.get(), request, deadline)?;
+        read_frame(descriptor.get(), response, deadline)
+    }
+
+    fn validate_inherited_unix_stream(descriptor: i32) -> io::Result<()> {
+        // SAFETY: `fcntl` inspects only the numeric descriptor and does not
+        // create Rust ownership. A negative return is handled immediately.
+        let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+        if flags == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        if flags & libc::O_NONBLOCK == 0 {
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+
+        let mut socket_type = 0_i32;
+        let mut type_length = libc::socklen_t::try_from(std::mem::size_of::<i32>())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+        // SAFETY: both output pointers reference initialized writable storage
+        // for the exact `SO_TYPE` value and length.
+        let type_result = unsafe {
+            libc::getsockopt(
+                descriptor,
+                libc::SOL_SOCKET,
+                libc::SO_TYPE,
+                (&raw mut socket_type).cast(),
+                &raw mut type_length,
+            )
+        };
+        if type_result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        if socket_type != libc::SOCK_STREAM {
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+
+        // Starting from zeroed storage makes every byte initialized before the
+        // kernel writes the actual address and its returned length.
+        // SAFETY: all-zero `sockaddr_storage` is valid writable output storage.
+        let mut address = unsafe { std::mem::zeroed::<libc::sockaddr_storage>() };
+        let mut address_length = libc::socklen_t::try_from(std::mem::size_of_val(&address))
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+        // SAFETY: the descriptor is open, and both pointers reference live
+        // writable storage with the supplied capacity.
+        let address_result = unsafe {
+            libc::getsockname(
+                descriptor,
+                (&raw mut address).cast(),
+                &raw mut address_length,
+            )
+        };
+        if address_result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        if i32::from(address.ss_family) != libc::AF_UNIX {
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+        Ok(())
+    }
+
+    fn write_frame(descriptor: i32, request: &[u8], deadline: Instant) -> io::Result<()> {
+        let mut written = 0_usize;
+        let terminator = 0_u8;
+        while written <= request.len() {
+            wait_descriptor(descriptor, libc::POLLOUT, deadline)?;
+            let (pointer, length) = if written == request.len() {
+                ((&raw const terminator).cast(), 1_usize)
+            } else {
+                (request[written..].as_ptr().cast(), request.len() - written)
+            };
+            // SAFETY: `pointer` names `length` readable bytes, and the
+            // descriptor was validated as nonblocking before this loop.
+            let result = unsafe { libc::write(descriptor, pointer, length) };
+            if result > 0 {
+                let count = usize::try_from(result)
+                    .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+                if written == request.len() {
+                    return (count == 1)
+                        .then_some(())
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::WriteZero));
+                }
+                written = written
+                    .checked_add(count)
+                    .filter(|total| *total <= request.len())
+                    .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
+                continue;
+            }
+            if result == 0 {
+                return Err(io::Error::from(io::ErrorKind::WriteZero));
+            }
+            let error = io::Error::last_os_error();
+            if matches!(
+                error.kind(),
+                io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+            ) {
+                continue;
+            }
+            return Err(error);
+        }
+        Err(io::Error::from(io::ErrorKind::WriteZero))
+    }
+
+    fn read_frame(descriptor: i32, response: &mut [u8], deadline: Instant) -> io::Result<usize> {
+        let mut length = 0_usize;
+        loop {
+            wait_descriptor(descriptor, libc::POLLIN, deadline)?;
+            let mut byte = 0_u8;
+            // SAFETY: `byte` is live writable storage for one byte, and the
+            // descriptor was validated as nonblocking before this loop.
+            let result = unsafe { libc::read(descriptor, (&raw mut byte).cast(), 1) };
+            if result == 1 {
+                if byte == 0 {
+                    return Ok(length);
+                }
+                let Some(slot) = response.get_mut(length) else {
+                    return Err(io::Error::from(io::ErrorKind::InvalidData));
+                };
+                *slot = byte;
+                length += 1;
+                continue;
+            }
+            if result == 0 {
+                return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+            }
+            let error = io::Error::last_os_error();
+            if matches!(
+                error.kind(),
+                io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+            ) {
+                continue;
+            }
+            return Err(error);
+        }
+    }
+
+    fn wait_descriptor(descriptor: i32, events: i16, deadline: Instant) -> io::Result<()> {
+        loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| io::Error::from(io::ErrorKind::TimedOut))?;
+            let timeout_millis = remaining
+                .as_millis()
+                .saturating_add(u128::from(remaining.subsec_nanos() % 1_000_000 != 0))
+                .min(i32::MAX as u128);
+            let timeout = i32::try_from(timeout_millis).unwrap_or(i32::MAX);
+            let mut descriptor_event = libc::pollfd {
+                fd: descriptor,
+                events,
+                revents: 0,
+            };
+            // SAFETY: `descriptor_event` is one live poll entry and `timeout`
+            // is a finite nonnegative millisecond interval.
+            let result = unsafe { libc::poll(&raw mut descriptor_event, 1, timeout) };
+            if result > 0 {
+                if descriptor_event.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0
+                {
+                    return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+                }
+                if descriptor_event.revents & events != 0 {
+                    return Ok(());
+                }
+                continue;
+            }
+            if result == 0 {
+                return Err(io::Error::from(io::ErrorKind::TimedOut));
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+    }
+
     #[cfg(test)]
     mod tests {
+        use std::io::{Read as _, Write as _};
+        use std::num::NonZeroI32;
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::net::UnixStream;
         use std::process::Command;
         use std::thread;
         use std::time::{Duration, Instant};
@@ -83,6 +297,68 @@ pub mod unix {
         fn rejects_a_process_that_is_not_a_child() {
             let own_pid = NonZeroI32::new(i32::try_from(std::process::id()).unwrap()).unwrap();
             assert!(peek_child_exit(own_pid).is_err());
+        }
+
+        #[test]
+        fn exchanges_one_correlated_inherited_stream_frame() {
+            let (client, mut server) = UnixStream::pair().unwrap();
+            client.set_nonblocking(true).unwrap();
+            let responder = thread::spawn(move || {
+                let mut request = [0_u8; 64];
+                let mut length = 0;
+                loop {
+                    server.read_exact(&mut request[length..=length]).unwrap();
+                    if request[length] == 0 {
+                        break;
+                    }
+                    length += 1;
+                }
+                assert_eq!(&request[..length], b"reload-request:42");
+                server.write_all(b"reload-ack:42:ok\0").unwrap();
+            });
+            let descriptor = NonZeroI32::new(client.as_raw_fd()).unwrap();
+            let mut response = [0_u8; 64];
+            let length = exchange_inherited_unix_frame(
+                descriptor,
+                b"reload-request:42",
+                &mut response,
+                Duration::from_secs(1),
+            )
+            .unwrap();
+            assert_eq!(&response[..length], b"reload-ack:42:ok");
+            responder.join().unwrap();
+        }
+
+        #[test]
+        fn inherited_exchange_rejects_regular_and_blocking_descriptors() {
+            let temporary = tempfile::tempfile().unwrap();
+            let descriptor = NonZeroI32::new(temporary.as_raw_fd()).unwrap();
+            let mut response = [0_u8; 8];
+            assert_eq!(
+                exchange_inherited_unix_frame(
+                    descriptor,
+                    b"request",
+                    &mut response,
+                    Duration::from_millis(1),
+                )
+                .unwrap_err()
+                .kind(),
+                io::ErrorKind::InvalidData
+            );
+
+            let (blocking, _peer) = UnixStream::pair().unwrap();
+            let descriptor = NonZeroI32::new(blocking.as_raw_fd()).unwrap();
+            assert_eq!(
+                exchange_inherited_unix_frame(
+                    descriptor,
+                    b"request",
+                    &mut response,
+                    Duration::from_millis(1),
+                )
+                .unwrap_err()
+                .kind(),
+                io::ErrorKind::InvalidData
+            );
         }
     }
 }

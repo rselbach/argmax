@@ -5,8 +5,10 @@
 //! after a poll is still eligible well inside the two-second product deadline.
 
 use std::error::Error;
+use std::ffi::OsStr;
 use std::fmt;
 use std::io;
+use std::num::NonZeroI32;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -20,6 +22,108 @@ pub const RELOAD_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const RELOAD_POLL_INTERVAL_MS: u64 = 1_000;
 const MAX_RESOLVED_FAILURE_FIELDS: usize = 64;
 const MAX_RELOAD_REASON_BYTES: usize = 256;
+
+/// Private event-stream prefix for a correlated active-session reload request.
+pub const RELOAD_REQUEST_PREFIX: &[u8] = b"reload-request:";
+/// Private control-stream prefix for the corresponding wrapper acknowledgment.
+pub const RELOAD_ACK_PREFIX: &[u8] = b"reload-ack:";
+/// Maximum time an explicit child command waits for its owning wrapper.
+pub const RELOAD_REQUEST_TIMEOUT: Duration = Duration::from_millis(2_500);
+const MAX_RELOAD_WIRE_BYTES: usize = 128;
+
+/// Failure to request a reload from the active wrapper capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReloadRequestError {
+    /// The command is not running inside an owned argmax session.
+    NoActiveSession,
+    /// The inherited integration descriptor was malformed.
+    InvalidDescriptor,
+    /// The inherited descriptor was unavailable or did not acknowledge in time.
+    Transport(io::ErrorKind),
+    /// The response was not the exact correlated private acknowledgment.
+    InvalidAcknowledgment,
+    /// The wrapper rejected the candidate and retained its prior settings.
+    Rejected,
+}
+
+impl fmt::Display for ReloadRequestError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoActiveSession => {
+                formatter.write_str("reload is available only inside an active argmax session")
+            }
+            Self::InvalidDescriptor => {
+                formatter.write_str("active-session reload capability is invalid")
+            }
+            Self::Transport(kind) => {
+                write!(formatter, "active-session reload transport failed: {kind}")
+            }
+            Self::InvalidAcknowledgment => {
+                formatter.write_str("active-session reload acknowledgment was invalid")
+            }
+            Self::Rejected => formatter
+                .write_str("configuration reload was rejected; previous settings remain active"),
+        }
+    }
+}
+
+impl Error for ReloadRequestError {}
+
+/// Requests and confirms one reload through the inherited session capability.
+///
+/// Only a fixed, correlated control frame is exchanged. No configuration,
+/// command buffer, environment value, or path is transmitted.
+///
+/// # Errors
+///
+/// Returns [`ReloadRequestError`] when no active wrapper exists, its descriptor
+/// is invalid, the bounded exchange fails, or the wrapper rejects the reload.
+#[cfg(unix)]
+pub fn request_active_session_reload() -> Result<(), ReloadRequestError> {
+    if std::env::var_os(crate::pty::ENV_PRIVATE_SESSION).is_none() {
+        return Err(ReloadRequestError::NoActiveSession);
+    }
+    let descriptor = std::env::var_os(crate::pty::ENV_EVENT_FD)
+        .as_deref()
+        .and_then(parse_descriptor)
+        .ok_or(ReloadRequestError::InvalidDescriptor)?;
+    let nonce = std::process::id();
+    let request = format!("reload-request:{nonce}");
+    let mut response = [0_u8; MAX_RELOAD_WIRE_BYTES];
+    let response_length = argmax_platform::unix::exchange_inherited_unix_frame(
+        descriptor,
+        request.as_bytes(),
+        &mut response,
+        RELOAD_REQUEST_TIMEOUT,
+    )
+    .map_err(|error| ReloadRequestError::Transport(error.kind()))?;
+    let response = response
+        .get(..response_length)
+        .ok_or(ReloadRequestError::InvalidAcknowledgment)?;
+    let ok = format!("reload-ack:{nonce}:ok");
+    if response == ok.as_bytes() {
+        return Ok(());
+    }
+    let rejected = format!("reload-ack:{nonce}:rejected");
+    if response == rejected.as_bytes() {
+        Err(ReloadRequestError::Rejected)
+    } else {
+        Err(ReloadRequestError::InvalidAcknowledgment)
+    }
+}
+
+#[cfg(unix)]
+fn parse_descriptor(value: &OsStr) -> Option<NonZeroI32> {
+    let value = value.to_str()?;
+    if value.is_empty() || value.len() > 10 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value
+        .parse::<i32>()
+        .ok()
+        .filter(|descriptor| *descriptor >= 3)
+        .and_then(NonZeroI32::new)
+}
 
 #[derive(Clone)]
 struct PublishedSettings {
@@ -542,6 +646,21 @@ impl ConfigReloader {
         }
         self.last_poll_ms = Some(now_ms);
 
+        self.load_candidate()
+    }
+
+    /// Immediately attempts a complete replacement for an explicit reload.
+    ///
+    /// Unlike [`Self::poll`], this bypasses the automatic one-second floor. It
+    /// still updates that floor so the event loop does not immediately repeat
+    /// the same filesystem work.
+    #[must_use]
+    pub fn reload_now(&mut self, now_ms: u64) -> ReloadPoll {
+        self.last_poll_ms = Some(now_ms);
+        self.load_candidate()
+    }
+
+    fn load_candidate(&mut self) -> ReloadPoll {
         let document = match self.store.load() {
             Ok(document) => document,
             Err(error) => {
@@ -949,7 +1068,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_override_errors_redact_dynamic_provider_values() {
+    fn incomplete_provider_override_keeps_local_settings_usable_and_redacted() {
         let enabled = current_config(
             "spec",
             "[ai]\nenabled = true\nprovider = 'greendale'\n\
@@ -958,7 +1077,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("config.toml");
         fs::write(&path, enabled).unwrap();
-        let error = ConfigReloader::start(
+        let reloader = ConfigReloader::start(
             ConfigStore::new(path),
             EnvironmentOverrides {
                 ai_provider: Some("Troy-secret-provider".to_owned()),
@@ -966,21 +1085,13 @@ mod tests {
             },
             CliOverrides::default(),
         )
-        .unwrap_err();
+        .unwrap();
 
+        let snapshot = reloader.shared_settings().snapshot();
+        let error = snapshot.settings().ai.readiness().unwrap_err();
         let rendered = format!("{error:?} {error}");
         assert!(!rendered.contains("Troy"));
-        let ReloadFailure::Resolved(error) = error else {
-            panic!("wanted resolved validation failure")
-        };
-        assert_eq!(error.problems().len(), 1);
-        assert_eq!(error.problems()[0].field(), "ai.provider");
-        assert_eq!(
-            error.problems()[0].reason(),
-            "references an unknown provider"
-        );
-        assert_eq!(error.problem_count(), 1);
-        assert!(!error.truncated());
+        assert!(rendered.contains("no matching provider configuration"));
     }
 
     #[test]
@@ -1007,5 +1118,17 @@ mod tests {
             "ai.providers.<provider>.timeout_ms"
         );
         assert!(problems.problems()[0].reason().contains("1..=60000"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_reload_descriptor_parser_is_strict() {
+        assert_eq!(
+            parse_descriptor(OsStr::new("3")).map(NonZeroI32::get),
+            Some(3)
+        );
+        for invalid in ["", "0", "2", "-1", "+3", "3x", "2147483648"] {
+            assert_eq!(parse_descriptor(OsStr::new(invalid)), None, "{invalid}");
+        }
     }
 }

@@ -28,8 +28,9 @@ const TRUNCATED_WARNING_PATH: &str = "<additional-keys>";
 /// Commented configuration written by `argmax config init`.
 pub const DEFAULT_CONFIG_TEMPLATE: &str = r#"# argmax configuration
 # AI is disabled by default. If enabled, the exact input buffer is sent to the
-# configured endpoint. Broader workspace or Git context requires an explicit
-# context-level change.
+# configured endpoint and may itself contain commands, paths, or sensitive
+# values. Broader workspace or Git context requires an explicit context-level
+# change.
 
 [core]
 version = 2
@@ -1235,13 +1236,15 @@ mod tests {
     }
 
     #[test]
-    fn unknown_selected_provider_is_not_echoed() {
+    fn unknown_selected_provider_is_an_operational_not_global_failure() {
         let secret = "Troy-private-provider-token";
-        let error =
-            parse_config(&format!("[ai]\nenabled = true\nprovider = {secret:?}\n")).unwrap_err();
+        let document =
+            parse_config(&format!("[ai]\nenabled = true\nprovider = {secret:?}\n")).unwrap();
+        let error = document.settings.ai.readiness().unwrap_err();
         let rendered = format!("{error:?} {error}");
         assert!(!rendered.contains(secret));
-        assert!(rendered.contains("unknown provider"));
+        assert!(rendered.contains("UnknownProvider"));
+        assert!(rendered.contains("no matching provider configuration"));
     }
 
     #[test]
