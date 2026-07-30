@@ -3160,8 +3160,10 @@ fi
         let events_path = directory.0.join("events");
         let statuses_path = directory.0.join("statuses");
         fs::write(&init_path, init_script(Shell::Bash)).expect("write Bash init");
-        let expect_program = r#"
-          set timeout 10
+        let expect_program = format!(
+            "{WAIT_FOR_PROBE_COUNT}\n{}",
+            r#"
+          set timeout 30
           log_user 0
           spawn sh -c {exec 3>"$ARGMAX_TEST_EVENTS"; exec bash --noprofile --norc -i}
           send -- "PS1='ARGMAX''> '; PROMPT_COMMAND='printf \"%s\\n\" \"\$?\" >> \"$env(ARGMAX_TEST_STATUSES)\"'; source \"$env(ARGMAX_TEST_INIT)\"\r"
@@ -3170,6 +3172,8 @@ fi
             timeout { exit 2 }
             eof { exit 3 }
           }
+          send -- "\033\[argmax-sync~"
+          wait_for_probe_count "$env(ARGMAX_TEST_EVENTS)" 1
           send -- "\003"
           expect {
             "ARGMAX> " {}
@@ -3196,9 +3200,10 @@ fi
           }
           send -- "exit\r"
           expect eof
-        "#;
+        "#
+        );
         let output = Command::new("expect")
-            .args(["-c", expect_program])
+            .args(["-c", expect_program.as_str()])
             .env("ARGMAX_PRIVATE_SESSION", "1")
             .env("ARGMAX_EVENT_FD", "3")
             .env("ARGMAX_TEST_EVENTS", &events_path)

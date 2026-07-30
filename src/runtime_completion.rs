@@ -1625,17 +1625,22 @@ mod tests {
                 dispatcher.submit_query_with_alias_expansion(SessionMode::Spec, work, true),
                 QueryAdmission::Queued | QueryAdmission::Coalesced
             ));
-            thread::sleep(Duration::from_millis(40));
+            assert!(!wait_for_batches(&dispatcher).is_empty());
             assert!(dispatcher.drain_alias_expansions(8).is_empty());
         }
 
-        let work = work(&mut coordinator, "gs ", &temporary.0);
+        let pending = work(&mut coordinator, "gs ", &temporary.0);
         assert_eq!(
-            dispatcher.submit_query_with_alias_expansion(SessionMode::Spec, work, true),
+            dispatcher.submit_query_with_alias_expansion(SessionMode::Spec, pending, true),
             QueryAdmission::Queued
         );
         let _ = coordinator.cancel_active_query();
-        thread::sleep(Duration::from_millis(40));
+        let barrier = work(&mut coordinator, "git", &temporary.0);
+        assert!(matches!(
+            dispatcher.submit_query(SessionMode::Spec, barrier),
+            QueryAdmission::Queued | QueryAdmission::Coalesced
+        ));
+        assert!(!wait_for_batches(&dispatcher).is_empty());
         assert!(dispatcher.drain_alias_expansions(8).is_empty());
     }
 
