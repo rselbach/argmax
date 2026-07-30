@@ -221,6 +221,93 @@ pub enum ManualUpdateOutcome {
     },
 }
 
+/// Result of release discovery before any artifact bytes are downloaded.
+pub enum ManualUpdateCheck {
+    /// Running executable has equal or newer semantic precedence.
+    AlreadyCurrent {
+        /// Validated candidate version.
+        version: Box<str>,
+    },
+    /// A newer release is ready for explicit verified installation.
+    Available(ManualUpdatePlan),
+}
+
+impl fmt::Debug for ManualUpdateCheck {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyCurrent { version } => formatter
+                .debug_struct("AlreadyCurrent")
+                .field("version", version)
+                .finish(),
+            Self::Available(plan) => formatter.debug_tuple("Available").field(plan).finish(),
+        }
+    }
+}
+
+/// Validated manual-update release retained across the user-visible
+/// availability boundary.
+pub struct ManualUpdatePlan {
+    source: ReleaseSource,
+    release: ReleaseDescriptor,
+    deadline: Instant,
+}
+
+impl ManualUpdatePlan {
+    /// Available semantic version without a tag prefix.
+    #[must_use]
+    pub fn version(&self) -> &str {
+        self.release.version()
+    }
+
+    /// Downloads, verifies, and atomically installs this exact checked release.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sanitized transport, verification, or atomic-apply failure.
+    pub fn apply(
+        self,
+        current_executable: &Path,
+    ) -> Result<ManualUpdateOutcome, ManualUpdateError> {
+        let checksum_response = get(
+            &self.release.checksum_url(&self.source),
+            self.deadline,
+            RedirectPolicy::Downloads,
+        )?;
+        let checksum_bytes = read_bounded(checksum_response, MAX_CHECKSUM_BYTES, self.deadline)?;
+        let checksum = parse_checksum(&checksum_bytes, self.release.asset)?;
+        let (operating_system, architecture) = host_identity()?;
+        let trusted = TrustedReleaseArtifact::new(
+            self.release.version(),
+            operating_system,
+            architecture,
+            checksum,
+        )
+        .map_err(|_| ReleaseError::InvalidMetadata)?;
+
+        let response = get(
+            &self.release.artifact_url(&self.source),
+            self.deadline,
+            RedirectPolicy::Downloads,
+        )?;
+        let mut reader = DeadlineReader::new(response.into_body().into_reader(), self.deadline);
+        let apply = apply_update_from_reader(&trusted, &mut reader, current_executable)?;
+        Ok(ManualUpdateOutcome::Updated {
+            version: self.release.version().into(),
+            apply,
+        })
+    }
+}
+
+impl fmt::Debug for ManualUpdatePlan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ManualUpdatePlan")
+            .field("source", &self.source)
+            .field("release", &self.release)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Explicit update failure with no retained remote content.
 #[derive(Debug)]
 pub enum ManualUpdateError {
@@ -320,6 +407,28 @@ pub fn apply_manual_update(
     running_version: &str,
     current_executable: &Path,
 ) -> Result<ManualUpdateOutcome, ManualUpdateError> {
+    match check_manual_update(source, channel, running_version)? {
+        ManualUpdateCheck::AlreadyCurrent { version } => {
+            Ok(ManualUpdateOutcome::AlreadyCurrent { version })
+        }
+        ManualUpdateCheck::Available(plan) => plan.apply(current_executable),
+    }
+}
+
+/// Checks for an explicit update without downloading or modifying an artifact.
+///
+/// The returned plan is bound to the exact validated release and the original
+/// two-minute deadline, so callers can report availability before installation
+/// without repeating discovery or racing to a different release.
+///
+/// # Errors
+///
+/// Returns a sanitized release-discovery or host-selection failure.
+pub fn check_manual_update(
+    source: &ReleaseSource,
+    channel: UpdateChannel,
+    running_version: &str,
+) -> Result<ManualUpdateCheck, ReleaseError> {
     let deadline = Instant::now()
         .checked_add(MANUAL_UPDATE_TIMEOUT)
         .ok_or(ReleaseError::Timeout)?;
@@ -328,34 +437,15 @@ pub fn apply_manual_update(
     if SemanticVersion::parse(running_version)
         .is_ok_and(|current| !release.version.precedence_cmp(&current).is_gt())
     {
-        return Ok(ManualUpdateOutcome::AlreadyCurrent {
+        return Ok(ManualUpdateCheck::AlreadyCurrent {
             version: release.version().into(),
         });
     }
-
-    let checksum_response = get(
-        &release.checksum_url(source),
+    Ok(ManualUpdateCheck::Available(ManualUpdatePlan {
+        source: source.clone(),
+        release,
         deadline,
-        RedirectPolicy::Downloads,
-    )?;
-    let checksum_bytes = read_bounded(checksum_response, MAX_CHECKSUM_BYTES, deadline)?;
-    let checksum = parse_checksum(&checksum_bytes, release.asset)?;
-    let (operating_system, architecture) = host_identity()?;
-    let trusted =
-        TrustedReleaseArtifact::new(release.version(), operating_system, architecture, checksum)
-            .map_err(|_| ReleaseError::InvalidMetadata)?;
-
-    let response = get(
-        &release.artifact_url(source),
-        deadline,
-        RedirectPolicy::Downloads,
-    )?;
-    let mut reader = DeadlineReader::new(response.into_body().into_reader(), deadline);
-    let apply = apply_update_from_reader(&trusted, &mut reader, current_executable)?;
-    Ok(ManualUpdateOutcome::Updated {
-        version: release.version().into(),
-        apply,
-    })
+    }))
 }
 
 #[derive(Clone, Copy)]

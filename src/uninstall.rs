@@ -158,6 +158,7 @@ impl From<SetupError> for UninstallError {
 pub struct UninstallPlan {
     shell_targets: Vec<SetupTarget>,
     data_directories: Vec<PathBuf>,
+    update_artifacts: Vec<PathBuf>,
     executable: PathBuf,
     active_session: bool,
 }
@@ -174,6 +175,8 @@ impl UninstallPlan {
         let base = BaseDirs::new().ok_or(UninstallError::NoPlatformDirectory)?;
         let project =
             ProjectDirs::from("", "", "argmax").ok_or(UninstallError::NoPlatformDirectory)?;
+        let legacy =
+            ProjectDirs::from("", "", "iris").ok_or(UninstallError::NoPlatformDirectory)?;
         let home = base.home_dir();
         let zdotdir = std::env::var_os("ZDOTDIR").map(PathBuf::from);
         let xdg_config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
@@ -194,11 +197,19 @@ impl UninstallPlan {
             project.config_dir().to_path_buf(),
             project.data_dir().to_path_buf(),
             project.cache_dir().to_path_buf(),
+            legacy.config_dir().to_path_buf(),
+            legacy.data_dir().to_path_buf(),
+            legacy.cache_dir().to_path_buf(),
             base.config_dir().join("argmax"),
             base.data_dir().join("argmax"),
             base.cache_dir().join("argmax"),
+            base.config_dir().join("iris"),
+            base.data_dir().join("iris"),
+            base.cache_dir().join("iris"),
             home.join(".local/share/argmax"),
+            home.join(".local/share/iris"),
             home.join(".argmax"),
+            home.join(".iris"),
         ];
         let mut data_directories = Vec::new();
         for candidate in candidates {
@@ -218,9 +229,11 @@ impl UninstallPlan {
         let executable = std::env::current_exe()
             .map_err(|error| UninstallError::io("locate current executable", error))?;
         validate_executable_shape(&executable)?;
+        let update_artifacts = discover_update_artifacts(&executable)?;
         Ok(Self {
             shell_targets,
             data_directories,
+            update_artifacts,
             executable,
             active_session: std::env::var_os(SESSION_MARKER_ENV)
                 .is_some_and(|value| !value.is_empty()),
@@ -242,9 +255,11 @@ impl UninstallPlan {
             validate_owned_root_shape(path)?;
         }
         validate_executable_shape(&executable)?;
+        let update_artifacts = discover_update_artifacts(&executable)?;
         Ok(Self {
             shell_targets,
             data_directories,
+            update_artifacts,
             executable,
             active_session,
         })
@@ -299,20 +314,31 @@ impl UninstallPlan {
                 }),
             }
         }
-        match remove_owned_executable(&self.executable) {
-            Ok(RemoveOutcome::Missing) => {}
-            Ok(RemoveOutcome::Removed) => report.removed.push(RemovedLocation {
-                kind: RemovalKind::Executable,
-                path: self.executable,
-                backup: None,
-            }),
-            Err(error) => report.failures.push(RemovalFailure {
-                kind: RemovalKind::Executable,
-                path: self.executable,
-                error,
-            }),
+        for path in self.update_artifacts {
+            record_executable_removal(&mut report, path, validate_update_artifact_shape);
         }
+        record_executable_removal(&mut report, self.executable, validate_executable_shape);
         report
+    }
+}
+
+fn record_executable_removal(
+    report: &mut UninstallReport,
+    path: PathBuf,
+    validate: fn(&Path) -> Result<(), UninstallError>,
+) {
+    match remove_owned_executable(&path, validate) {
+        Ok(RemoveOutcome::Missing) => {}
+        Ok(RemoveOutcome::Removed) => report.removed.push(RemovedLocation {
+            kind: RemovalKind::Executable,
+            path,
+            backup: None,
+        }),
+        Err(error) => report.failures.push(RemovalFailure {
+            kind: RemovalKind::Executable,
+            path,
+            error,
+        }),
     }
 }
 
@@ -322,6 +348,7 @@ impl fmt::Debug for UninstallPlan {
             .debug_struct("UninstallPlan")
             .field("shell_target_count", &self.shell_targets.len())
             .field("data_directory_count", &self.data_directories.len())
+            .field("update_artifact_count", &self.update_artifacts.len())
             .field(
                 "executable_path_bytes",
                 &self.executable.as_os_str().as_bytes().len(),
@@ -340,7 +367,7 @@ enum RemoveOutcome {
 fn validate_owned_root_shape(path: &Path) -> Result<(), UninstallError> {
     validate_absolute_normal(path)?;
     match path.file_name().and_then(OsStr::to_str) {
-        Some("argmax" | ".argmax") => Ok(()),
+        Some("argmax" | ".argmax" | "iris" | ".iris") => Ok(()),
         _ => Err(UninstallError::InvalidPath),
     }
 }
@@ -352,6 +379,47 @@ fn validate_executable_shape(path: &Path) -> Result<(), UninstallError> {
     } else {
         Err(UninstallError::InvalidPath)
     }
+}
+
+fn validate_update_artifact_shape(path: &Path) -> Result<(), UninstallError> {
+    validate_absolute_normal(path)?;
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return Err(UninstallError::InvalidPath);
+    };
+    let Some(random) = name
+        .strip_prefix(".argmax-update-")
+        .and_then(|name| name.strip_suffix(".tmp"))
+    else {
+        return Err(UninstallError::InvalidPath);
+    };
+    if random.len() == 32
+        && random
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err(UninstallError::InvalidPath)
+    }
+}
+
+fn discover_update_artifacts(executable: &Path) -> Result<Vec<PathBuf>, UninstallError> {
+    let Some(anchored) = open_parent(executable)? else {
+        return Ok(Vec::new());
+    };
+    let parent = executable.parent().ok_or(UninstallError::InvalidPath)?;
+    let mut entries = rustix::fs::Dir::read_from(&anchored.parent)
+        .map_err(|error| UninstallError::io("read executable directory", error))?;
+    let mut paths = Vec::new();
+    for entry in &mut entries {
+        let entry = entry.map_err(|error| UninstallError::io("read executable entry", error))?;
+        let path = parent.join(OsStr::from_bytes(entry.file_name().to_bytes()));
+        if validate_update_artifact_shape(&path).is_ok() {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
 }
 
 fn validate_absolute_normal(path: &Path) -> Result<(), UninstallError> {
@@ -520,8 +588,11 @@ fn clear_directory(
         .map_err(|error| UninstallError::io("sync local data directory", error))
 }
 
-fn remove_owned_executable(path: &Path) -> Result<RemoveOutcome, UninstallError> {
-    validate_executable_shape(path)?;
+fn remove_owned_executable(
+    path: &Path,
+    validate: fn(&Path) -> Result<(), UninstallError>,
+) -> Result<RemoveOutcome, UninstallError> {
+    validate(path)?;
     let Some(anchored) = open_parent(path)? else {
         return Ok(RemoveOutcome::Missing);
     };
@@ -646,12 +717,25 @@ mod tests {
         fs::create_dir(&data).unwrap();
         fs::create_dir(data.join("nested")).unwrap();
         fs::write(data.join("nested/history.db"), b"Troy Barnes").unwrap();
+        let legacy_data = temporary.path().join("iris");
+        fs::create_dir(&legacy_data).unwrap();
+        fs::write(legacy_data.join("state.toml"), b"legacy = true").unwrap();
         let binary = temporary.path().join("argmax-bin/argmax");
         fs::create_dir(binary.parent().unwrap()).unwrap();
         executable(&binary);
+        let retained_update = binary
+            .parent()
+            .unwrap()
+            .join(".argmax-update-00000000000000000000000000000000.tmp");
+        executable(&retained_update);
+        let unrelated = binary
+            .parent()
+            .unwrap()
+            .join(".argmax-update-not-an-owned-name.tmp");
+        executable(&unrelated);
         let plan = UninstallPlan::new(
             vec![SetupTarget::new(Shell::Bash, &shell_path).unwrap()],
-            vec![data.clone()],
+            vec![data.clone(), legacy_data.clone()],
             binary.clone(),
             false,
         )
@@ -659,13 +743,16 @@ mod tests {
 
         let report = plan.execute(42);
         assert!(report.succeeded(), "{:#?}", report.failures);
-        assert_eq!(report.removed.len(), 3);
+        assert_eq!(report.removed.len(), 5);
         assert_eq!(
             fs::read_to_string(&shell_path).unwrap(),
             "export DEAN=Pelton\n# Community\n"
         );
         assert!(!data.exists());
+        assert!(!legacy_data.exists());
         assert!(!binary.exists());
+        assert!(!retained_update.exists());
+        assert!(unrelated.exists());
         let shell = report
             .removed
             .iter()
