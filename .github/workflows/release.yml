@@ -143,6 +143,8 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      GH_REPO: ${{ github.repository }}
     concurrency:
       group: argmax-release-publish
       cancel-in-progress: false
