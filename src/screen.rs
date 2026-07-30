@@ -1470,6 +1470,12 @@ impl ScreenObserver {
         }
     }
 
+    /// Suppresses absolute overlay placement until a trusted cursor boundary
+    /// or terminal reset establishes screen coordinates.
+    pub fn desynchronize(&mut self) {
+        self.machine.mark_unsafe();
+    }
+
     /// Consumes output while retaining only a bounded incomplete UTF-8 prefix.
     #[must_use]
     pub fn observe(&mut self, bytes: &[u8]) -> ScreenObservation {
@@ -1602,6 +1608,17 @@ mod tests {
                 "{context} row {row}"
             );
         }
+    }
+
+    #[test]
+    fn unknown_startup_cursor_suppresses_overlay_until_synchronized() {
+        let mut screen = ScreenObserver::new(size(80, 24));
+        screen.desynchronize();
+        assert!(!screen.snapshot().overlay_safe());
+
+        screen.synchronize(CursorPosition::new(6, 32)).unwrap();
+        assert!(screen.snapshot().overlay_safe());
+        assert_eq!(screen.snapshot().cursor(), CursorPosition::new(6, 32));
     }
 
     fn direct_vte(bytes: &[u8], terminal_size: TerminalSize) -> ScreenObserver {

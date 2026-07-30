@@ -45,7 +45,7 @@ use crate::runtime_completion::{
     MAX_ALIAS_EXPANSION_DRAIN, MAX_COMPLETION_DRAIN_BATCHES,
 };
 use crate::runtime_update::{RuntimeUpdateOptions, RuntimeUpdateWorker};
-use crate::screen::{ScreenObserver, TerminalSize};
+use crate::screen::{CursorPosition, ScreenObserver, TerminalSize};
 use crate::session::{EffectBatch, SessionEffect, SessionReducer};
 use crate::shell_control::{ControlRequestId, ReplacementControl};
 use crate::shell_events::{
@@ -61,6 +61,8 @@ const OUTPUT_CHANNEL_CAPACITY: usize = 8;
 const MAX_PENDING_WRITE_BYTES: usize = 512 * 1024;
 const IDLE_POLL: Duration = Duration::from_millis(1);
 const STANDALONE_ESCAPE_TIMEOUT: Duration = Duration::from_millis(25);
+const CURSOR_POSITION_TIMEOUT: Duration = Duration::from_millis(100);
+const CURSOR_POSITION_QUERY: &[u8] = b"\x1b[6n";
 const MAX_DRAIN_PER_TICK: usize = 64;
 const COMPLETION_PROVIDERS: [&str; 2] = [LOCAL_COMPLETION_PROVIDER, AI_COMPLETION_PROVIDER];
 
@@ -270,6 +272,9 @@ fn run_prepared_runtime(
         PtyStartup::acquire().map_err(|error| RuntimeError::Setup(error.to_string()))?;
     let mut terminal = TerminalGuard::enter_stdio(dimensions)
         .map_err(|error| RuntimeError::Setup(error.to_string()))?;
+    let screen_size = TerminalSize::new(dimensions.size().cols, dimensions.size().rows)
+        .map_err(|error| RuntimeError::Setup(error.to_string()))?;
+    let initial_terminal = probe_initial_terminal(&terminal, screen_size, diagnostics)?;
     let request = PtySpawnRequest {
         shell: selected_shell,
         working_directory: working_directory.clone(),
@@ -312,13 +317,16 @@ fn run_prepared_runtime(
             output: terminal.output(),
         },
         InitialOverlay {
-            screen_size: TerminalSize::new(dimensions.size().cols, dimensions.size().rows)
-                .map_err(|error| RuntimeError::Setup(error.to_string()))?,
+            screen_size,
+            initial_cursor: initial_terminal.cursor,
             options: OverlayOptions::from_ui(settings.ui),
             footer_hint: footer_hint(&keybindings),
         },
         services,
     );
+    driver
+        .pending
+        .push(WriteDestination::Pty, initial_terminal.pending_input)?;
     let mut live_configuration = LiveConfiguration::new(settings, reloader);
 
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -583,6 +591,111 @@ fn read_if_ready<R: Read + AsFd>(
     }
 }
 
+struct InitialTerminalState {
+    cursor: Option<CursorPosition>,
+    pending_input: Box<[u8]>,
+}
+
+fn probe_initial_terminal(
+    terminal: &TerminalGuard<io::Stdin, io::Stdout>,
+    size: TerminalSize,
+    diagnostics: Option<&dyn RuntimeDiagnosticSink>,
+) -> Result<InitialTerminalState, RuntimeError> {
+    let mut parent_input = io::stdin();
+    let state = probe_terminal_cursor(&mut parent_input, &terminal.output(), size)?;
+    if state.cursor.is_none()
+        && let Some(diagnostics) = diagnostics
+    {
+        diagnostics.record(
+            "terminal",
+            "cursor position report unavailable; overlay rendering is suppressed",
+        );
+    }
+    Ok(state)
+}
+
+fn probe_terminal_cursor<R: Read + AsFd, W: io::Write>(
+    input: &mut R,
+    output: &SerializedOutput<W>,
+    size: TerminalSize,
+) -> Result<InitialTerminalState, RuntimeError> {
+    output
+        .write_overlay(CURSOR_POSITION_QUERY)
+        .map_err(|error| RuntimeError::Output(error.to_string()))?;
+
+    let deadline = Instant::now() + CURSOR_POSITION_TIMEOUT;
+    let mut pending_input = Vec::with_capacity(INPUT_CHUNK_BYTES);
+    let mut buffer = [0_u8; 256];
+    loop {
+        if let Some((start, end, cursor)) = cursor_position_report(&pending_input, size) {
+            pending_input.drain(start..end);
+            return Ok(InitialTerminalState {
+                cursor: Some(cursor),
+                pending_input: pending_input.into_boxed_slice(),
+            });
+        }
+        if Instant::now() >= deadline || pending_input.len() == INPUT_CHUNK_BYTES {
+            return Ok(InitialTerminalState {
+                cursor: None,
+                pending_input: pending_input.into_boxed_slice(),
+            });
+        }
+
+        let available = INPUT_CHUNK_BYTES - pending_input.len();
+        let read_limit = available.min(buffer.len());
+        let read_buffer = &mut buffer[..read_limit];
+        match read_if_ready(input, read_buffer)? {
+            Some(Ok(0)) => {
+                return Ok(InitialTerminalState {
+                    cursor: None,
+                    pending_input: pending_input.into_boxed_slice(),
+                });
+            }
+            Some(Ok(read)) => pending_input.extend_from_slice(&read_buffer[..read]),
+            Some(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Some(Err(error)) if error.kind() == io::ErrorKind::Interrupted => {}
+            Some(Err(error)) => return Err(RuntimeError::Input(error.kind())),
+            None => thread::sleep(IDLE_POLL),
+        }
+    }
+}
+
+fn cursor_position_report(
+    bytes: &[u8],
+    size: TerminalSize,
+) -> Option<(usize, usize, CursorPosition)> {
+    for start in 0..bytes.len().saturating_sub(1) {
+        if bytes.get(start..start + 2) != Some(b"\x1b[") {
+            continue;
+        }
+        let mut index = start + 2;
+        let Some(row) = parse_cursor_coordinate(bytes, &mut index, b';') else {
+            continue;
+        };
+        let Some(column) = parse_cursor_coordinate(bytes, &mut index, b'R') else {
+            continue;
+        };
+        if row <= size.rows() && column <= size.columns() {
+            return Some((start, index, CursorPosition::new(row - 1, column - 1)));
+        }
+    }
+    None
+}
+
+fn parse_cursor_coordinate(bytes: &[u8], index: &mut usize, terminator: u8) -> Option<u16> {
+    let start = *index;
+    let mut value = 0_u16;
+    while let Some(byte) = bytes.get(*index).copied().filter(u8::is_ascii_digit) {
+        value = value.checked_mul(10)?.checked_add(u16::from(byte - b'0'))?;
+        *index += 1;
+    }
+    if *index == start || value == 0 || bytes.get(*index) != Some(&terminator) {
+        return None;
+    }
+    *index += 1;
+    Some(value)
+}
+
 enum ReaderMessage {
     Bytes(Box<[u8]>),
     Eof,
@@ -802,8 +915,17 @@ fn order_merged_candidates(
 
 struct InitialOverlay {
     screen_size: TerminalSize,
+    initial_cursor: Option<CursorPosition>,
     options: OverlayOptions,
     footer_hint: String,
+}
+
+fn screen_at_cursor(size: TerminalSize, cursor: Option<CursorPosition>) -> ScreenObserver {
+    let mut screen = ScreenObserver::new(size);
+    if cursor.is_none_or(|cursor| screen.synchronize(cursor).is_err()) {
+        screen.desynchronize();
+    }
+    screen
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1002,6 +1124,7 @@ fn drive_session(
 impl SessionDriver {
     fn new(transport: DriverTransport, overlay: InitialOverlay, services: RuntimeServices) -> Self {
         let ai_configured = services.ai.is_some();
+        let screen = screen_at_cursor(overlay.screen_size, overlay.initial_cursor);
         Self {
             integration: transport.integration,
             signals: transport.signals,
@@ -1015,7 +1138,7 @@ impl SessionDriver {
             escape_deadline: None,
             reload_request: None,
             output: transport.output,
-            screen: ScreenObserver::new(overlay.screen_size),
+            screen,
             renderer: OverlayRenderer::new(),
             overlay_options: overlay.options,
             footer_hint: overlay.footer_hint,
@@ -1102,12 +1225,16 @@ impl SessionDriver {
             .map_err(|error| RuntimeError::Setup(error.to_string()))?;
         let resumed_terminal = TerminalGuard::enter_stdio(dimensions)
             .map_err(|error| RuntimeError::Setup(error.to_string()))?;
+        let size = TerminalSize::new(dimensions.size().cols, dimensions.size().rows)
+            .map_err(|error| RuntimeError::Setup(error.to_string()))?;
+        let mut parent_input = io::stdin();
+        let resumed = probe_terminal_cursor(&mut parent_input, &resumed_terminal.output(), size)?;
         session
             .resize(dimensions.size())
             .map_err(|error| RuntimeError::Setup(error.to_string()))?;
-        let size = TerminalSize::new(dimensions.size().cols, dimensions.size().rows)
-            .map_err(|error| RuntimeError::Setup(error.to_string()))?;
-        let _ = self.screen.resize(size);
+        self.screen = screen_at_cursor(size, resumed.cursor);
+        self.pending
+            .push(WriteDestination::Pty, resumed.pending_input)?;
         *terminal = resumed_terminal;
         session
             .forward_signal(ForwardSignal::Continue)
@@ -1801,6 +1928,37 @@ mod tests {
         ));
         assert!(pending.is_empty());
         assert_eq!(pending.bytes, 0);
+    }
+
+    #[test]
+    fn cursor_report_uses_terminal_coordinates_and_skips_invalid_candidates() {
+        let size = TerminalSize::new(80, 24).unwrap();
+        let bytes = b"user\x1b[999;1Rdata\x1b[7;33Rtail";
+        let (start, end, cursor) = cursor_position_report(bytes, size).unwrap();
+
+        assert_eq!(cursor, CursorPosition::new(6, 32));
+        assert_eq!(&bytes[start..end], b"\x1b[7;33R");
+        assert!(cursor_position_report(b"\x1b[0;1R\x1b[1;81R", size).is_none());
+
+        let mut screen = ScreenObserver::new(size);
+        screen.synchronize(cursor).unwrap();
+        let _ = screen.observe(b"\r\ngpg warning\r\nprompt> git");
+        assert_eq!(screen.snapshot().cursor(), CursorPosition::new(8, 11));
+    }
+
+    #[test]
+    fn cursor_probe_removes_only_the_report_and_preserves_early_input() {
+        let (reader, writer) = nix::unistd::pipe().unwrap();
+        let mut input = File::from(reader);
+        let mut response = File::from(writer);
+        response.write_all(b"g\x1b[7;33Ri").unwrap();
+        let output = SerializedOutput::new(io::sink());
+
+        let state =
+            probe_terminal_cursor(&mut input, &output, TerminalSize::new(80, 24).unwrap()).unwrap();
+
+        assert_eq!(state.cursor, Some(CursorPosition::new(6, 32)));
+        assert_eq!(state.pending_input.as_ref(), b"gi");
     }
 
     #[test]
