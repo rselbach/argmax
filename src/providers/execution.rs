@@ -540,6 +540,28 @@ impl DynamicExecutor {
                     },
                 });
             }
+            "pacman" | "yay" | "paru" => {
+                let binary = self.resolve_program(root, path, &query.cwd)?;
+                return Some(PreparedGenerator {
+                    cache_identity: Some(binary.cache_identity()),
+                    source: GeneratorSource::Process {
+                        binary,
+                        arguments: ["-Qq".into()].into(),
+                        parser: ProcessParser::Resource(DynamicResourceKind::Package),
+                    },
+                });
+            }
+            "dnf" | "yum" => {
+                let binary = self.resolve_program("rpm", path, &query.cwd)?;
+                return Some(PreparedGenerator {
+                    cache_identity: Some(binary.cache_identity()),
+                    source: GeneratorSource::Process {
+                        binary,
+                        arguments: ["-qa".into(), "--qf".into(), "%{NAME}\n".into()].into(),
+                        parser: ProcessParser::Resource(DynamicResourceKind::Package),
+                    },
+                });
+            }
             _ => return None,
         };
         Self::nearest_snapshot(&query.cwd, names)
@@ -1766,6 +1788,54 @@ mod tests {
         );
         assert!(runner.plans.is_empty());
         assert!(!marker.exists());
+    }
+
+    #[test]
+    fn system_package_generators_use_fixed_non_shell_queries() {
+        let temporary = tempfile::tempdir().unwrap();
+        for executable in ["pacman", "yay", "paru", "rpm"] {
+            temp_executable(temporary.path(), executable);
+        }
+
+        for (root, executable, arguments) in [
+            ("pacman", "pacman", vec![OsString::from("-Qq")]),
+            ("yay", "yay", vec![OsString::from("-Qq")]),
+            ("paru", "paru", vec![OsString::from("-Qq")]),
+            (
+                "dnf",
+                "rpm",
+                ["-qa", "--qf", "%{NAME}\n"].map(OsString::from).into(),
+            ),
+            (
+                "yum",
+                "rpm",
+                ["-qa", "--qf", "%{NAME}\n"].map(OsString::from).into(),
+            ),
+        ] {
+            let index = dynamic_index(root, GeneratorKind::Packages);
+            let line = format!("{root} ");
+            let query = CompletionQuery::new(&line, line.len(), temporary.path(), 1).unwrap();
+            let mut executor = DynamicExecutor::new();
+            let mut runner = FakeRunner::one(Ok(b"troy\nabed\n".to_vec()));
+            let suggestions = executor.complete_curated_with(
+                &index,
+                &query,
+                context(temporary.path().as_os_str(), None),
+                &cancellation(false),
+                &mut runner,
+            );
+
+            assert_eq!(
+                suggestions
+                    .iter()
+                    .map(Suggestion::display)
+                    .collect::<Vec<_>>(),
+                ["abed", "troy"]
+            );
+            assert_eq!(runner.plans.len(), 1);
+            assert_eq!(runner.plans[0].0, temporary.path().join(executable));
+            assert_eq!(runner.plans[0].1, arguments);
+        }
     }
 
     #[cfg(unix)]

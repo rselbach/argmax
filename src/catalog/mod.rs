@@ -964,6 +964,9 @@ mod tests {
             ("ssh ", GeneratorKind::SshHosts),
             ("zoxide query ", GeneratorKind::ZoxideDirectories),
             ("kill ", GeneratorKind::Processes),
+            ("pacman ", GeneratorKind::Packages),
+            ("dnf remove ", GeneratorKind::Packages),
+            ("brew uninstall ", GeneratorKind::Packages),
             (
                 "ls ",
                 GeneratorKind::Filesystem(FilesystemGenerator::default()),
