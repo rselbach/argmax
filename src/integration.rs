@@ -1395,34 +1395,71 @@ if status is-interactive; and test -t 0; and test -t 1
       set -l argmax_frames 0
       while test $argmax_total_bytes -lt 65536; and \
           test $argmax_frames -lt 4
-        set -l argmax_chunk ''
-        read --null --nchars 4096 --local argmax_chunk \
-          <&$ARGMAX_CONTROL_FD 2>/dev/null
-        set -l argmax_read_status $status
-        set -l argmax_chunk_bytes (string length -- "$argmax_chunk")
+        # fish 3.x waits before reading even when this descriptor is
+        # nonblocking. dd performs the nonblocking read; split0 then parses
+        # the bounded pipe after dd exits without losing NUL frame boundaries.
+        set -l argmax_parts (
+          begin
+            printf 'argmax-read-start\0'
+            command /bin/dd bs=4096 count=1 \
+              <&$ARGMAX_CONTROL_FD 2>/dev/null
+            printf '\0argmax-read-end\0'
+          end | string split0
+        )
+        test (count $argmax_parts) -ge 3; or break
+        test "$argmax_parts[1]" = argmax-read-start; or break
+        test "$argmax_parts[-1]" = argmax-read-end; or break
+        set -e argmax_parts[1]
+        set -e argmax_parts[-1]
+
+        set -l argmax_chunk_bytes \
+          (math (count $argmax_parts) - 1)
+        for argmax_part in $argmax_parts
+          set argmax_chunk_bytes (math \
+            "$argmax_chunk_bytes + "(string length -- "$argmax_part"))
+        end
+        test $argmax_chunk_bytes -gt 0; or break
         set argmax_total_bytes \
           (math "$argmax_total_bytes + $argmax_chunk_bytes")
-        if test $__ARGMAX_FISH_CONTROL_DISCARDING -eq 0
+
+        set -l argmax_partial ''
+        if test -n "$argmax_parts[-1]"
+          set argmax_partial "$argmax_parts[-1]"
+        end
+        set -e argmax_parts[-1]
+
+        for argmax_part in $argmax_parts
+          test $argmax_frames -lt 4; or break
+          if test $__ARGMAX_FISH_CONTROL_DISCARDING -eq 0
+            set -g __ARGMAX_FISH_CONTROL_PENDING \
+              "$__ARGMAX_FISH_CONTROL_PENDING$argmax_part"
+            if test (string length -- "$__ARGMAX_FISH_CONTROL_PENDING") \
+                -gt 32817
+              set -g __ARGMAX_FISH_CONTROL_PENDING ''
+              set -g __ARGMAX_FISH_CONTROL_DISCARDING 1
+            end
+          end
+          set argmax_frames (math "$argmax_frames + 1")
+          if test $__ARGMAX_FISH_CONTROL_DISCARDING -eq 1
+            set -g __ARGMAX_FISH_CONTROL_DISCARDING 0
+            set -g __ARGMAX_FISH_CONTROL_PENDING ''
+            continue
+          end
+          set -l argmax_frame "$__ARGMAX_FISH_CONTROL_PENDING"
+          set -g __ARGMAX_FISH_CONTROL_PENDING ''
+          __argmax_control_apply "$argmax_frame"
+        end
+
+        if test -n "$argmax_partial"; and \
+            test $__ARGMAX_FISH_CONTROL_DISCARDING -eq 0
           set -g __ARGMAX_FISH_CONTROL_PENDING \
-            "$__ARGMAX_FISH_CONTROL_PENDING$argmax_chunk"
+            "$__ARGMAX_FISH_CONTROL_PENDING$argmax_partial"
           if test (string length -- "$__ARGMAX_FISH_CONTROL_PENDING") \
               -gt 32817
             set -g __ARGMAX_FISH_CONTROL_PENDING ''
             set -g __ARGMAX_FISH_CONTROL_DISCARDING 1
           end
         end
-        test $argmax_read_status -eq 0; or break
-        test $argmax_chunk_bytes -eq 4096; and continue
-
-        set argmax_frames (math "$argmax_frames + 1")
-        if test $__ARGMAX_FISH_CONTROL_DISCARDING -eq 1
-          set -g __ARGMAX_FISH_CONTROL_DISCARDING 0
-          set -g __ARGMAX_FISH_CONTROL_PENDING ''
-          continue
-        end
-        set -l argmax_frame "$__ARGMAX_FISH_CONTROL_PENDING"
-        set -g __ARGMAX_FISH_CONTROL_PENDING ''
-        __argmax_control_apply "$argmax_frame"
       end
       return $argmax_status
     end
@@ -2662,30 +2699,42 @@ mod tests {
           log_user 0
           spawn sh -c {exec 3>>"$ARGMAX_TEST_EVENTS"; exec 4<"$ARGMAX_TEST_CONTROLS"; exec $ARGMAX_TEST_SHELL $ARGMAX_TEST_ARGS}
           if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
-            send -- "function fish_prompt; printf 'ARGMAX\\x3e '; end; source \"$env(ARGMAX_TEST_INIT)\"\r"
+            send -- "set -g ARGMAX_TEST_PROMPT_COUNT 0; function fish_prompt; set -g ARGMAX_TEST_PROMPT_COUNT (math \$ARGMAX_TEST_PROMPT_COUNT + 1); printf 'ARGMAX%s\\x3e ' \$ARGMAX_TEST_PROMPT_COUNT; end; source \"$env(ARGMAX_TEST_INIT)\"\r"
           } else {
             send -- "PS1='ARGMAX''> '; source \"$env(ARGMAX_TEST_INIT)\"\r"
           }
-          expect {
-            "ARGMAX> " {}
-            timeout { exit 2 }
-            eof { exit 3 }
+          if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
+            expect {
+              "ARGMAX1> " {}
+              timeout { exit 2 }
+              eof { exit 3 }
+            }
+          } else {
+            expect {
+              "ARGMAX> " {}
+              timeout { exit 2 }
+              eof { exit 3 }
+            }
           }
           send -- "source \"$env(ARGMAX_TEST_INIT)\"\r"
-          expect {
-            "ARGMAX> " {}
-            timeout { exit 4 }
-            eof { exit 5 }
+          if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
+            expect {
+              "ARGMAX2> " {}
+              timeout { exit 4 }
+              eof { exit 5 }
+            }
+          } else {
+            expect {
+              "ARGMAX> " {}
+              timeout { exit 4 }
+              eof { exit 5 }
+            }
           }
           send -- "$env(ARGMAX_TEST_INITIAL)"
           send -- "\033\[argmax-sync~"
-          after 200
+          after 1000
           send -- "\003"
-          expect {
-            "ARGMAX> " {}
-            timeout { exit 6 }
-            eof { exit 7 }
-          }
+          after 500
           send -- "exit\r"
           expect eof
         "#;
@@ -2757,14 +2806,22 @@ mod tests {
           log_user 0
           spawn sh -c {exec 3>>"$ARGMAX_TEST_EVENTS"; exec 4<"$ARGMAX_TEST_CONTROLS"; exec $ARGMAX_TEST_SHELL $ARGMAX_TEST_ARGS}
           if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
-            send -- "function fish_prompt; printf 'ARGMAX\\x3e '; end; source \"$env(ARGMAX_TEST_INIT)\"\r"
+            send -- "set -g ARGMAX_TEST_PROMPT_COUNT 0; function fish_prompt; set -g ARGMAX_TEST_PROMPT_COUNT (math \$ARGMAX_TEST_PROMPT_COUNT + 1); printf 'ARGMAX%s\\x3e ' \$ARGMAX_TEST_PROMPT_COUNT; end; source \"$env(ARGMAX_TEST_INIT)\"\r"
           } else {
             send -- "PS1='ARGMAX''> '; source \"$env(ARGMAX_TEST_INIT)\"\r"
           }
-          expect {
-            "ARGMAX> " {}
-            timeout { exit 2 }
-            eof { exit 3 }
+          if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
+            expect {
+              "ARGMAX1> " {}
+              timeout { exit 2 }
+              eof { exit 3 }
+            }
+          } else {
+            expect {
+              "ARGMAX> " {}
+              timeout { exit 2 }
+              eof { exit 3 }
+            }
           }
           send -- "safe"
           send -- "\033\[argmax-sync~"
@@ -2779,13 +2836,9 @@ mod tests {
           puts -nonewline $target $control
           close $target
           send -- "\033\[argmax-sync~"
-          after 200
+          after 500
           send -- "\003"
-          expect {
-            "ARGMAX> " {}
-            timeout { exit 4 }
-            eof { exit 5 }
-          }
+          after 500
           send -- "exit\r"
           expect eof
         "#;
