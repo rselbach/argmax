@@ -603,13 +603,13 @@ fn probe_initial_terminal(
 ) -> Result<InitialTerminalState, RuntimeError> {
     let mut parent_input = io::stdin();
     let state = probe_terminal_cursor(&mut parent_input, &terminal.output(), size)?;
-    if state.cursor.is_none()
-        && let Some(diagnostics) = diagnostics
-    {
-        diagnostics.record(
-            "terminal",
-            "cursor position report unavailable; overlay rendering is suppressed",
-        );
+    if state.cursor.is_none() {
+        if let Some(diagnostics) = diagnostics {
+            diagnostics.record(
+                "terminal",
+                "cursor position report unavailable; overlay rendering is suppressed",
+            );
+        }
     }
     Ok(state)
 }

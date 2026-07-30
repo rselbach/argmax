@@ -287,12 +287,12 @@ impl SetupTarget {
             sync_directory(&anchored.parent)?;
             return Err(error);
         }
-        if let (Some(backup), Some(source)) = (backup.as_ref(), source.as_ref())
-            && let Err(error) = validate_backup(&anchored, backup, source)
-        {
-            restore_published_state(&anchored, Some(source), &mut replacement)?;
-            sync_directory(&anchored.parent)?;
-            return Err(error);
+        if let (Some(backup), Some(source)) = (backup.as_ref(), source.as_ref()) {
+            if let Err(error) = validate_backup(&anchored, backup, source) {
+                restore_published_state(&anchored, Some(source), &mut replacement)?;
+                sync_directory(&anchored.parent)?;
+                return Err(error);
+            }
         }
         Ok(SetupOutcome::installed(
             self.path.clone(),
