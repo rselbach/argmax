@@ -1584,6 +1584,67 @@ pub struct ConfigEdit {
     source_unmanaged_bytes: usize,
 }
 
+/// Pure result of removing one stable marked integration block.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ConfigRemoval {
+    content: Vec<u8>,
+    changed: bool,
+    legacy_integrations: Vec<LegacyIntegration>,
+    source_managed_bytes: usize,
+    source_unmanaged_bytes: usize,
+}
+
+impl ConfigRemoval {
+    /// Edited bytes with only the stable marked span removed.
+    #[must_use]
+    pub fn content(&self) -> &[u8] {
+        &self.content
+    }
+
+    /// Whether a marked block was present and removed.
+    #[must_use]
+    pub const fn changed(&self) -> bool {
+        self.changed
+    }
+
+    /// Unmarked legacy lines deliberately retained by uninstall.
+    #[must_use]
+    pub fn legacy_integrations(&self) -> &[LegacyIntegration] {
+        &self.legacy_integrations
+    }
+
+    /// Bytes occupied by the one marked block and one adjoining delimiter.
+    #[must_use]
+    pub const fn source_managed_bytes(&self) -> usize {
+        self.source_managed_bytes
+    }
+
+    /// Exact source bytes outside the removed managed span.
+    #[must_use]
+    pub const fn source_unmanaged_bytes(&self) -> usize {
+        self.source_unmanaged_bytes
+    }
+
+    /// Consumes the result and returns the edited bytes.
+    #[must_use]
+    pub fn into_content(self) -> Vec<u8> {
+        self.content
+    }
+}
+
+impl fmt::Debug for ConfigRemoval {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConfigRemoval")
+            .field("content_bytes", &self.content.len())
+            .field("changed", &self.changed)
+            .field("legacy_integration_count", &self.legacy_integrations.len())
+            .field("source_managed_bytes", &self.source_managed_bytes)
+            .field("source_unmanaged_bytes", &self.source_unmanaged_bytes)
+            .finish()
+    }
+}
+
 impl fmt::Debug for ConfigEdit {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1779,10 +1840,51 @@ pub fn edit_config(content: &[u8], shell: Shell) -> Result<ConfigEdit, ConfigEdi
     })
 }
 
+/// Removes exactly one well-formed stable integration block.
+///
+/// Unmarked legacy integration lines and all unrelated bytes are retained.
+/// One adjoining line delimiter is considered part of the managed span so an
+/// install followed by removal restores the original bytes exactly.
+///
+/// # Errors
+///
+/// Returns an error for unbalanced, nested, or duplicate stable markers.
+pub fn remove_config(content: &[u8]) -> Result<ConfigRemoval, ConfigEditError> {
+    let ConfigScan {
+        marked_range,
+        legacy_integrations,
+    } = scan_config(content)?;
+    let Some(marked_range) = marked_range else {
+        return Ok(ConfigRemoval {
+            content: content.to_vec(),
+            changed: false,
+            legacy_integrations,
+            source_managed_bytes: 0,
+            source_unmanaged_bytes: content.len(),
+        });
+    };
+    let managed = managed_span(content, &marked_range);
+    let mut edited = Vec::with_capacity(content.len() - managed.len());
+    edited.extend_from_slice(&content[..managed.start]);
+    edited.extend_from_slice(&content[managed.end..]);
+    Ok(ConfigRemoval {
+        content: edited,
+        changed: true,
+        legacy_integrations,
+        source_managed_bytes: managed.len(),
+        source_unmanaged_bytes: content.len() - managed.len(),
+    })
+}
+
 fn source_byte_partition(content: &[u8], marked_range: Option<&Range<usize>>) -> (usize, usize) {
     let Some(marked_range) = marked_range else {
         return (0, content.len());
     };
+    let managed = source_partition_span(content, marked_range);
+    (managed.len(), content.len() - managed.len())
+}
+
+fn source_partition_span(content: &[u8], marked_range: &Range<usize>) -> Range<usize> {
     let mut start = marked_range.start;
     if content[..start].ends_with(b"\r\n") {
         start -= 2;
@@ -1795,8 +1897,32 @@ fn source_byte_partition(content: &[u8], marked_range: Option<&Range<usize>>) ->
     } else if content[end..].starts_with(b"\n") {
         end += 1;
     }
-    let managed = end - start;
-    (managed, content.len() - managed)
+    start..end
+}
+
+fn managed_span(content: &[u8], marked_range: &Range<usize>) -> Range<usize> {
+    let mut start = marked_range.start;
+    let mut end = marked_range.end;
+    let preceding = if content[..start].ends_with(b"\r\n") {
+        2
+    } else {
+        usize::from(content[..start].ends_with(b"\n"))
+    };
+    let following = if content[end..].starts_with(b"\r\n") {
+        2
+    } else {
+        usize::from(content[end..].starts_with(b"\n"))
+    };
+    if preceding > 0 {
+        start -= preceding;
+    }
+    // A terminal block rendered by setup owns both its separator from prior
+    // content and its terminal newline. A block followed by unrelated content
+    // owns only the preceding separator so the remaining lines stay apart.
+    if preceding == 0 || end + following == content.len() {
+        end += following;
+    }
+    start..end
 }
 
 #[derive(Clone, Copy)]
@@ -3115,6 +3241,52 @@ fi
         assert!(edit.content().starts_with(b"# Troy Barnes\n"));
         assert!(edit.content().ends_with(b"\n# Greendale\n"));
         assert!(String::from_utf8_lossy(edit.content()).contains(r#"eval "$(argmax init zsh)""#));
+    }
+
+    #[test]
+    fn removes_only_marked_bytes_and_round_trips_installation() {
+        for original in [
+            b"".as_slice(),
+            b"# Troy Barnes".as_slice(),
+            b"# Troy Barnes\n".as_slice(),
+            b"# Troy Barnes\r\nexport DEAN=Pelton\r\n".as_slice(),
+            b"\xffunrelated\n".as_slice(),
+        ] {
+            let installed = edit_config(original, Shell::Bash).unwrap();
+            let removal = remove_config(installed.content()).unwrap();
+            assert!(removal.changed());
+            assert_eq!(removal.content(), original);
+            assert_eq!(
+                removal.source_managed_bytes() + removal.source_unmanaged_bytes(),
+                installed.content().len()
+            );
+        }
+
+        let legacy = b"eval \"$(argmax init bash)\"\n# Greendale\n";
+        let unchanged = remove_config(legacy).unwrap();
+        assert!(!unchanged.changed());
+        assert_eq!(unchanged.content(), legacy);
+        assert_eq!(unchanged.legacy_integrations().len(), 1);
+    }
+
+    #[test]
+    fn removal_handles_a_marked_block_at_each_file_boundary() {
+        for (source, want) in [
+            (
+                format!("{BEGIN_MARKER}\nhook\n{END_MARKER}\n# suffix\n"),
+                b"# suffix\n".as_slice(),
+            ),
+            (
+                format!("# prefix\n{BEGIN_MARKER}\nhook\n{END_MARKER}"),
+                b"# prefix".as_slice(),
+            ),
+            (
+                format!("# prefix\n{BEGIN_MARKER}\nhook\n{END_MARKER}\n# suffix\n"),
+                b"# prefix\n# suffix\n".as_slice(),
+            ),
+        ] {
+            assert_eq!(remove_config(source.as_bytes()).unwrap().content(), want);
+        }
     }
 
     #[test]

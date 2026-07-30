@@ -15,7 +15,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 use crate::config::Shell;
-use crate::integration::{ConfigEditError, EditOutcome, edit_config, suggest_config_target};
+use crate::integration::{
+    ConfigEditError, EditOutcome, edit_config, remove_config, suggest_config_target,
+};
 
 /// Maximum shell-configuration bytes excluding one bounded managed block.
 pub const MAX_SHELL_CONFIG_BYTES: usize = 2 * 1024 * 1024;
@@ -164,6 +166,78 @@ impl SetupTarget {
     /// preserved whenever publication cannot be proven safe.
     pub fn install(&self, timestamp_seconds: u64) -> Result<SetupOutcome, SetupError> {
         self.install_with_post_publication_hook(timestamp_seconds, || {})
+    }
+
+    /// Removes exactly one stable marked integration block atomically.
+    ///
+    /// Unmarked legacy lines and unrelated shell configuration bytes are
+    /// retained. An existing file is backed up before publication. Missing
+    /// files and files without a managed block are successful no-ops.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded structural or filesystem error. Existing content is
+    /// restored whenever publication cannot be proven safe.
+    pub fn remove(&self, timestamp_seconds: u64) -> Result<SetupRemovalOutcome, SetupError> {
+        self.remove_with_post_publication_hook(timestamp_seconds, || {})
+    }
+
+    fn remove_with_post_publication_hook(
+        &self,
+        timestamp_seconds: u64,
+        post_publication_hook: impl FnOnce(),
+    ) -> Result<SetupRemovalOutcome, SetupError> {
+        let Some(anchored) = AnchoredTarget::open_existing(&self.path)? else {
+            return Ok(SetupRemovalOutcome::unchanged(self.path.clone(), 0));
+        };
+        if read_optional_source(&anchored)?.is_none() {
+            anchored.validate_parent()?;
+            return Ok(SetupRemovalOutcome::unchanged(self.path.clone(), 0));
+        }
+
+        let lock = acquire_setup_lock(&anchored)?;
+        let Some(source) = read_optional_source(&anchored)? else {
+            validate_unchanged(&anchored, &lock, None)?;
+            return Ok(SetupRemovalOutcome::unchanged(self.path.clone(), 0));
+        };
+        let removal = remove_config(&source.bytes).map_err(SetupError::MalformedConfig)?;
+        if removal.source_managed_bytes() > MAX_MANAGED_BLOCK_BYTES
+            || removal.source_unmanaged_bytes() > MAX_SHELL_CONFIG_BYTES
+        {
+            return Err(SetupError::ConfigTooLarge);
+        }
+        let legacy_count = removal.legacy_integrations().len();
+        if !removal.changed() {
+            validate_unchanged(&anchored, &lock, Some(&source))?;
+            return Ok(SetupRemovalOutcome::unchanged(
+                self.path.clone(),
+                legacy_count,
+            ));
+        }
+
+        let backup = write_backup(&anchored, &source, timestamp_seconds)?;
+        let mut replacement = prepare_replacement(&anchored, removal.content(), Some(&source))?;
+        validate_backup(&anchored, &backup, &source)?;
+        anchored.validate_parent()?;
+        validate_lock_anchor(&anchored, &lock)?;
+        publish_replacement(&anchored, &source, &mut replacement)?;
+        sync_directory(&anchored.parent)?;
+        post_publication_hook();
+        if let Err(error) = validate_published_authority(&anchored, &lock) {
+            restore_published_state(&anchored, Some(&source), &mut replacement)?;
+            sync_directory(&anchored.parent)?;
+            return Err(error);
+        }
+        if let Err(error) = validate_backup(&anchored, &backup, &source) {
+            restore_published_state(&anchored, Some(&source), &mut replacement)?;
+            sync_directory(&anchored.parent)?;
+            return Err(error);
+        }
+        Ok(SetupRemovalOutcome::removed(
+            self.path.clone(),
+            backup.path,
+            legacy_count,
+        ))
     }
 
     fn install_with_post_publication_hook(
@@ -368,6 +442,74 @@ impl SetupOutcome {
     }
 }
 
+/// Result of one idempotent marked-integration removal.
+#[derive(Clone, Eq, PartialEq)]
+pub struct SetupRemovalOutcome {
+    path: PathBuf,
+    backup: Option<PathBuf>,
+    changed: bool,
+    retained_legacy_integrations: usize,
+}
+
+impl SetupRemovalOutcome {
+    fn unchanged(path: PathBuf, retained_legacy_integrations: usize) -> Self {
+        Self {
+            path,
+            backup: None,
+            changed: false,
+            retained_legacy_integrations,
+        }
+    }
+
+    fn removed(path: PathBuf, backup: PathBuf, retained_legacy_integrations: usize) -> Self {
+        Self {
+            path,
+            backup: Some(backup),
+            changed: true,
+            retained_legacy_integrations,
+        }
+    }
+
+    /// Shell configuration inspected or changed.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Durable pre-removal backup when bytes changed.
+    #[must_use]
+    pub fn backup(&self) -> Option<&Path> {
+        self.backup.as_deref()
+    }
+
+    /// Whether a stable marked block was removed.
+    #[must_use]
+    pub const fn changed(&self) -> bool {
+        self.changed
+    }
+
+    /// Unmarked legacy integration lines deliberately left untouched.
+    #[must_use]
+    pub const fn retained_legacy_integrations(&self) -> usize {
+        self.retained_legacy_integrations
+    }
+}
+
+impl fmt::Debug for SetupRemovalOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SetupRemovalOutcome")
+            .field("path_bytes", &path_bytes(&self.path))
+            .field("backup_path_bytes", &self.backup.as_deref().map(path_bytes))
+            .field("changed", &self.changed)
+            .field(
+                "retained_legacy_integrations",
+                &self.retained_legacy_integrations,
+            )
+            .finish()
+    }
+}
+
 impl fmt::Debug for SetupOutcome {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -495,6 +637,27 @@ impl AnchoredTarget {
             parent_path,
             name,
         })
+    }
+
+    fn open_existing(path: &Path) -> Result<Option<Self>, SetupError> {
+        let parent_path = platform_anchor_path(required_parent(path)?);
+        let name = path
+            .file_name()
+            .ok_or(SetupError::MissingPathComponent)?
+            .to_os_string();
+        let parent = match open_directory_chain(&parent_path, false) {
+            Ok(parent) => parent,
+            Err(SetupError::Io {
+                kind: io::ErrorKind::NotFound,
+                ..
+            }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        Ok(Some(Self {
+            parent,
+            parent_path,
+            name,
+        }))
     }
 
     fn absolute_path_for(&self, name: &OsStr) -> PathBuf {
@@ -1598,6 +1761,59 @@ mod tests {
         assert!(second.backup().is_none());
         assert_eq!(fs::read_to_string(&path).unwrap(), installed);
         assert!(!path.with_file_name(".bashrc.argmax-backup.43").exists());
+    }
+
+    #[test]
+    fn removal_restores_unrelated_bytes_and_is_idempotent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join(".bashrc");
+        let original = b"export DEAN=Pelton\n";
+        fs::write(&path, original).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let target = SetupTarget::new(Shell::Bash, &path).unwrap();
+        target.install(42).unwrap();
+
+        let removed = target.remove(43).unwrap();
+        assert!(removed.changed());
+        assert_eq!(removed.path(), path);
+        assert!(
+            fs::read_to_string(removed.backup().unwrap())
+                .unwrap()
+                .contains(BEGIN_MARKER)
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(removed.retained_legacy_integrations(), 0);
+        #[cfg(unix)]
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o640);
+
+        let second = target.remove(44).unwrap();
+        assert!(!second.changed());
+        assert!(second.backup().is_none());
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn removal_retains_legacy_lines_and_does_not_create_missing_parents() {
+        let temporary = tempfile::tempdir().unwrap();
+        let legacy_path = temporary.path().join(".bashrc");
+        let legacy = b"eval \"$(argmax init bash)\"\n# Troy Barnes\n";
+        fs::write(&legacy_path, legacy).unwrap();
+        let legacy_outcome = SetupTarget::new(Shell::Bash, &legacy_path)
+            .unwrap()
+            .remove(45)
+            .unwrap();
+        assert!(!legacy_outcome.changed());
+        assert_eq!(legacy_outcome.retained_legacy_integrations(), 1);
+        assert_eq!(fs::read(&legacy_path).unwrap(), legacy);
+
+        let missing_path = temporary.path().join("missing/parent/.zshrc");
+        let missing_outcome = SetupTarget::new(Shell::Zsh, &missing_path)
+            .unwrap()
+            .remove(46)
+            .unwrap();
+        assert!(!missing_outcome.changed());
+        assert!(!missing_path.parent().unwrap().exists());
     }
 
     #[test]

@@ -37,6 +37,7 @@ pub mod shell_control;
 pub mod shell_events;
 pub mod state;
 pub mod terminal;
+pub mod uninstall;
 pub mod update_apply;
 pub mod updater;
 pub mod version;
