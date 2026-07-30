@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.runner }} / Rust 1.85
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - macos-15
+          - macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install shell test dependencies on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bash expect fish shellcheck zsh
+      - name: Install shell test dependencies on macOS
+        if: runner.os == 'macOS'
+        run: brew install bash expect fish shellcheck
+      - name: Install Rust 1.85
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal \
+            --component clippy --component rustfmt
+          rustup override set 1.85.0
+      - name: Check formatting and generated catalog
+        run: |
+          cargo fmt --all -- --check
+          cargo run --example generate_catalog -- --check
+      - name: Check shell scripts
+        run: |
+          shellcheck -s sh scripts/*.sh tests/*.sh
+          tests/installer.sh
+          tests/release-packaging.sh
+      - name: Lint all Rust targets
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Test debug build
+        run: cargo test --all-targets --all-features
+      - name: Test release library
+        run: cargo test --release --lib --all-features
+      - name: Check documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --all-features
+
+  linux-arm:
+    name: ubuntu-24.04-arm / Rust 1.85
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install shell test dependencies
+        run: sudo apt-get update && sudo apt-get install -y bash expect fish shellcheck zsh
+      - name: Install Rust 1.85
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal \
+            --component clippy --component rustfmt
+          rustup override set 1.85.0
+      - name: Check and test
+        run: |
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-targets --all-features
+          shellcheck -s sh scripts/*.sh tests/*.sh
+          tests/installer.sh
+          tests/release-packaging.sh
