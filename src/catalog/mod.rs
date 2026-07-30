@@ -561,7 +561,6 @@ pub fn markdown() -> Result<String, CatalogError> {
         )
         .expect("writing to a String cannot fail");
     }
-    output.push('\n');
     Ok(output)
 }
 
@@ -583,7 +582,7 @@ fn structure_counts(spec: &CommandSpec) -> (usize, usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::{CompletionQuery, GeneratorKind, tokenize};
+    use crate::completion::{CompletionQuery, FilesystemGenerator, GeneratorKind, tokenize};
 
     #[test]
     fn audit_accounts_for_the_complete_baseline() {
@@ -661,6 +660,25 @@ mod tests {
     }
 
     #[test]
+    fn common_system_commands_offer_flags_after_the_command() {
+        let index = spec_index().unwrap();
+        for (line, expected) in [("ls -", ["-a", "-l"]), ("ps -", ["-e", "-o"])] {
+            let query = CompletionQuery::new(line, line.len(), "/tmp", 1).unwrap();
+            let displays = index
+                .suggestions(&query)
+                .into_iter()
+                .map(|suggestion| suggestion.display().to_string())
+                .collect::<BTreeSet<_>>();
+            for option in expected {
+                assert!(
+                    displays.contains(option),
+                    "{line:?} did not suggest {option:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_required_dynamic_behavior_is_reachable_from_the_runtime_index() {
         for (line, kind) in [
             ("git tag ", GeneratorKind::GitTags),
@@ -671,6 +689,11 @@ mod tests {
             ("ssh ", GeneratorKind::SshHosts),
             ("zoxide query ", GeneratorKind::ZoxideDirectories),
             ("kill ", GeneratorKind::Processes),
+            (
+                "ls ",
+                GeneratorKind::Filesystem(FilesystemGenerator::default()),
+            ),
+            ("ps ", GeneratorKind::Processes),
             ("printenv ", GeneratorKind::EnvironmentVariables),
             ("fd --extension ", GeneratorKind::FileTypes),
         ] {

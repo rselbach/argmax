@@ -366,7 +366,7 @@ Generated from the same audited source used by argmax at runtime.
 | `install` | copy files and set attributes | migrated | 0 | 0 | 0 |
 | `ln` | create filesystem links | migrated | 0 | 0 | 0 |
 | `locate` | find paths in a filename database | migrated | 0 | 0 | 0 |
-| `ls` | list directory contents | migrated | 0 | 0 | 0 |
+| `ls` | list directory contents | migrated | 0 | 13 | 1 |
 | `mkdir` | create directories | migrated | 0 | 0 | 0 |
 | `mv` | move or rename files | migrated | 0 | 0 | 0 |
 | `pwd` | print the working directory | migrated | 0 | 0 | 0 |
@@ -586,7 +586,7 @@ Generated from the same audited source used by argmax at runtime.
 | `poweroff` | Power off the system | migrated | 0 | 0 | 0 |
 | `powertop` | Analyze system power consumption | migrated | 0 | 0 | 0 |
 | `prlimit` | Inspect or change process resource limits | migrated | 0 | 0 | 0 |
-| `ps` | List running processes | migrated | 0 | 0 | 0 |
+| `ps` | List running processes | migrated | 1 | 6 | 1 |
 | `pstree` | Display processes as a tree | migrated | 0 | 0 | 0 |
 | `reboot` | Restart the system | migrated | 0 | 0 | 0 |
 | `renice` | Adjust a running process priority | migrated | 0 | 0 | 0 |
@@ -666,4 +666,3 @@ These installed tools extend the frozen migration baseline with required local g
 | `zoxide` | query the zoxide directory database | 3 | 0 | 1 |
 | `printenv` | print selected environment variables | 0 | 1 | 1 |
 | `fd` | find filesystem entries | 0 | 1 | 1 |
-

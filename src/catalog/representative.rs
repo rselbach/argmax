@@ -15,6 +15,7 @@ pub(super) fn spec(name: &str, description: &str) -> Option<CommandSpec> {
         "cmake" => cmake(description),
         "git" => git(description),
         "apt" => apt(description),
+        "ls" => ls(description),
         "tar" => tar(description),
         "vim" => vim(description),
         "jq" => jq(description),
@@ -22,6 +23,7 @@ pub(super) fn spec(name: &str, description: &str) -> Option<CommandSpec> {
         "make" => make(description),
         "ssh" => ssh(description),
         "kill" => kill(description),
+        "ps" => ps(description),
         "systemctl" => systemctl(description),
         "zoxide" => zoxide(description),
         "printenv" => printenv(description),
@@ -584,6 +586,33 @@ fn apt(description: &str) -> CommandSpec {
         ))
 }
 
+fn ls(description: &str) -> CommandSpec {
+    CommandSpec::new("ls", description)
+        .with_option(OptionSpec::new(
+            "-a",
+            "include entries whose names start with a dot",
+        ))
+        .with_option(OptionSpec::new("-l", "use a long listing format"))
+        .with_option(OptionSpec::new("-h", "show sizes in human-readable units"))
+        .with_option(OptionSpec::new(
+            "-la",
+            "use long format and include dotfiles",
+        ))
+        .with_option(OptionSpec::new("-R", "list subdirectories recursively"))
+        .with_option(OptionSpec::new("-t", "sort by modification time"))
+        .with_option(OptionSpec::new("-S", "sort by file size"))
+        .with_option(OptionSpec::new("-1", "list one entry per line"))
+        .with_option(OptionSpec::new("--color", "colorize the output"))
+        .with_option(OptionSpec::new(
+            "-d",
+            "list directories rather than their contents",
+        ))
+        .with_option(OptionSpec::new("-i", "show each entry's inode number"))
+        .with_option(OptionSpec::new("-s", "show each entry's allocated size"))
+        .with_option(OptionSpec::new("-r", "reverse the sort order"))
+        .with_generator(positional_files(0))
+}
+
 fn tar(description: &str) -> CommandSpec {
     CommandSpec::new("tar", description)
         .with_option(OptionSpec::new("-c", "create an archive").with_alias("--create"))
@@ -699,6 +728,21 @@ fn ssh(description: &str) -> CommandSpec {
 fn kill(description: &str) -> CommandSpec {
     CommandSpec::new("kill", description)
         .with_option(value_option("-s", "select the signal to send"))
+        .with_generator(positional_generator(GeneratorKind::Processes, 0))
+}
+
+fn ps(description: &str) -> CommandSpec {
+    CommandSpec::new("ps", description)
+        .with_option(OptionSpec::new("-e", "show all processes"))
+        .with_option(OptionSpec::new("-f", "show full-format listings"))
+        .with_option(value_option("-u", "select processes by user"))
+        .with_option(value_option("-o", "select the output format"))
+        .with_option(value_option("--pid", "select processes by ID"))
+        .with_option(value_option("--sort", "sort by the specified fields"))
+        .with_subcommand(no_positionals(
+            "aux",
+            "show processes for all users in user-oriented format",
+        ))
         .with_generator(positional_generator(GeneratorKind::Processes, 0))
 }
 
@@ -854,7 +898,7 @@ fn service_command(name: &str, description: &str) -> CommandSpec {
 mod tests {
     use super::*;
 
-    const ROOTS: [&str; 23] = [
+    const ROOTS: [&str; 25] = [
         "docker",
         "npm",
         "pnpm",
@@ -867,6 +911,7 @@ mod tests {
         "cmake",
         "git",
         "apt",
+        "ls",
         "tar",
         "vim",
         "jq",
@@ -874,6 +919,7 @@ mod tests {
         "make",
         "ssh",
         "kill",
+        "ps",
         "systemctl",
         "zoxide",
         "printenv",
