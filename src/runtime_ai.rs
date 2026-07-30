@@ -1741,7 +1741,11 @@ mod tests {
             thread::sleep(Duration::from_millis(2));
         }
         dispatcher.cancel(CancellationReason::MenuNavigation);
-        thread::sleep(Duration::from_millis(100));
+        let stale_deadline = Instant::now() + Duration::from_secs(1);
+        while dispatcher.status().stale_results == 0 {
+            assert!(Instant::now() < stale_deadline);
+            thread::sleep(Duration::from_millis(2));
+        }
         assert!(dispatcher.drain_batches(8).is_empty());
         assert!(dispatcher.status().stale_results >= 1);
     }
