@@ -12,9 +12,7 @@ version for the selected channel.
 The installer accepts its script over standard input, so the primary install is:
 
 ```sh
-curl --fail --location --proto '=https' --tlsv1.2 \
-  --silent --show-error \
-  https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh \
   | sh
 ```
 

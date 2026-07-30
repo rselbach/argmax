@@ -23,9 +23,7 @@ install argmax on the remote host.
 Install the latest stable release with one command:
 
 ```sh
-curl --fail --location --proto '=https' --tlsv1.2 \
-  --silent --show-error \
-  https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh \
   | sh
 ```
 
@@ -38,8 +36,7 @@ commands it prints, then open a new terminal.
 To inspect the installer before running it:
 
 ```sh
-curl --fail --location --proto '=https' --tlsv1.2 \
-  --output argmax-install.sh \
+curl -fsSL -o argmax-install.sh \
   https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh
 less argmax-install.sh
 sh argmax-install.sh
