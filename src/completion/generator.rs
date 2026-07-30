@@ -34,6 +34,8 @@ pub const MAX_EXTENSION_LENGTH: usize = 64;
 pub enum GeneratorTarget {
     /// A zero-based positional argument at the containing command node.
     Positional(usize),
+    /// Every positional argument at or after the zero-based starting index.
+    PositionalsFrom(usize),
     /// The value consumed by the named option, such as `--format` or `-C`.
     OptionValue(String),
 }
@@ -321,8 +323,13 @@ mod tests {
     }
 
     #[test]
-    fn positional_and_option_value_targets_validate() {
+    fn positional_range_and_option_value_targets_validate() {
         assert_eq!(positional(GeneratorKind::GitBranches).validate(), Ok(()));
+        assert_eq!(
+            GeneratorSpec::new(GeneratorKind::GitFiles, GeneratorTarget::PositionalsFrom(1),)
+                .validate(),
+            Ok(())
+        );
         for option in ["-C", "--format", "--type-name"] {
             let spec = GeneratorSpec::new(
                 GeneratorKind::FileTypes,

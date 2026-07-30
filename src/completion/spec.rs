@@ -496,6 +496,11 @@ impl<'a> SpecResolution<'a> {
                         && self.can_accept_positional
                         && *index == self.positional_index
                 }
+                GeneratorTarget::PositionalsFrom(index) => {
+                    self.awaiting_option.is_none()
+                        && self.can_accept_positional
+                        && self.positional_index >= *index
+                }
                 GeneratorTarget::OptionValue(name) => self
                     .awaiting_option
                     .is_some_and(|option| option.names().any(|candidate| candidate == name)),
@@ -618,7 +623,7 @@ fn validate_generators(
             ));
         }
         match &generator.target {
-            GeneratorTarget::Positional(position) => {
+            GeneratorTarget::Positional(position) | GeneratorTarget::PositionalsFrom(position) => {
                 if command
                     .max_positionals
                     .is_some_and(|maximum| *position >= maximum)
@@ -1336,6 +1341,14 @@ mod tests {
                 GeneratorTarget::Positional(0),
             ));
         assert!(capped.validate().is_err());
+
+        let capped_range = CommandSpec::new("tool", "tool")
+            .with_max_positionals(1)
+            .with_generator(GeneratorSpec::new(
+                GeneratorKind::Processes,
+                GeneratorTarget::PositionalsFrom(1),
+            ));
+        assert!(capped_range.validate().is_err());
     }
 
     #[test]
@@ -1390,5 +1403,22 @@ mod tests {
             .active_generators();
         assert_eq!(active.len(), 1);
         assert!(matches!(active[0].kind, GeneratorKind::Filesystem(_)));
+    }
+
+    #[test]
+    fn positional_range_generator_remains_active_after_earlier_arguments() {
+        let index = SpecIndex::new([CommandSpec::new("cp", "copy files").with_generator(
+            GeneratorSpec::new(
+                GeneratorKind::Filesystem(FilesystemGenerator::default()),
+                GeneratorTarget::PositionalsFrom(0),
+            ),
+        )])
+        .unwrap();
+
+        for line in ["cp ", "cp first ", "cp first second "] {
+            let parsed = tokenize(line, line.len()).unwrap();
+            let active = index.resolve(&parsed).unwrap().active_generators();
+            assert_eq!(active.len(), 1, "generator was inactive for {line:?}");
+        }
     }
 }
