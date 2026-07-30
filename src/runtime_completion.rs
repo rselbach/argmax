@@ -1393,6 +1393,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
@@ -1505,6 +1506,34 @@ mod tests {
                     .resulting_line(coordinator.active_query().unwrap())
                     .is_ok_and(|line| line.starts_with("git checkout")))
         );
+    }
+
+    #[test]
+    fn hyphenated_root_prefix_keeps_matching_commands() {
+        let temporary = TempDirectory::new();
+        let dispatcher = dispatcher(LocalCompletionOptions::new(
+            ShellKind::Zsh,
+            Settings::default(),
+            OsString::new(),
+        ));
+        let mut coordinator = CompletionCoordinator::new(LOCAL_COMPLETION_PROVIDERS, 100).unwrap();
+        let query = work(&mut coordinator, "ssh-", &temporary.0);
+        assert_eq!(
+            dispatcher.submit_query(SessionMode::Spec, query),
+            QueryAdmission::Queued
+        );
+
+        let active = coordinator.active_query().unwrap();
+        let results = wait_for_batches(&dispatcher)
+            .into_iter()
+            .flat_map(|batch| batch.suggestions)
+            .filter_map(|suggestion| suggestion.resulting_line(active).ok())
+            .collect::<BTreeSet<_>>();
+
+        assert!(results.contains("ssh-add "));
+        assert!(results.contains("ssh-agent "));
+        assert!(results.contains("ssh-keygen "));
+        assert!(results.contains("ssh-keyscan "));
     }
 
     #[test]

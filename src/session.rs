@@ -762,12 +762,15 @@ impl SessionReducer {
         (update, effects)
     }
 
-    /// Hides and cancels suggestions before forwarding asynchronous shell output.
+    /// Hides and cancels suggestions before asynchronous shell output, then
+    /// requests a fresh snapshot if the shell remains at an editable prompt.
     #[must_use]
     pub fn observe_shell_output(&mut self) -> EffectBatch {
         let mut effects = EffectBatch::default();
         self.clear_completion(&mut effects);
         self.clear_history_preview_authority();
+        self.probe_needed = true;
+        self.issue_probe_if_safe(&mut effects, false);
         effects
     }
 
@@ -2037,6 +2040,30 @@ mod tests {
         let _ = reducer.observe_shell_output();
         assert!(reducer.apply_alias_expansion(generation, edit).is_empty());
         assert!(!reducer.replacement_pending());
+    }
+
+    #[test]
+    fn shell_redraw_at_editable_prompt_resynchronizes_the_active_buffer() {
+        let (mut reducer, mut decoder) = ready();
+        let first_generation = synchronize(&mut reducer, &mut decoder, b"ssh-", "ssh-", 4);
+
+        let effects = reducer.observe_shell_output();
+        let nonce = effects
+            .effects()
+            .iter()
+            .find_map(|effect| match effect {
+                SessionEffect::RequestBufferSync(nonce) => Some(nonce.get()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(reducer.active_query().is_none());
+
+        let frame = format!("probe-buffer:b:{nonce}:4:ssh-\0");
+        let effects = apply_wire(&mut reducer, &mut decoder, frame.as_bytes());
+        let (work, _) = query_effect(&effects);
+
+        assert_eq!(work.query().line, "ssh-");
+        assert!(work.query().generation > first_generation);
     }
 
     #[test]
