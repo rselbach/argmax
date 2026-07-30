@@ -27,6 +27,7 @@ pub mod process_runner;
 pub mod providers;
 pub mod pty;
 pub mod ranking;
+pub mod release;
 pub mod reload;
 pub mod screen;
 pub mod selection;

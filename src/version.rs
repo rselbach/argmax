@@ -10,6 +10,25 @@ use std::fmt;
 
 use crate::config::UpdateChannel;
 
+/// Semantic version embedded in this executable.
+///
+/// Release builds may provide `ARGMAX_BUILD_VERSION` at compile time so a
+/// nightly artifact is distinguishable from the package's stable version.
+/// Ordinary local builds use the Cargo package version.
+pub const RUNNING_VERSION: &str = match option_env!("ARGMAX_BUILD_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
+/// Returns the validated semantic version embedded in this executable.
+///
+/// # Errors
+///
+/// Returns [`VersionError`] when a release build supplied malformed metadata.
+pub fn running_version() -> Result<SemanticVersion, VersionError> {
+    SemanticVersion::parse(RUNNING_VERSION)
+}
+
 /// Maximum accepted byte length for a local version or remote release tag.
 pub const MAX_VERSION_BYTES: usize = 256;
 /// Maximum prerelease identifiers retained for one version.
@@ -462,6 +481,12 @@ mod tests {
 
     const fn release(tag: &str, kind: ReleaseKind) -> RemoteRelease<'_> {
         RemoteRelease::new(tag, kind)
+    }
+
+    #[test]
+    fn embedded_running_version_is_valid_semantic_metadata() {
+        let version = running_version().unwrap();
+        assert_eq!(version.as_str(), RUNNING_VERSION);
     }
 
     #[test]
