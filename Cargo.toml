@@ -20,6 +20,7 @@ nix = { version = "=0.28.0", default-features = false, features = [
   "fs",
   "process",
   "signal",
+  "socket",
   "term",
 ] }
 pty-process = { version = "=0.5.3", default-features = false }

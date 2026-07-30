@@ -25,6 +25,10 @@ use std::time::{Duration, Instant};
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
 use nix::sys::signal::{Signal, kill, killpg};
+use nix::sys::socket::{
+    getsockopt, setsockopt,
+    sockopt::{RcvBuf, SndBuf},
+};
 use nix::sys::termios::{SpecialCharacterIndices, tcgetattr};
 use nix::unistd::{AccessFlags, Pid, access, getpgrp, tcgetpgrp};
 use pty_process::Size as BackendPtySize;
@@ -32,6 +36,9 @@ use pty_process::blocking::{Command as PtyCommand, open as open_pty};
 use rustix::termios::{Winsize, tcgetwinsize, tcsetwinsize};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
 use signal_hook::iterator::Signals;
+
+use crate::integration::MAX_SYNC_EVENT_WIRE_BYTES;
+use crate::shell_control::MAX_CONTROL_WIRE_BYTES;
 
 /// Documented shell-selection environment override.
 pub const ENV_SHELL_OVERRIDE: &str = "argmax_CORE_SHELL";
@@ -58,6 +65,17 @@ pub const MAX_SEARCH_PATH_ENTRIES: usize = 256;
 pub const MAX_PRIVATE_SESSION_ID: usize = 128;
 /// Largest integration event or replacement-control chunk.
 pub const MAX_INTEGRATION_IO: usize = 64 * 1024;
+
+/// Requested kernel capacity for each integration socket direction.
+pub const INTEGRATION_SOCKET_BUFFER_BYTES: usize = 128 * 1024;
+
+const MAX_INTEGRATION_WIRE_BYTES: usize = if MAX_SYNC_EVENT_WIRE_BYTES > MAX_CONTROL_WIRE_BYTES {
+    MAX_SYNC_EVENT_WIRE_BYTES
+} else {
+    MAX_CONTROL_WIRE_BYTES
+};
+const MIN_INTEGRATION_SOCKET_CAPACITY: usize = MAX_INTEGRATION_WIRE_BYTES + 1;
+const _: () = assert!(INTEGRATION_SOCKET_BUFFER_BYTES >= MIN_INTEGRATION_SOCKET_CAPACITY);
 
 const CHILD_HANGUP_GRACE: Duration = Duration::from_millis(100);
 const CHILD_KILL_GRACE: Duration = Duration::from_millis(100);
@@ -1163,7 +1181,7 @@ impl PtySession {
         })?;
 
         let (parent_integration, child_integration) =
-            UnixStream::pair().map_err(|error| PtyError::Backend {
+            integration_stream_pair().map_err(|error| PtyError::Backend {
                 stage: PtyStage::Integration,
                 io_kind: Some(error.kind()),
             })?;
@@ -1712,6 +1730,29 @@ fn set_nonblocking(file: &File) -> Result<(), io::ErrorKind> {
         .map_err(|errno| io::Error::from(errno).kind())
 }
 
+fn integration_stream_pair() -> io::Result<(UnixStream, UnixStream)> {
+    let (parent, child) = UnixStream::pair()?;
+    configure_integration_socket(&parent)?;
+    configure_integration_socket(&child)?;
+    Ok((parent, child))
+}
+
+fn configure_integration_socket(stream: &UnixStream) -> io::Result<()> {
+    setsockopt(stream, SndBuf, &INTEGRATION_SOCKET_BUFFER_BYTES).map_err(io::Error::from)?;
+    setsockopt(stream, RcvBuf, &INTEGRATION_SOCKET_BUFFER_BYTES).map_err(io::Error::from)?;
+
+    let send_capacity = getsockopt(stream, SndBuf).map_err(io::Error::from)?;
+    let receive_capacity = getsockopt(stream, RcvBuf).map_err(io::Error::from)?;
+    if send_capacity < MIN_INTEGRATION_SOCKET_CAPACITY
+        || receive_capacity < MIN_INTEGRATION_SOCKET_CAPACITY
+    {
+        return Err(io::Error::other(
+            "integration socket capacity is below the protocol maximum",
+        ));
+    }
+    Ok(())
+}
+
 fn write_nonblocking(writer: &mut impl Write, bytes: &[u8]) -> Result<PtyWrite, PtyWriteError> {
     match writer.write(bytes) {
         Ok(written) if written == bytes.len() => Ok(PtyWrite::Complete),
@@ -1853,6 +1894,12 @@ mod tests {
     use nix::errno::Errno;
     use nix::sys::wait::{WaitPidFlag, waitpid};
 
+    use crate::integration::{MAX_SYNC_EVENT_CHARACTERS, Shell as IntegrationShell, init_script};
+    use crate::shell_control::{
+        ControlRequestId, MAX_CONTROL_BUFFER_BYTES, MAX_CONTROL_REQUEST_ID, ReplacementControl,
+    };
+    use crate::shell_events::{DecodedFrame, ShellEvent, ShellEventDecoder, StreamEpoch};
+
     use super::*;
 
     struct TestDirectory(PathBuf);
@@ -1955,6 +2002,114 @@ mod tests {
                 IntegrationRead::Eof => panic!("integration closed before complete frame"),
             }
             assert!(Instant::now() < deadline, "integration frame timed out");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn read_socket_bytes(stream: &mut UnixStream, length: usize, deadline: Instant) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(length);
+        let mut buffer = [0_u8; 4096];
+        while bytes.len() < length {
+            match stream.read(&mut buffer) {
+                Ok(0) => panic!("integration socket closed after {} bytes", bytes.len()),
+                Ok(read) => bytes.extend_from_slice(&buffer[..read]),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => panic!("integration socket read failed: {error}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "integration socket stalled after {} of {length} bytes",
+                bytes.len()
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        bytes
+    }
+
+    fn installed_control_shell(kind: ShellKind) -> Option<SelectedShell> {
+        let search_path = std::env::var_os("PATH");
+        let selected = resolve_kind(kind, ShellSource::Fallback, search_path.as_deref())?;
+        if kind == ShellKind::Bash {
+            let supported = process::Command::new(selected.executable())
+                .args([
+                    "-c",
+                    "(( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) ))",
+                ])
+                .status()
+                .expect("inspect Bash version")
+                .success();
+            if !supported {
+                return None;
+            }
+        }
+        Some(selected)
+    }
+
+    fn wait_for_integration_ready(
+        integration: &mut PtyIntegration,
+        decoder: &mut ShellEventDecoder,
+        deadline: Instant,
+    ) {
+        let mut capability = false;
+        let mut prompt = false;
+        let mut buffer = [0_u8; 4096];
+        while !capability || !prompt {
+            match integration.read_events(&mut buffer).unwrap() {
+                IntegrationRead::Bytes(read) => decoder.push(&buffer[..read], |frame| {
+                    if let DecodedFrame::Event(event) = frame {
+                        match event.event() {
+                            ShellEvent::Capability(_) => capability = true,
+                            ShellEvent::PromptReady => prompt = true,
+                            _ => {}
+                        }
+                    }
+                }),
+                IntegrationRead::Pending => {}
+                IntegrationRead::Eof => panic!("shell integration closed before prompt readiness"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "shell integration did not become ready: capability={capability}, prompt={prompt}"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn wait_for_probe_snapshot(
+        integration: &mut PtyIntegration,
+        decoder: &mut ShellEventDecoder,
+        nonce: u64,
+        deadline: Instant,
+    ) -> crate::shell_events::BufferSnapshot {
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let mut snapshot = None;
+            match integration.read_events(&mut buffer).unwrap() {
+                IntegrationRead::Bytes(read) => decoder.push(&buffer[..read], |frame| {
+                    let DecodedFrame::Event(event) = frame else {
+                        return;
+                    };
+                    let ShellEvent::Buffer(buffer) = event.event() else {
+                        return;
+                    };
+                    if buffer
+                        .probe_nonce()
+                        .is_some_and(|value| value.get() == nonce)
+                    {
+                        snapshot = Some(buffer.clone());
+                    }
+                }),
+                IntegrationRead::Pending => {}
+                IntegrationRead::Eof => panic!("shell integration closed before probe response"),
+            }
+            if let Some(snapshot) = snapshot {
+                return snapshot;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "shell integration probe response timed out"
+            );
             thread::sleep(Duration::from_millis(1));
         }
     }
@@ -2126,6 +2281,168 @@ mod tests {
         );
         assert_eq!(integration.write_control(b"C"), Ok(PtyWrite::Complete));
         assert_eq!(session.wait().unwrap(), ChildExit::Exited(23));
+    }
+
+    #[test]
+    fn configured_integration_socket_queues_both_maximum_directions() {
+        let (parent, mut child) = integration_stream_pair().unwrap();
+        parent.set_nonblocking(true).unwrap();
+        child.set_nonblocking(true).unwrap();
+
+        for stream in [&parent, &child] {
+            assert!(getsockopt(stream, SndBuf).unwrap() >= MIN_INTEGRATION_SOCKET_CAPACITY);
+            assert!(getsockopt(stream, RcvBuf).unwrap() >= MIN_INTEGRATION_SOCKET_CAPACITY);
+        }
+
+        let replacement = "x".repeat(MAX_CONTROL_BUFFER_BYTES);
+        let control = ReplacementControl::new(
+            ControlRequestId::new(MAX_CONTROL_REQUEST_ID).unwrap(),
+            replacement,
+            MAX_CONTROL_BUFFER_BYTES,
+        )
+        .unwrap()
+        .encode();
+        assert_eq!(control.len(), MAX_CONTROL_WIRE_BYTES);
+
+        let mut integration = PtyIntegration {
+            stream: Arc::new(Mutex::new(Some(parent))),
+        };
+        assert_eq!(
+            integration.write_control(control.as_bytes()),
+            Ok(PtyWrite::Complete)
+        );
+
+        let snapshot = "\u{10ffff}".repeat(MAX_SYNC_EVENT_CHARACTERS);
+        let event = format!(
+            "probe-buffer:f:{MAX_CONTROL_REQUEST_ID}:{MAX_SYNC_EVENT_CHARACTERS}:{snapshot}\n\0"
+        )
+        .into_bytes();
+        assert!(event.len() <= MAX_SYNC_EVENT_WIRE_BYTES);
+        assert_eq!(
+            write_nonblocking(&mut child, &event),
+            Ok(PtyWrite::Complete)
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let received_control = read_socket_bytes(&mut child, control.len(), deadline);
+        assert_eq!(received_control, control.as_bytes());
+
+        let mut received_event = Vec::with_capacity(event.len());
+        let mut buffer = [0_u8; 4096];
+        while received_event.len() < event.len() {
+            match integration.read_events(&mut buffer).unwrap() {
+                IntegrationRead::Bytes(read) => {
+                    received_event.extend_from_slice(&buffer[..read]);
+                }
+                IntegrationRead::Pending => {}
+                IntegrationRead::Eof => panic!("integration event socket closed early"),
+            }
+            assert!(Instant::now() < deadline, "integration event read stalled");
+        }
+        assert_eq!(received_event, event);
+
+        let mut decoder = ShellEventDecoder::new(StreamEpoch::INITIAL);
+        let mut frames = Vec::new();
+        decoder.push(&received_event, |frame| frames.push(frame));
+        let [DecodedFrame::Event(event)] = frames.as_slice() else {
+            panic!("maximum probe event was not decoded: {frames:?}");
+        };
+        let ShellEvent::Buffer(snapshot) = event.event() else {
+            panic!("maximum probe event was not a buffer snapshot");
+        };
+        assert_eq!(snapshot.len(), MAX_SYNC_EVENT_CHARACTERS * 4);
+        assert_eq!(snapshot.cursor(), snapshot.len());
+        assert_eq!(
+            snapshot
+                .probe_nonce()
+                .map(crate::shell_events::SnapshotNonce::get),
+            Some(MAX_CONTROL_REQUEST_ID)
+        );
+    }
+
+    #[test]
+    fn real_shells_acknowledge_maximum_control_over_production_socket() {
+        for kind in [ShellKind::Bash, ShellKind::Zsh] {
+            let Some(selected) = installed_control_shell(kind) else {
+                continue;
+            };
+            let directory = TestDirectory::new(kind.as_str());
+            let init_path = directory.0.join("init");
+            let integration_shell = match kind {
+                ShellKind::Bash => IntegrationShell::Bash,
+                ShellKind::Zsh => IntegrationShell::Zsh,
+                ShellKind::Fish => unreachable!(),
+            };
+            fs::write(&init_path, init_script(integration_shell)).unwrap();
+
+            let arguments = match kind {
+                ShellKind::Bash => ["--noprofile", "--norc", "-i"].as_slice(),
+                ShellKind::Zsh => ["-f", "-i"].as_slice(),
+                ShellKind::Fish => unreachable!(),
+            };
+            let command = PtyCommand::new(selected.executable())
+                .args(arguments)
+                .current_dir(std::env::current_dir().unwrap())
+                .env(ENV_PRIVATE_SESSION, "greendale-production-socket")
+                .env("ARGMAX_TEST_INIT", &init_path)
+                .env_remove(ENV_SESSION_OWNER_PID);
+            let mut session = PtySession::spawn_command(command, size(24, 80)).unwrap();
+            let mut reader = session.take_reader().unwrap();
+            let drain = thread::spawn(move || {
+                let mut output = vec![0_u8; MAX_PTY_OUTPUT].into_boxed_slice();
+                while matches!(reader.read_chunk(&mut output), Ok(PtyRead::Bytes(_))) {}
+            });
+            let mut integration = session.take_integration().unwrap();
+            let mut decoder = ShellEventDecoder::new(StreamEpoch::INITIAL);
+
+            let probe_counter = match kind {
+                ShellKind::Bash => "__ARGMAX_BASH_PROBE_NONCE=2147483646",
+                ShellKind::Zsh => "__ARGMAX_ZSH_PROBE_NONCE=2147483646",
+                ShellKind::Fish => unreachable!(),
+            };
+            let source = format!("PS1='ARGMAX> '; source \"$ARGMAX_TEST_INIT\"; {probe_counter}\r");
+            assert_eq!(
+                session.write_input(source.as_bytes()),
+                Ok(PtyWrite::Complete)
+            );
+            wait_for_integration_ready(
+                &mut integration,
+                &mut decoder,
+                Instant::now() + Duration::from_secs(5),
+            );
+
+            let replacement = "x".repeat(MAX_CONTROL_BUFFER_BYTES);
+            let control = ReplacementControl::new(
+                ControlRequestId::new(MAX_CONTROL_REQUEST_ID).unwrap(),
+                replacement.clone(),
+                replacement.len(),
+            )
+            .unwrap()
+            .encode();
+            assert_eq!(control.len(), MAX_CONTROL_WIRE_BYTES);
+            assert_eq!(
+                integration.write_control(control.as_bytes()),
+                Ok(PtyWrite::Complete),
+                "{} production control socket did not accept a full frame",
+                kind.as_str()
+            );
+            assert_eq!(
+                session.write_input(crate::integration::SYNC_PROBE_SEQUENCE),
+                Ok(PtyWrite::Complete)
+            );
+
+            let snapshot = wait_for_probe_snapshot(
+                &mut integration,
+                &mut decoder,
+                MAX_CONTROL_REQUEST_ID,
+                Instant::now() + Duration::from_secs(5),
+            );
+            assert_eq!(snapshot.as_bytes(), replacement.as_bytes());
+            assert_eq!(snapshot.cursor(), replacement.len());
+            drop(integration);
+            drop(session);
+            drain.join().unwrap();
+        }
     }
 
     #[test]

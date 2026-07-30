@@ -28,8 +28,26 @@ pub const SESSION_OWNER_PID_ENV: &str = "ARGMAX_SESSION_OWNER_PID";
 /// paste, foreground command, or after Enter.
 pub const SYNC_PROBE_SEQUENCE: &[u8] = b"\x1b[argmax-sync~";
 
-/// Maximum characters an adapter will synchronously copy into one event.
+/// Maximum editing-buffer characters copied into one synchronous snapshot.
+///
+/// Framing and Fish's required print terminator are additional characters.
 pub const MAX_SYNC_EVENT_CHARACTERS: usize = 16 * 1024;
+
+/// Maximum characters in one synchronous snapshot frame, excluding NUL.
+///
+/// The reserved headroom covers `probe-buffer:f:`, the largest correlated
+/// request identifier and cursor, their separators, and Fish's required print
+/// terminator.
+pub const MAX_SYNC_EVENT_FRAME_CHARACTERS: usize = MAX_SYNC_EVENT_CHARACTERS + 33;
+
+const MAX_UTF8_CHARACTER_BYTES: usize = 4;
+
+/// Conservative maximum bytes in one synchronous snapshot wire frame.
+///
+/// Every frame character is budgeted at the maximum UTF-8 width and the final
+/// byte is the NUL frame terminator.
+pub const MAX_SYNC_EVENT_WIRE_BYTES: usize =
+    MAX_SYNC_EVENT_FRAME_CHARACTERS * MAX_UTF8_CHARACTER_BYTES + 1;
 
 /// Shell-native mechanism available for authoritative live-buffer snapshots.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,8 +103,8 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
     if [[ -z ${ARGMAX_SESSION_OWNER_PID-} ]]; then
       export ARGMAX_SESSION_OWNER_PID=$BASHPID
     elif [[ $ARGMAX_SESSION_OWNER_PID != "$BASHPID" ]]; then
-      unset ARGMAX_PRIVATE_SESSION ARGMAX_EVENT_FD ARGMAX_ACTIVE_SHELL \
-        ARGMAX_SESSION_OWNER_PID
+      unset ARGMAX_PRIVATE_SESSION ARGMAX_EVENT_FD ARGMAX_CONTROL_FD \
+        ARGMAX_ACTIVE_SHELL ARGMAX_SESSION_OWNER_PID
     fi
   fi
 
@@ -109,6 +127,8 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
         declare -F __argmax_preexec >/dev/null ||
         declare -F __argmax_precmd >/dev/null ||
         declare -F __argmax_sync >/dev/null ||
+        declare -F __argmax_control_apply >/dev/null ||
+        declare -F __argmax_control_drain >/dev/null ||
         declare -F __argmax_probe_is_unbound >/dev/null ||
         declare -F __argmax_install >/dev/null ||
         [[ -n ${__ARGMAX_BASH_HOOKS+x} ||
@@ -116,6 +136,9 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
            -n ${__ARGMAX_BASH_COMMAND_ACTIVE+x} ||
            -n ${__ARGMAX_BASH_PROBE+x} ||
            -n ${__ARGMAX_BASH_PROBE_NONCE+x} ||
+           -n ${__ARGMAX_BASH_CONTROL_PENDING+x} ||
+           -n ${__ARGMAX_BASH_CONTROL_DISCARDING+x} ||
+           -n ${__ARGMAX_BASH_CONTROL_LAST_ID+x} ||
            ${PS0-} == *'__argmax_preexec'* ||
            ${PROMPT_COMMAND[*]-} == *'__argmax_precmd'* ]]; then
       if [[ ${ARGMAX_EVENT_FD-} =~ ^[0-9]+$ ]] &&
@@ -172,7 +195,10 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
 
         if ! __ARGMAX_BASH_HOOKS=argmax-owned-bash-v1 ||
             ! __ARGMAX_BASH_PROBE=$'\e[argmax-sync~' ||
-            ! __ARGMAX_BASH_PROBE_NONCE=0; then
+            ! __ARGMAX_BASH_PROBE_NONCE=0 ||
+            ! __ARGMAX_BASH_CONTROL_PENDING= ||
+            ! __ARGMAX_BASH_CONTROL_DISCARDING=0 ||
+            ! __ARGMAX_BASH_CONTROL_LAST_ID=0; then
           argmax_install_ok=0
         fi
 
@@ -181,7 +207,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           local argmax_event=$1
           [[ ${ARGMAX_EVENT_FD-} =~ ^[0-9]+$ ]] || return 0
           (( 10#$ARGMAX_EVENT_FD >= 3 )) || return 0
-          if (( ${#argmax_event} > 16384 )); then
+          if (( ${#argmax_event} > 16417 )); then
             argmax_event=protocol-frame-oversized
           fi
           printf '%s\0' "$argmax_event" \
@@ -205,11 +231,190 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           return "$argmax_status"
         }
 
-        __argmax_sync() {
+        __argmax_control_apply() {
           : argmax-owned-bash-v1
-          local argmax_buffer=$READLINE_LINE
+          local argmax_frame=$1
+          local argmax_native_unit=$2
+          local LC_ALL=C
+          local argmax_rest
+          local argmax_request
+          local argmax_request_value
+          local argmax_cursor
+          local argmax_cursor_value
+          local argmax_length
+          local argmax_length_value
+          local argmax_hex
+          local argmax_pair
+          local argmax_byte
+          local argmax_byte_index=0
+          local argmax_char_index=0
+          local argmax_cursor_character=-1
+          local argmax_width
+          local argmax_offset
+          local argmax_position
+          local argmax_low
+          local argmax_high
+          local argmax_escapes=
+          local argmax_decoded
+
+          case $argmax_frame in
+            argmax-control-v1:replace:*)
+              argmax_rest=${argmax_frame#argmax-control-v1:replace:}
+              ;;
+            *) return 0 ;;
+          esac
+          [[ $argmax_rest == *:* ]] || return 0
+          argmax_request=${argmax_rest%%:*}
+          argmax_rest=${argmax_rest#*:}
+          [[ $argmax_rest == *:* ]] || return 0
+          argmax_cursor=${argmax_rest%%:*}
+          argmax_rest=${argmax_rest#*:}
+          [[ $argmax_rest == *:* ]] || return 0
+          argmax_length=${argmax_rest%%:*}
+          argmax_hex=${argmax_rest#*:}
+          [[ $argmax_hex != *:* ]] || return 0
+
+          [[ $argmax_request =~ ^[1-9][0-9]{0,9}$ ]] || return 0
+          [[ $argmax_cursor =~ ^(0|[1-9][0-9]{0,4})$ ]] || return 0
+          [[ $argmax_length =~ ^(0|[1-9][0-9]{0,4})$ ]] || return 0
+          argmax_request_value=$((10#$argmax_request))
+          argmax_cursor_value=$((10#$argmax_cursor))
+          argmax_length_value=$((10#$argmax_length))
+          (( argmax_request_value <= 2147483647 )) || return 0
+          (( argmax_length_value <= 16384 )) || return 0
+          (( argmax_cursor_value <= argmax_length_value )) || return 0
+          (( ${#argmax_hex} == argmax_length_value * 2 )) || return 0
+          [[ $argmax_hex != *[!0-9a-f]* ]] || return 0
+          (( argmax_request_value == __ARGMAX_BASH_PROBE_NONCE + 1 )) ||
+            return 0
+          (( argmax_request_value > __ARGMAX_BASH_CONTROL_LAST_ID )) ||
+            return 0
+          (( argmax_control_ready == 0 )) || return 0
+
+          while (( argmax_byte_index < argmax_length_value )); do
+            if (( argmax_byte_index == argmax_cursor_value )); then
+              argmax_cursor_character=$argmax_char_index
+            fi
+            argmax_position=$((argmax_byte_index * 2))
+            argmax_pair=${argmax_hex:$argmax_position:2}
+            argmax_byte=$((16#$argmax_pair))
+            (( argmax_byte != 0 )) || return 0
+            argmax_low=128
+            argmax_high=191
+            if (( argmax_byte <= 127 )); then
+              argmax_width=1
+            elif (( argmax_byte >= 194 && argmax_byte <= 223 )); then
+              argmax_width=2
+            elif (( argmax_byte >= 224 && argmax_byte <= 239 )); then
+              argmax_width=3
+              if (( argmax_byte == 224 )); then
+                argmax_low=160
+              elif (( argmax_byte == 237 )); then
+                argmax_high=159
+              fi
+            elif (( argmax_byte >= 240 && argmax_byte <= 244 )); then
+              argmax_width=4
+              if (( argmax_byte == 240 )); then
+                argmax_low=144
+              elif (( argmax_byte == 244 )); then
+                argmax_high=143
+              fi
+            else
+              return 0
+            fi
+            (( argmax_byte_index + argmax_width <= argmax_length_value )) ||
+              return 0
+            argmax_escapes+="\\x$argmax_pair"
+            for ((argmax_offset = 1;
+                  argmax_offset < argmax_width;
+                  argmax_offset++)); do
+              argmax_position=$(((argmax_byte_index + argmax_offset) * 2))
+              argmax_pair=${argmax_hex:$argmax_position:2}
+              argmax_byte=$((16#$argmax_pair))
+              if (( argmax_offset == 1 )); then
+                (( argmax_byte >= argmax_low && argmax_byte <= argmax_high )) ||
+                  return 0
+              else
+                (( argmax_byte >= 128 && argmax_byte <= 191 )) || return 0
+              fi
+              argmax_escapes+="\\x$argmax_pair"
+            done
+            ((argmax_byte_index += argmax_width))
+            ((argmax_char_index += 1))
+          done
+          if (( argmax_byte_index == argmax_cursor_value )); then
+            argmax_cursor_character=$argmax_char_index
+          fi
+          (( argmax_cursor_character >= 0 )) || return 0
+          builtin printf -v argmax_decoded '%b' "$argmax_escapes" || return 0
+          (( ${#argmax_decoded} == argmax_length_value )) || return 0
+
+          argmax_control_buffer=$argmax_decoded
+          if [[ $argmax_native_unit == b ]]; then
+            argmax_control_cursor=$argmax_cursor_value
+          else
+            argmax_control_cursor=$argmax_cursor_character
+          fi
+          argmax_control_request=$argmax_request_value
+          argmax_control_ready=1
+        }
+
+        __argmax_control_drain() {
+          : argmax-owned-bash-v1
+          local argmax_native_unit=$1
+          local LC_ALL=C
+          local argmax_chunk
+          local argmax_read_status
+          local argmax_chunk_bytes
+          local argmax_total_bytes=0
+          local argmax_frames=0
+          local argmax_frame
+
+          [[ ${ARGMAX_CONTROL_FD-} =~ ^[0-9]+$ ]] || return 0
+          (( 10#$ARGMAX_CONTROL_FD >= 3 )) || return 0
+          while (( argmax_total_bytes < 65536 && argmax_frames < 4 )); do
+            argmax_chunk=
+            IFS= builtin read -r -d '' -n 4096 \
+              -u "$ARGMAX_CONTROL_FD" argmax_chunk 2>/dev/null
+            argmax_read_status=$?
+            argmax_chunk_bytes=${#argmax_chunk}
+            ((argmax_total_bytes += argmax_chunk_bytes))
+            if (( __ARGMAX_BASH_CONTROL_DISCARDING == 0 )); then
+              __ARGMAX_BASH_CONTROL_PENDING+=$argmax_chunk
+              if (( ${#__ARGMAX_BASH_CONTROL_PENDING} > 32817 )); then
+                __ARGMAX_BASH_CONTROL_PENDING=
+                __ARGMAX_BASH_CONTROL_DISCARDING=1
+              fi
+            fi
+            if (( argmax_read_status != 0 )); then
+              break
+            fi
+            if (( argmax_chunk_bytes == 4096 )); then
+              continue
+            fi
+
+            ((argmax_frames += 1))
+            if (( __ARGMAX_BASH_CONTROL_DISCARDING )); then
+              __ARGMAX_BASH_CONTROL_DISCARDING=0
+              __ARGMAX_BASH_CONTROL_PENDING=
+              continue
+            fi
+            argmax_frame=$__ARGMAX_BASH_CONTROL_PENDING
+            __ARGMAX_BASH_CONTROL_PENDING=
+            __argmax_control_apply "$argmax_frame" "$argmax_native_unit"
+          done
+        }
+
+        __argmax_sync() {
+          local argmax_status=$?
+          : argmax-owned-bash-v1
           local argmax_locale=${LC_ALL-}
           local argmax_unit=c
+          local argmax_control_buffer=
+          local argmax_control_cursor=0
+          local argmax_control_request=0
+          local argmax_control_ready=0
+          local argmax_buffer
           if [[ -z $argmax_locale ]]; then
             argmax_locale=${LC_CTYPE-}
           fi
@@ -219,18 +424,26 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           if [[ $argmax_locale == C || $argmax_locale == POSIX ]]; then
             argmax_unit=b
           fi
+          __argmax_control_drain "$argmax_unit"
+          if (( argmax_control_ready )); then
+            READLINE_LINE=$argmax_control_buffer
+            READLINE_POINT=$argmax_control_cursor
+            __ARGMAX_BASH_CONTROL_LAST_ID=$argmax_control_request
+          fi
+          argmax_buffer=$READLINE_LINE
           if (( ${#argmax_buffer} > 16384 )); then
             __argmax_emit protocol-frame-oversized
-            return 0
+            return "$argmax_status"
           fi
           if (( __ARGMAX_BASH_PROBE_NONCE == 9223372036854775807 )); then
             __ARGMAX_BASH_CAPABILITY=unavailable
             __argmax_emit capability:unavailable
-            return 0
+            return "$argmax_status"
           fi
           ((__ARGMAX_BASH_PROBE_NONCE += 1))
           __argmax_emit \
             "probe-buffer:$argmax_unit:$__ARGMAX_BASH_PROBE_NONCE:$READLINE_POINT:$argmax_buffer"
+          return "$argmax_status"
         }
 
         __argmax_probe_is_unbound() {
@@ -260,6 +473,8 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
              ! builtin declare -F __argmax_preexec >/dev/null ||
              ! builtin declare -F __argmax_precmd >/dev/null ||
              ! builtin declare -F __argmax_sync >/dev/null ||
+             ! builtin declare -F __argmax_control_apply >/dev/null ||
+             ! builtin declare -F __argmax_control_drain >/dev/null ||
              ! builtin declare -F __argmax_probe_is_unbound >/dev/null); then
           argmax_install_ok=0
         fi
@@ -348,10 +563,12 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           builtin bind -m emacs-standard -r "$__ARGMAX_BASH_PROBE" \
             2>/dev/null || :
         builtin unset -f __argmax_emit __argmax_preexec __argmax_precmd \
-          __argmax_sync __argmax_probe_is_unbound
+          __argmax_sync __argmax_control_apply __argmax_control_drain \
+          __argmax_probe_is_unbound
         builtin unset __ARGMAX_BASH_HOOKS __ARGMAX_BASH_CAPABILITY \
           __ARGMAX_BASH_COMMAND_ACTIVE __ARGMAX_BASH_PROBE \
-          __ARGMAX_BASH_PROBE_NONCE
+          __ARGMAX_BASH_PROBE_NONCE __ARGMAX_BASH_CONTROL_PENDING \
+          __ARGMAX_BASH_CONTROL_DISCARDING __ARGMAX_BASH_CONTROL_LAST_ID
         return 1
       }
 
@@ -374,9 +591,15 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
             *argmax-owned-bash-v1* &&
           $(declare -f __argmax_sync 2>/dev/null) == \
             *argmax-owned-bash-v1* &&
+          $(declare -f __argmax_control_apply 2>/dev/null) == \
+            *argmax-owned-bash-v1* &&
+          $(declare -f __argmax_control_drain 2>/dev/null) == \
+            *argmax-owned-bash-v1* &&
           $(declare -f __argmax_probe_is_unbound 2>/dev/null) == \
             *argmax-owned-bash-v1* &&
           ${__ARGMAX_BASH_COMMAND_ACTIVE-} == '' &&
+          ${__ARGMAX_BASH_CONTROL_DISCARDING-} =~ ^[01]$ &&
+          ${__ARGMAX_BASH_CONTROL_LAST_ID-} =~ ^[0-9]+$ &&
           ${PS0-} == *'__argmax_preexec'* &&
           ${PROMPT_COMMAND[*]-} == *'__argmax_precmd'* &&
           $(bind -m emacs-standard -X 2>/dev/null) == \
@@ -406,8 +629,8 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
     if [[ -z ${ARGMAX_SESSION_OWNER_PID-} ]]; then
       export ARGMAX_SESSION_OWNER_PID=$$
     elif [[ $ARGMAX_SESSION_OWNER_PID != "$$" ]]; then
-      unset ARGMAX_PRIVATE_SESSION ARGMAX_EVENT_FD ARGMAX_ACTIVE_SHELL \
-        ARGMAX_SESSION_OWNER_PID
+      unset ARGMAX_PRIVATE_SESSION ARGMAX_EVENT_FD ARGMAX_CONTROL_FD \
+        ARGMAX_ACTIVE_SHELL ARGMAX_SESSION_OWNER_PID
     fi
   fi
 
@@ -423,11 +646,16 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
           $+functions[__argmax_preexec] ||
           $+functions[__argmax_precmd] ||
           $+functions[__argmax_sync] ||
+          $+functions[__argmax_control_apply] ||
+          $+functions[__argmax_control_drain] ||
           $+parameters[__ARGMAX_ZSH_HOOKS] ||
           $+parameters[__ARGMAX_ZSH_CAPABILITY] ||
           $+parameters[__ARGMAX_ZSH_COMMAND_ACTIVE] ||
           $+parameters[__ARGMAX_ZSH_PROBE] ||
           $+parameters[__ARGMAX_ZSH_PROBE_NONCE] ||
+          $+parameters[__ARGMAX_ZSH_CONTROL_PENDING] ||
+          $+parameters[__ARGMAX_ZSH_CONTROL_DISCARDING] ||
+          $+parameters[__ARGMAX_ZSH_CONTROL_LAST_ID] ||
           $+parameters[__argmax_zsh_preexec_added] ||
           $+parameters[__argmax_zsh_precmd_added] ||
           $+parameters[__argmax_zsh_widget_added] ||
@@ -448,13 +676,16 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
       __ARGMAX_ZSH_COMMAND_ACTIVE=0
       __ARGMAX_ZSH_PROBE=$'\e[argmax-sync~'
       __ARGMAX_ZSH_PROBE_NONCE=0
+      __ARGMAX_ZSH_CONTROL_PENDING=
+      __ARGMAX_ZSH_CONTROL_DISCARDING=0
+      __ARGMAX_ZSH_CONTROL_LAST_ID=0
 
       __argmax_emit() {
         : argmax-owned-zsh-v1
         local argmax_event=$1
         [[ ${ARGMAX_EVENT_FD-} == <-> ]] || return 0
         (( 10#$ARGMAX_EVENT_FD >= 3 )) || return 0
-        if (( ${#argmax_event} > 16384 )); then
+        if (( ${#argmax_event} > 16417 )); then
           argmax_event=protocol-frame-oversized
         fi
         print -rn -- "$argmax_event"$'\0' \
@@ -482,24 +713,223 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
         return $argmax_status
       }
 
+      __argmax_control_apply() {
+        : argmax-owned-zsh-v1
+        local argmax_frame=$1
+        local argmax_native_unit=$2
+        local LC_ALL=C
+        local argmax_rest
+        local argmax_request
+        local -i argmax_request_value
+        local argmax_cursor
+        local -i argmax_cursor_value
+        local argmax_length
+        local -i argmax_length_value
+        local argmax_hex
+        local argmax_pair
+        local -i argmax_byte
+        local -i argmax_byte_index=0
+        local -i argmax_char_index=0
+        local -i argmax_cursor_character=-1
+        local -i argmax_width
+        local -i argmax_offset
+        local -i argmax_position
+        local -i argmax_low
+        local -i argmax_high
+        local argmax_escapes=
+        local argmax_decoded
+
+        case $argmax_frame in
+          argmax-control-v1:replace:*)
+            argmax_rest=${argmax_frame#argmax-control-v1:replace:}
+            ;;
+          *) return 0 ;;
+        esac
+        [[ $argmax_rest == *:* ]] || return 0
+        argmax_request=${argmax_rest%%:*}
+        argmax_rest=${argmax_rest#*:}
+        [[ $argmax_rest == *:* ]] || return 0
+        argmax_cursor=${argmax_rest%%:*}
+        argmax_rest=${argmax_rest#*:}
+        [[ $argmax_rest == *:* ]] || return 0
+        argmax_length=${argmax_rest%%:*}
+        argmax_hex=${argmax_rest#*:}
+        [[ $argmax_hex != *:* ]] || return 0
+
+        [[ $argmax_request == <-> && ${#argmax_request} -le 10 ]] ||
+          return 0
+        [[ ${#argmax_request} -eq 1 || $argmax_request[1] != 0 ]] ||
+          return 0
+        [[ $argmax_cursor == <-> && ${#argmax_cursor} -le 5 ]] || return 0
+        [[ ${#argmax_cursor} -eq 1 || $argmax_cursor[1] != 0 ]] || return 0
+        [[ $argmax_length == <-> && ${#argmax_length} -le 5 ]] || return 0
+        [[ ${#argmax_length} -eq 1 || $argmax_length[1] != 0 ]] || return 0
+        argmax_request_value=$((10#$argmax_request))
+        argmax_cursor_value=$((10#$argmax_cursor))
+        argmax_length_value=$((10#$argmax_length))
+        (( argmax_request_value >= 1 &&
+           argmax_request_value <= 2147483647 )) || return 0
+        (( argmax_length_value <= 16384 )) || return 0
+        (( argmax_cursor_value <= argmax_length_value )) || return 0
+        (( ${#argmax_hex} == argmax_length_value * 2 )) || return 0
+        [[ $argmax_hex != *[^0-9a-f]* ]] || return 0
+        (( argmax_request_value == __ARGMAX_ZSH_PROBE_NONCE + 1 )) ||
+          return 0
+        (( argmax_request_value > __ARGMAX_ZSH_CONTROL_LAST_ID )) || return 0
+        (( argmax_control_ready == 0 )) || return 0
+
+        while (( argmax_byte_index < argmax_length_value )); do
+          if (( argmax_byte_index == argmax_cursor_value )); then
+            argmax_cursor_character=$argmax_char_index
+          fi
+          argmax_position=$((argmax_byte_index * 2))
+          argmax_pair=${argmax_hex:$argmax_position:2}
+          argmax_byte=$((16#$argmax_pair))
+          (( argmax_byte != 0 )) || return 0
+          argmax_low=128
+          argmax_high=191
+          if (( argmax_byte <= 127 )); then
+            argmax_width=1
+          elif (( argmax_byte >= 194 && argmax_byte <= 223 )); then
+            argmax_width=2
+          elif (( argmax_byte >= 224 && argmax_byte <= 239 )); then
+            argmax_width=3
+            if (( argmax_byte == 224 )); then
+              argmax_low=160
+            elif (( argmax_byte == 237 )); then
+              argmax_high=159
+            fi
+          elif (( argmax_byte >= 240 && argmax_byte <= 244 )); then
+            argmax_width=4
+            if (( argmax_byte == 240 )); then
+              argmax_low=144
+            elif (( argmax_byte == 244 )); then
+              argmax_high=143
+            fi
+          else
+            return 0
+          fi
+          (( argmax_byte_index + argmax_width <= argmax_length_value )) ||
+            return 0
+          argmax_escapes+="\\x$argmax_pair"
+          for ((argmax_offset = 1;
+                argmax_offset < argmax_width;
+                argmax_offset++)); do
+            argmax_position=$(((argmax_byte_index + argmax_offset) * 2))
+            argmax_pair=${argmax_hex:$argmax_position:2}
+            argmax_byte=$((16#$argmax_pair))
+            if (( argmax_offset == 1 )); then
+              (( argmax_byte >= argmax_low && argmax_byte <= argmax_high )) ||
+                return 0
+            else
+              (( argmax_byte >= 128 && argmax_byte <= 191 )) || return 0
+            fi
+            argmax_escapes+="\\x$argmax_pair"
+          done
+          ((argmax_byte_index += argmax_width))
+          ((argmax_char_index += 1))
+        done
+        if (( argmax_byte_index == argmax_cursor_value )); then
+          argmax_cursor_character=$argmax_char_index
+        fi
+        (( argmax_cursor_character >= 0 )) || return 0
+        printf -v argmax_decoded '%b' "$argmax_escapes" || return 0
+        (( ${#argmax_decoded} == argmax_length_value )) || return 0
+
+        argmax_control_buffer=$argmax_decoded
+        if [[ $argmax_native_unit == b ]]; then
+          argmax_control_cursor=$argmax_cursor_value
+        else
+          argmax_control_cursor=$argmax_cursor_character
+        fi
+        argmax_control_request=$argmax_request_value
+        argmax_control_ready=1
+      }
+
+      __argmax_control_drain() {
+        : argmax-owned-zsh-v1
+        local argmax_native_unit=$1
+        local LC_ALL=C
+        local argmax_chunk
+        local -i argmax_read_status
+        local -i argmax_chunk_bytes
+        local -i argmax_total_bytes=0
+        local -i argmax_frames=0
+        local argmax_frame
+        local -a argmax_parts
+        local -i argmax_part_index
+        local argmax_part
+
+        [[ ${ARGMAX_CONTROL_FD-} == <-> ]] || return 0
+        (( 10#$ARGMAX_CONTROL_FD >= 3 )) || return 0
+        while (( argmax_total_bytes < 65536 && argmax_frames < 4 )); do
+          argmax_chunk=
+          sysread -i $ARGMAX_CONTROL_FD -s 4096 -t 0 argmax_chunk \
+            2>/dev/null
+          argmax_read_status=$?
+          (( argmax_read_status == 0 )) || break
+          argmax_chunk_bytes=${#argmax_chunk}
+          (( argmax_chunk_bytes > 0 )) || break
+          ((argmax_total_bytes += argmax_chunk_bytes))
+          argmax_parts=("${(@0)argmax_chunk}")
+          for ((argmax_part_index = 1;
+                argmax_part_index <= ${#argmax_parts};
+                argmax_part_index++)); do
+            argmax_part=$argmax_parts[$argmax_part_index]
+            if (( __ARGMAX_ZSH_CONTROL_DISCARDING == 0 )); then
+              __ARGMAX_ZSH_CONTROL_PENDING+=$argmax_part
+              if (( ${#__ARGMAX_ZSH_CONTROL_PENDING} > 32817 )); then
+                __ARGMAX_ZSH_CONTROL_PENDING=
+                __ARGMAX_ZSH_CONTROL_DISCARDING=1
+              fi
+            fi
+            (( argmax_part_index < ${#argmax_parts} )) || continue
+
+            ((argmax_frames += 1))
+            if (( __ARGMAX_ZSH_CONTROL_DISCARDING )); then
+              __ARGMAX_ZSH_CONTROL_DISCARDING=0
+              __ARGMAX_ZSH_CONTROL_PENDING=
+              continue
+            fi
+            argmax_frame=$__ARGMAX_ZSH_CONTROL_PENDING
+            __ARGMAX_ZSH_CONTROL_PENDING=
+            if (( argmax_frames <= 4 )); then
+              __argmax_control_apply "$argmax_frame" "$argmax_native_unit"
+            fi
+          done
+        done
+      }
+
       __argmax_sync() {
+        local argmax_status=$?
         : argmax-owned-zsh-v1
         local argmax_unit=b
+        local argmax_control_buffer=
+        local -i argmax_control_cursor=0
+        local -i argmax_control_request=0
+        local -i argmax_control_ready=0
         if [[ -o multibyte ]]; then
           argmax_unit=c
         fi
+        __argmax_control_drain "$argmax_unit"
+        if (( argmax_control_ready )); then
+          BUFFER=$argmax_control_buffer
+          CURSOR=$argmax_control_cursor
+          __ARGMAX_ZSH_CONTROL_LAST_ID=$argmax_control_request
+        fi
         if (( ${#BUFFER} > 16384 )); then
           __argmax_emit protocol-frame-oversized
-          return 0
+          return $argmax_status
         fi
         if (( __ARGMAX_ZSH_PROBE_NONCE == 9223372036854775807 )); then
           __ARGMAX_ZSH_CAPABILITY=unavailable
           __argmax_emit capability:unavailable
-          return 0
+          return $argmax_status
         fi
         ((__ARGMAX_ZSH_PROBE_NONCE += 1))
         __argmax_emit \
           "probe-buffer:$argmax_unit:$__ARGMAX_ZSH_PROBE_NONCE:$CURSOR:$BUFFER"
+        return $argmax_status
       }
 
       autoload -Uz add-zsh-hook
@@ -509,6 +939,10 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
       typeset -i __argmax_zsh_install_ok=1
       typeset -a __argmax_zsh_bound_maps=()
       typeset __argmax_zsh_binding
+
+      if ! zmodload zsh/system 2>/dev/null; then
+        __argmax_zsh_install_ok=0
+      fi
 
       for __argmax_zsh_map in emacs viins vicmd; do
         __argmax_zsh_binding=$(bindkey -M "$__argmax_zsh_map" \
@@ -563,10 +997,12 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
             2>/dev/null 1>&$ARGMAX_EVENT_FD || :
         fi
         unfunction __argmax_emit __argmax_preexec __argmax_precmd \
-          __argmax_sync 2>/dev/null || :
+          __argmax_sync __argmax_control_apply __argmax_control_drain \
+          2>/dev/null || :
         unset __ARGMAX_ZSH_HOOKS __ARGMAX_ZSH_COMMAND_ACTIVE \
           __ARGMAX_ZSH_CAPABILITY __ARGMAX_ZSH_PROBE \
-          __ARGMAX_ZSH_PROBE_NONCE
+          __ARGMAX_ZSH_PROBE_NONCE __ARGMAX_ZSH_CONTROL_PENDING \
+          __ARGMAX_ZSH_CONTROL_DISCARDING __ARGMAX_ZSH_CONTROL_LAST_ID
       fi
       unset __argmax_zsh_preexec_added __argmax_zsh_precmd_added \
         __argmax_zsh_widget_added __argmax_zsh_install_ok \
@@ -574,11 +1010,18 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
     fi
   elif [[ -n ${ARGMAX_PRIVATE_SESSION-} &&
           -n ${__ARGMAX_ZSH_HOOKS-} ]] &&
+      (( $+builtins[sysread] )) &&
       [[ ${__ARGMAX_ZSH_HOOKS-} == argmax-owned-zsh-v1 &&
          $(functions __argmax_emit 2>/dev/null) == *argmax-owned-zsh-v1* &&
          $(functions __argmax_preexec 2>/dev/null) == *argmax-owned-zsh-v1* &&
          $(functions __argmax_precmd 2>/dev/null) == *argmax-owned-zsh-v1* &&
          $(functions __argmax_sync 2>/dev/null) == *argmax-owned-zsh-v1* &&
+         $(functions __argmax_control_apply 2>/dev/null) == \
+           *argmax-owned-zsh-v1* &&
+         $(functions __argmax_control_drain 2>/dev/null) == \
+           *argmax-owned-zsh-v1* &&
+         ${__ARGMAX_ZSH_CONTROL_DISCARDING-} == <0-1> &&
+         ${__ARGMAX_ZSH_CONTROL_LAST_ID-} == <-> &&
          ${+widgets[__argmax_sync]} == 1 &&
          ${preexec_functions[(r)__argmax_preexec]-} == __argmax_preexec &&
          ${precmd_functions[(r)__argmax_precmd]-} == __argmax_precmd &&
@@ -610,8 +1053,8 @@ if status is-interactive; and test -t 0; and test -t 1
     if not set -q ARGMAX_SESSION_OWNER_PID
       set -gx ARGMAX_SESSION_OWNER_PID $fish_pid
     else if test "$ARGMAX_SESSION_OWNER_PID" != "$fish_pid"
-      set -e ARGMAX_PRIVATE_SESSION ARGMAX_EVENT_FD ARGMAX_ACTIVE_SHELL \
-        ARGMAX_SESSION_OWNER_PID
+      set -e ARGMAX_PRIVATE_SESSION ARGMAX_EVENT_FD ARGMAX_CONTROL_FD \
+        ARGMAX_ACTIVE_SHELL ARGMAX_SESSION_OWNER_PID
     end
   end
 
@@ -622,7 +1065,8 @@ if status is-interactive; and test -t 0; and test -t 1
     end
   else
     set -l argmax_function_collision 0
-    set -l argmax_functions __argmax_emit __argmax_sync __argmax_preexec \
+    set -l argmax_functions __argmax_emit __argmax_sync \
+      __argmax_control_apply __argmax_control_drain __argmax_preexec \
       __argmax_postexec __argmax_posterror __argmax_prompt
     if set -q __ARGMAX_FISH_INSTALLED
       if test "$__ARGMAX_FISH_INSTALLED" != argmax-owned-fish-v1; or \
@@ -630,7 +1074,12 @@ if status is-interactive; and test -t 0; and test -t 1
           test "$__ARGMAX_FISH_CAPABILITY" != probe; or \
           not set -q __ARGMAX_FISH_COMMAND_ACTIVE; or \
           not set -q __ARGMAX_FISH_PROBE_NONCE; or not \
-          string match -qr '^[0-9]+$' -- $__ARGMAX_FISH_PROBE_NONCE
+          string match -qr '^[0-9]+$' -- $__ARGMAX_FISH_PROBE_NONCE; or \
+          not set -q __ARGMAX_FISH_CONTROL_PENDING; or \
+          not set -q __ARGMAX_FISH_CONTROL_DISCARDING; or not \
+          string match -qr '^[01]$' -- $__ARGMAX_FISH_CONTROL_DISCARDING; or \
+          not set -q __ARGMAX_FISH_CONTROL_LAST_ID; or not \
+          string match -qr '^[0-9]+$' -- $__ARGMAX_FISH_CONTROL_LAST_ID
         set argmax_function_collision 1
       end
       for argmax_function in $argmax_functions
@@ -645,7 +1094,10 @@ if status is-interactive; and test -t 0; and test -t 1
     else
       if set -q __ARGMAX_FISH_COMMAND_ACTIVE; or \
           set -q __ARGMAX_FISH_PROBE_NONCE; or \
-          set -q __ARGMAX_FISH_CAPABILITY
+          set -q __ARGMAX_FISH_CAPABILITY; or \
+          set -q __ARGMAX_FISH_CONTROL_PENDING; or \
+          set -q __ARGMAX_FISH_CONTROL_DISCARDING; or \
+          set -q __ARGMAX_FISH_CONTROL_LAST_ID
         set argmax_function_collision 1
       end
       for argmax_function in $argmax_functions
@@ -671,7 +1123,7 @@ if status is-interactive; and test -t 0; and test -t 1
       string match -qr '^[0-9]+$' -- $ARGMAX_EVENT_FD; or return 0
       test $ARGMAX_EVENT_FD -ge 3; or return 0
       set -l argmax_event "$argv[1]"
-      if test (string length -- "$argmax_event") -gt 16384
+      if test (string length -- "$argmax_event") -gt 16417
         set argmax_event protocol-frame-oversized
       end
       printf '%s\0' "$argmax_event" 2>/dev/null 1>&$ARGMAX_EVENT_FD; or true
@@ -712,29 +1164,209 @@ if status is-interactive; and test -t 0; and test -t 1
       __argmax_emit prompt-ready
     end
 
-    function __argmax_sync
+    function __argmax_control_apply
+      set -l argmax_status $status
       set -l __argmax_fish_owner argmax-owned-fish-v1
+      set -l argmax_frame "$argv[1]"
+      # The sentinel preserves a valid empty final hex field through command
+      # substitution without giving control data any evaluation semantics.
+      set -l argmax_fields (string split ':' -- "$argmax_frame"x)
+      test (count $argmax_fields) -eq 6; or return $argmax_status
+      test "$argmax_fields[1]" = argmax-control-v1; or \
+        return $argmax_status
+      test "$argmax_fields[2]" = replace; or return $argmax_status
+      set -l argmax_request "$argmax_fields[3]"
+      set -l argmax_cursor "$argmax_fields[4]"
+      set -l argmax_length "$argmax_fields[5]"
+      set -l argmax_hex ''
+      set -l argmax_hex_with_sentinel "$argmax_fields[6]"
+      set -l argmax_hex_with_sentinel_length \
+        (string length -- "$argmax_hex_with_sentinel")
+      test $argmax_hex_with_sentinel_length -ge 1; or return $argmax_status
+      if test $argmax_hex_with_sentinel_length -gt 1
+        set argmax_hex (string sub -s 1 \
+          -l (math "$argmax_hex_with_sentinel_length - 1") -- \
+          "$argmax_hex_with_sentinel")
+      end
+
+      string match -qr '^[1-9][0-9]{0,9}$' -- "$argmax_request"; or \
+        return $argmax_status
+      string match -qr '^(0|[1-9][0-9]{0,4})$' -- "$argmax_cursor"; or \
+        return $argmax_status
+      string match -qr '^(0|[1-9][0-9]{0,4})$' -- "$argmax_length"; or \
+        return $argmax_status
+      test $argmax_request -le 2147483647; or return $argmax_status
+      test $argmax_length -le 16384; or return $argmax_status
+      test $argmax_cursor -le $argmax_length; or return $argmax_status
+      test (string length -- "$argmax_hex") -eq \
+        (math "$argmax_length * 2"); or return $argmax_status
+      string match -qr '^[0-9a-f]*$' -- "$argmax_hex"; or \
+        return $argmax_status
+      set -l argmax_expected_request \
+        (math "$__ARGMAX_FISH_PROBE_NONCE + 1")
+      test $argmax_request -eq $argmax_expected_request; or \
+        return $argmax_status
+      test $argmax_request -gt $__ARGMAX_FISH_CONTROL_LAST_ID; or \
+        return $argmax_status
+
+      set -l argmax_byte_index 0
+      set -l argmax_char_index 0
+      set -l argmax_cursor_character -1
+      set -l argmax_escapes ''
+      while test $argmax_byte_index -lt $argmax_length
+        if test $argmax_byte_index -eq $argmax_cursor
+          set argmax_cursor_character $argmax_char_index
+        end
+        set -l argmax_position (math "$argmax_byte_index * 2 + 1")
+        set -l argmax_pair \
+          (string sub -s $argmax_position -l 2 -- "$argmax_hex")
+        set -l argmax_byte (math "0x$argmax_pair")
+        test $argmax_byte -ne 0; or return $argmax_status
+        set -l argmax_width
+        set -l argmax_low 128
+        set -l argmax_high 191
+        if test $argmax_byte -le 127
+          set argmax_width 1
+        else if test $argmax_byte -ge 194; and test $argmax_byte -le 223
+          set argmax_width 2
+        else if test $argmax_byte -ge 224; and test $argmax_byte -le 239
+          set argmax_width 3
+          if test $argmax_byte -eq 224
+            set argmax_low 160
+          else if test $argmax_byte -eq 237
+            set argmax_high 159
+          end
+        else if test $argmax_byte -ge 240; and test $argmax_byte -le 244
+          set argmax_width 4
+          if test $argmax_byte -eq 240
+            set argmax_low 144
+          else if test $argmax_byte -eq 244
+            set argmax_high 143
+          end
+        else
+          return $argmax_status
+        end
+        test (math "$argmax_byte_index + $argmax_width") \
+          -le $argmax_length; or return $argmax_status
+        set argmax_escapes "$argmax_escapes\\x$argmax_pair"
+        set -l argmax_offset 1
+        while test $argmax_offset -lt $argmax_width
+          set argmax_position \
+            (math "($argmax_byte_index + $argmax_offset) * 2 + 1")
+          set argmax_pair \
+            (string sub -s $argmax_position -l 2 -- "$argmax_hex")
+          set argmax_byte (math "0x$argmax_pair")
+          if test $argmax_offset -eq 1
+            test $argmax_byte -ge $argmax_low; and \
+              test $argmax_byte -le $argmax_high; or \
+              return $argmax_status
+          else
+            test $argmax_byte -ge 128; and test $argmax_byte -le 191; or \
+              return $argmax_status
+          end
+          set argmax_escapes "$argmax_escapes\\x$argmax_pair"
+          set argmax_offset (math "$argmax_offset + 1")
+        end
+        set argmax_byte_index \
+          (math "$argmax_byte_index + $argmax_width")
+        set argmax_char_index (math "$argmax_char_index + 1")
+      end
+      if test $argmax_byte_index -eq $argmax_cursor
+        set argmax_cursor_character $argmax_char_index
+      end
+      test $argmax_cursor_character -ge 0; or return $argmax_status
+
+      set -l argmax_decoded ''
+      if test $argmax_length -gt 0
+        set argmax_decoded \
+          (printf '%b' "$argmax_escapes" | string collect -N)
+        test (count $argmax_decoded) -eq 1; or return $argmax_status
+      end
+      commandline -r -- "$argmax_decoded"; or return $argmax_status
+      commandline -C $argmax_cursor_character; or return $argmax_status
+      set -g __ARGMAX_FISH_CONTROL_LAST_ID $argmax_request
+      return $argmax_status
+    end
+
+    function __argmax_control_drain
+      set -l argmax_status $status
+      set -l __argmax_fish_owner argmax-owned-fish-v1
+      set -q ARGMAX_CONTROL_FD; or return $argmax_status
+      string match -qr '^[0-9]+$' -- $ARGMAX_CONTROL_FD; or \
+        return $argmax_status
+      test $ARGMAX_CONTROL_FD -ge 3; or return $argmax_status
+      set -l fish_read_limit 65536
+      set -l argmax_total_bytes 0
+      set -l argmax_frames 0
+      while test $argmax_total_bytes -lt 65536; and \
+          test $argmax_frames -lt 4
+        set -l argmax_chunk ''
+        read --null --nchars 4096 --local argmax_chunk \
+          <&$ARGMAX_CONTROL_FD 2>/dev/null
+        set -l argmax_read_status $status
+        set -l argmax_chunk_bytes (string length -- "$argmax_chunk")
+        set argmax_total_bytes \
+          (math "$argmax_total_bytes + $argmax_chunk_bytes")
+        if test $__ARGMAX_FISH_CONTROL_DISCARDING -eq 0
+          set -g __ARGMAX_FISH_CONTROL_PENDING \
+            "$__ARGMAX_FISH_CONTROL_PENDING$argmax_chunk"
+          if test (string length -- "$__ARGMAX_FISH_CONTROL_PENDING") \
+              -gt 32817
+            set -g __ARGMAX_FISH_CONTROL_PENDING ''
+            set -g __ARGMAX_FISH_CONTROL_DISCARDING 1
+          end
+        end
+        test $argmax_read_status -eq 0; or break
+        test $argmax_chunk_bytes -eq 4096; and continue
+
+        set argmax_frames (math "$argmax_frames + 1")
+        if test $__ARGMAX_FISH_CONTROL_DISCARDING -eq 1
+          set -g __ARGMAX_FISH_CONTROL_DISCARDING 0
+          set -g __ARGMAX_FISH_CONTROL_PENDING ''
+          continue
+        end
+        set -l argmax_frame "$__ARGMAX_FISH_CONTROL_PENDING"
+        set -g __ARGMAX_FISH_CONTROL_PENDING ''
+        __argmax_control_apply "$argmax_frame"
+      end
+      return $argmax_status
+    end
+
+    function __argmax_sync
+      set -l argmax_status $status
+      set -l __argmax_fish_owner argmax-owned-fish-v1
+      __argmax_control_drain
       # commandline prints one newline; the decoder removes only that terminator.
       set -l argmax_buffer (commandline -b | string collect -N)
       set -l argmax_cursor (commandline -C)
-      if test (string length -- "$argmax_buffer") -gt 16384
+      if test (string length -- "$argmax_buffer") -gt 16385
         __argmax_emit protocol-frame-oversized
-        return 0
+        return $argmax_status
       end
       if test $__ARGMAX_FISH_PROBE_NONCE -ge 2147483647
         set -g __ARGMAX_FISH_CAPABILITY unavailable
         __argmax_emit capability:unavailable
-        return 0
+        return $argmax_status
       end
       set -g __ARGMAX_FISH_PROBE_NONCE \
         (math $__ARGMAX_FISH_PROBE_NONCE + 1)
       __argmax_emit \
         "probe-buffer:f:$__ARGMAX_FISH_PROBE_NONCE:$argmax_cursor:$argmax_buffer"
+      return $argmax_status
     end
 
     set -g __ARGMAX_FISH_COMMAND_ACTIVE 0
     if not set -q __ARGMAX_FISH_PROBE_NONCE
       set -g __ARGMAX_FISH_PROBE_NONCE 0
+    end
+    if not set -q __ARGMAX_FISH_CONTROL_PENDING
+      set -g __ARGMAX_FISH_CONTROL_PENDING ''
+    end
+    if not set -q __ARGMAX_FISH_CONTROL_DISCARDING
+      set -g __ARGMAX_FISH_CONTROL_DISCARDING 0
+    end
+    if not set -q __ARGMAX_FISH_CONTROL_LAST_ID
+      set -g __ARGMAX_FISH_CONTROL_LAST_ID 0
     end
     set -l argmax_probe \e\[argmax-sync~
     set -l argmax_probe_available 1
@@ -780,7 +1412,9 @@ if status is-interactive; and test -t 0; and test -t 1
       __argmax_emit capability:unavailable
       functions -e $argmax_functions 2>/dev/null
       set -e __ARGMAX_FISH_INSTALLED __ARGMAX_FISH_CAPABILITY \
-        __ARGMAX_FISH_COMMAND_ACTIVE __ARGMAX_FISH_PROBE_NONCE
+        __ARGMAX_FISH_COMMAND_ACTIVE __ARGMAX_FISH_PROBE_NONCE \
+        __ARGMAX_FISH_CONTROL_PENDING __ARGMAX_FISH_CONTROL_DISCARDING \
+        __ARGMAX_FISH_CONTROL_LAST_ID
     end
     end
   end
@@ -1364,6 +1998,10 @@ mod tests {
             assert!(script.contains(wrapper));
             assert!(script.contains(SESSION_MARKER_ENV));
             assert!(script.contains(SESSION_OWNER_PID_ENV));
+            assert!(script.contains("ARGMAX_CONTROL_FD"));
+            assert!(script.contains("argmax-control-v1"));
+            assert!(script.contains("replace"));
+            assert!(script.contains("__argmax_control_drain"));
             assert!(script.contains("command-start"));
             assert!(script.contains("command-stop:"));
             assert!(script.contains("buffer:"));
@@ -1395,7 +2033,13 @@ mod tests {
         assert!(init_script(Shell::Fish).contains("string collect -N"));
         assert!(init_script(Shell::Fish).contains("probe-buffer:f:"));
         assert_eq!(MAX_SYNC_EVENT_CHARACTERS, 16_384);
+        assert_eq!(MAX_SYNC_EVENT_FRAME_CHARACTERS, 16_417);
+        assert_eq!(MAX_SYNC_EVENT_WIRE_BYTES, 65_669);
         assert!(cases_all_contain("16384"));
+        assert!(cases_all_contain("16417"));
+        assert!(init_script(Shell::Fish).contains("16385"));
+        assert!(cases_all_contain("32817"));
+        assert!(cases_all_contain("2147483647"));
     }
 
     #[test]
@@ -1636,6 +2280,228 @@ mod tests {
         )
     }
 
+    fn replacement_control(request: u64, cursor: usize, buffer: &str) -> Vec<u8> {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+
+        let mut wire = format!(
+            "argmax-control-v1:replace:{request}:{cursor}:{}:",
+            buffer.len()
+        )
+        .into_bytes();
+        for &byte in buffer.as_bytes() {
+            wire.push(HEX[usize::from(byte >> 4)]);
+            wire.push(HEX[usize::from(byte & 0x0f)]);
+        }
+        wire.push(0);
+        wire
+    }
+
+    fn probe_buffer_wire(shell: Shell, nonce: u64, cursor: usize, buffer: &str) -> Vec<u8> {
+        let unit = match shell {
+            Shell::Bash | Shell::Zsh => 'c',
+            Shell::Fish => 'f',
+        };
+        let mut wire = format!("probe-buffer:{unit}:{nonce}:{cursor}:{buffer}").into_bytes();
+        if shell == Shell::Fish {
+            wire.push(b'\n');
+        }
+        wire
+    }
+
+    fn control_shell_events(
+        shell: Shell,
+        control: &[u8],
+        initial_line: &str,
+    ) -> Option<Vec<Vec<u8>>> {
+        let program = shell.as_str();
+        if !expect_is_available() || !shell_is_available(program) {
+            return None;
+        }
+        if shell == Shell::Bash
+            && !Command::new(program)
+                .args([
+                    "-c",
+                    "(( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) ))",
+                ])
+                .status()
+                .expect("inspect Bash version")
+                .success()
+        {
+            return None;
+        }
+
+        let directory = HarnessDirectory::create(shell);
+        let init_path = directory.0.join("init");
+        let events_path = directory.0.join("events");
+        let control_path = directory.0.join("control");
+        fs::write(&init_path, init_script(shell)).expect("write shell init");
+        fs::write(&control_path, control).expect("write shell controls");
+        let shell_arguments = match shell {
+            Shell::Bash => "--noprofile --norc -i",
+            Shell::Zsh => "-df",
+            Shell::Fish => "--no-config --interactive",
+        };
+        let expect_program = r#"
+          set timeout 10
+          log_user 0
+          spawn sh -c {exec 3>>"$ARGMAX_TEST_EVENTS"; exec 4<"$ARGMAX_TEST_CONTROLS"; exec $ARGMAX_TEST_SHELL $ARGMAX_TEST_ARGS}
+          if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
+            send -- "function fish_prompt; printf 'ARGMAX\\x3e '; end; source \"$env(ARGMAX_TEST_INIT)\"\r"
+          } else {
+            send -- "PS1='ARGMAX''> '; source \"$env(ARGMAX_TEST_INIT)\"\r"
+          }
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 2 }
+            eof { exit 3 }
+          }
+          send -- "source \"$env(ARGMAX_TEST_INIT)\"\r"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 4 }
+            eof { exit 5 }
+          }
+          send -- "$env(ARGMAX_TEST_INITIAL)"
+          send -- "\033\[argmax-sync~"
+          after 200
+          send -- "\003"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 6 }
+            eof { exit 7 }
+          }
+          send -- "exit\r"
+          expect eof
+        "#;
+        let output = Command::new("expect")
+            .args(["-c", expect_program])
+            .env("ARGMAX_PRIVATE_SESSION", "1")
+            .env("ARGMAX_EVENT_FD", "3")
+            .env("ARGMAX_CONTROL_FD", "4")
+            .env("ARGMAX_TEST_EVENTS", &events_path)
+            .env("ARGMAX_TEST_CONTROLS", &control_path)
+            .env("ARGMAX_TEST_INIT", &init_path)
+            .env("ARGMAX_TEST_INITIAL", initial_line)
+            .env("ARGMAX_TEST_SHELL", program)
+            .env("ARGMAX_TEST_ARGS", shell_arguments)
+            .env("LC_ALL", "en_US.UTF-8")
+            .output()
+            .expect("run shell control harness");
+        assert!(
+            output.status.success(),
+            "{program} control harness failed with {}:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let events = fs::read(&events_path).unwrap_or_default();
+        Some(
+            events
+                .split(|byte| *byte == 0)
+                .filter(|frame| !frame.is_empty())
+                .map(<[u8]>::to_vec)
+                .collect(),
+        )
+    }
+
+    fn stale_control_shell_events(shell: Shell) -> Option<Vec<Vec<u8>>> {
+        let program = shell.as_str();
+        if !expect_is_available() || !shell_is_available(program) {
+            return None;
+        }
+        if shell == Shell::Bash
+            && !Command::new(program)
+                .args([
+                    "-c",
+                    "(( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) ))",
+                ])
+                .status()
+                .expect("inspect Bash version")
+                .success()
+        {
+            return None;
+        }
+
+        let directory = HarnessDirectory::create(shell);
+        let init_path = directory.0.join("init");
+        let events_path = directory.0.join("events");
+        let control_path = directory.0.join("control");
+        let append_path = directory.0.join("append-control");
+        fs::write(&init_path, init_script(shell)).expect("write shell init");
+        fs::write(&control_path, []).expect("write empty shell controls");
+        fs::write(&append_path, replacement_control(1, 8, "attacker"))
+            .expect("write stale shell control");
+        let shell_arguments = match shell {
+            Shell::Bash => "--noprofile --norc -i",
+            Shell::Zsh => "-df",
+            Shell::Fish => "--no-config --interactive",
+        };
+        let expect_program = r#"
+          set timeout 10
+          log_user 0
+          spawn sh -c {exec 3>>"$ARGMAX_TEST_EVENTS"; exec 4<"$ARGMAX_TEST_CONTROLS"; exec $ARGMAX_TEST_SHELL $ARGMAX_TEST_ARGS}
+          if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
+            send -- "function fish_prompt; printf 'ARGMAX\\x3e '; end; source \"$env(ARGMAX_TEST_INIT)\"\r"
+          } else {
+            send -- "PS1='ARGMAX''> '; source \"$env(ARGMAX_TEST_INIT)\"\r"
+          }
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 2 }
+            eof { exit 3 }
+          }
+          send -- "safe"
+          send -- "\033\[argmax-sync~"
+          after 100
+          send -- "x"
+          set source [open $env(ARGMAX_TEST_APPEND) rb]
+          fconfigure $source -translation binary
+          set control [read $source]
+          close $source
+          set target [open $env(ARGMAX_TEST_CONTROLS) ab]
+          fconfigure $target -translation binary
+          puts -nonewline $target $control
+          close $target
+          send -- "\033\[argmax-sync~"
+          after 200
+          send -- "\003"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 4 }
+            eof { exit 5 }
+          }
+          send -- "exit\r"
+          expect eof
+        "#;
+        let output = Command::new("expect")
+            .args(["-c", expect_program])
+            .env("ARGMAX_PRIVATE_SESSION", "1")
+            .env("ARGMAX_EVENT_FD", "3")
+            .env("ARGMAX_CONTROL_FD", "4")
+            .env("ARGMAX_TEST_EVENTS", &events_path)
+            .env("ARGMAX_TEST_CONTROLS", &control_path)
+            .env("ARGMAX_TEST_APPEND", &append_path)
+            .env("ARGMAX_TEST_INIT", &init_path)
+            .env("ARGMAX_TEST_SHELL", program)
+            .env("ARGMAX_TEST_ARGS", shell_arguments)
+            .env("LC_ALL", "en_US.UTF-8")
+            .output()
+            .expect("run stale shell control harness");
+        assert!(
+            output.status.success(),
+            "{program} stale-control harness failed with {}:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let events = fs::read(&events_path).unwrap_or_default();
+        Some(
+            events
+                .split(|byte| *byte == 0)
+                .filter(|frame| !frame.is_empty())
+                .map(<[u8]>::to_vec)
+                .collect(),
+        )
+    }
+
     fn collision_harness(shell: Shell) -> Option<Vec<Vec<u8>>> {
         let program = shell.as_str();
         if !expect_is_available() || !shell_is_available(program) {
@@ -1733,11 +2599,11 @@ mod tests {
           log_user 0
           spawn sh -c {exec 3>"$ARGMAX_TEST_EVENTS"; exec $ARGMAX_TEST_SHELL $ARGMAX_TEST_ARGS}
           if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
-            send -- "function fish_prompt; printf 'ARGMAX\\x3e '; end; source \"$env(ARGMAX_TEST_INIT)\"; not set -q ARGMAX_PRIVATE_SESSION ARGMAX_EVENT_FD ARGMAX_ACTIVE_SHELL ARGMAX_SESSION_OWNER_PID; and not functions -q __argmax_emit; and printf cleared > \"$env(ARGMAX_TEST_SENTINEL)\"\r"
+            send -- "function fish_prompt; printf 'ARGMAX\\x3e '; end; source \"$env(ARGMAX_TEST_INIT)\"; not set -q ARGMAX_PRIVATE_SESSION ARGMAX_EVENT_FD ARGMAX_CONTROL_FD ARGMAX_ACTIVE_SHELL ARGMAX_SESSION_OWNER_PID; and not functions -q __argmax_emit; and printf cleared > \"$env(ARGMAX_TEST_SENTINEL)\"\r"
           } elseif {$env(ARGMAX_TEST_SHELL) eq "zsh"} {
-            send -- "PS1='ARGMAX''> '; source \"$env(ARGMAX_TEST_INIT)\"; test -z \"\${ARGMAX_PRIVATE_SESSION+x}\" && test -z \"\${ARGMAX_EVENT_FD+x}\" && test -z \"\${ARGMAX_ACTIVE_SHELL+x}\" && test -z \"\${ARGMAX_SESSION_OWNER_PID+x}\" && ! functions __argmax_emit >/dev/null 2>&1 && printf cleared > \"$env(ARGMAX_TEST_SENTINEL)\"\r"
+            send -- "PS1='ARGMAX''> '; source \"$env(ARGMAX_TEST_INIT)\"; test -z \"\${ARGMAX_PRIVATE_SESSION+x}\" && test -z \"\${ARGMAX_EVENT_FD+x}\" && test -z \"\${ARGMAX_CONTROL_FD+x}\" && test -z \"\${ARGMAX_ACTIVE_SHELL+x}\" && test -z \"\${ARGMAX_SESSION_OWNER_PID+x}\" && ! functions __argmax_emit >/dev/null 2>&1 && printf cleared > \"$env(ARGMAX_TEST_SENTINEL)\"\r"
           } else {
-            send -- "PS1='ARGMAX''> '; source \"$env(ARGMAX_TEST_INIT)\"; test -z \"\${ARGMAX_PRIVATE_SESSION+x}\" && test -z \"\${ARGMAX_EVENT_FD+x}\" && test -z \"\${ARGMAX_ACTIVE_SHELL+x}\" && test -z \"\${ARGMAX_SESSION_OWNER_PID+x}\" && ! declare -F __argmax_emit >/dev/null && printf cleared > \"$env(ARGMAX_TEST_SENTINEL)\"\r"
+            send -- "PS1='ARGMAX''> '; source \"$env(ARGMAX_TEST_INIT)\"; test -z \"\${ARGMAX_PRIVATE_SESSION+x}\" && test -z \"\${ARGMAX_EVENT_FD+x}\" && test -z \"\${ARGMAX_CONTROL_FD+x}\" && test -z \"\${ARGMAX_ACTIVE_SHELL+x}\" && test -z \"\${ARGMAX_SESSION_OWNER_PID+x}\" && ! declare -F __argmax_emit >/dev/null && printf cleared > \"$env(ARGMAX_TEST_SENTINEL)\"\r"
           }
           expect {
             "ARGMAX> " {}
@@ -1751,6 +2617,7 @@ mod tests {
             .args(["-c", expect_program])
             .env("ARGMAX_PRIVATE_SESSION", "1")
             .env("ARGMAX_EVENT_FD", "3")
+            .env("ARGMAX_CONTROL_FD", "4")
             .env("ARGMAX_ACTIVE_SHELL", program)
             .env("ARGMAX_SESSION_OWNER_PID", "1")
             .env("ARGMAX_TEST_EVENTS", &events_path)
@@ -2022,6 +2889,112 @@ fi
         );
         assert!(events.iter().any(|frame| frame == b"command-start:echo hi"));
         assert!(events.iter().any(|frame| frame == b"command-stop:0"));
+    }
+
+    #[test]
+    fn shell_controls_replace_unicode_multiline_buffers_without_execution() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let sentinel_directory = HarnessDirectory::create(shell);
+            let sentinel = sentinel_directory.0.join("must-not-execute");
+            let replacement = format!(
+                "printf 'Troy'\n\u{4e16}\u{754c}; touch {}",
+                sentinel.display()
+            );
+            let cursor = "printf 'Troy'\n\u{4e16}\u{754c}".len();
+            let control = replacement_control(1, cursor, &replacement);
+            let Some(events) = control_shell_events(shell, &control, "safe") else {
+                continue;
+            };
+            let native_cursor = replacement[..cursor].chars().count();
+            let want = probe_buffer_wire(shell, 1, native_cursor, &replacement);
+
+            assert!(
+                events.iter().any(|frame| frame == &want),
+                "{} did not acknowledge the exact replacement: {events:?}",
+                shell.as_str()
+            );
+            assert!(
+                events
+                    .iter()
+                    .filter(|frame| frame.as_slice() == b"capability:sync-probe:0")
+                    .count()
+                    >= 2,
+                "{} duplicated or lost its idempotent capability hook",
+                shell.as_str()
+            );
+            assert!(
+                !sentinel.exists(),
+                "{} executed inert replacement text",
+                shell.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn shell_controls_place_end_cursor_exactly() {
+        let replacement = "git status \u{1f680}";
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let control = replacement_control(1, replacement.len(), replacement);
+            let Some(events) = control_shell_events(shell, &control, "safe") else {
+                continue;
+            };
+            let want = probe_buffer_wire(shell, 1, replacement.chars().count(), replacement);
+            assert!(
+                events.iter().any(|frame| frame == &want),
+                "{} misplaced an end cursor: {events:?}",
+                shell.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_oversized_partial_and_mismatched_controls_are_inert() {
+        let mut controls = replacement_control(2, 8, "attacker");
+        controls.extend_from_slice(b"argmax-control-v1:replace:1:0:1:GG\0");
+        controls.extend(std::iter::repeat_n(b'x', 32_818));
+        controls.push(0);
+        let mut partial = replacement_control(1, 8, "attacker");
+        assert_eq!(partial.pop(), Some(0));
+        controls.extend_from_slice(&partial);
+
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let Some(events) = control_shell_events(shell, &controls, "safe") else {
+                continue;
+            };
+            let want = probe_buffer_wire(shell, 1, 4, "safe");
+            assert!(
+                events.iter().any(|frame| frame == &want),
+                "{} changed the line for an invalid control: {events:?}",
+                shell.as_str()
+            );
+            assert!(!events.iter().any(|frame| {
+                frame
+                    .windows(b"attacker".len())
+                    .any(|window| window == b"attacker")
+            }));
+        }
+    }
+
+    #[test]
+    fn stale_control_never_overwrites_newer_local_input() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let Some(events) = stale_control_shell_events(shell) else {
+                continue;
+            };
+            let first = probe_buffer_wire(shell, 1, 4, "safe");
+            let second = probe_buffer_wire(shell, 2, 5, "safex");
+            assert!(events.iter().any(|frame| frame == &first));
+            assert!(
+                events.iter().any(|frame| frame == &second),
+                "{} allowed stale control authority: {events:?}",
+                shell.as_str()
+            );
+            assert!(!events.iter().any(|frame| {
+                frame
+                    .windows(b"attacker".len())
+                    .any(|window| window == b"attacker")
+            }));
+        }
     }
 
     #[test]
