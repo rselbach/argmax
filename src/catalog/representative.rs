@@ -7,6 +7,7 @@ pub(super) fn spec(name: &str, description: &str) -> Option<CommandSpec> {
     Some(match name {
         "docker" => docker(description),
         "npm" => npm(description),
+        "pnpm" | "yarn" | "bun" => node_package_manager(name, description),
         "pip" => pip(description),
         "cargo" => cargo(description),
         "go" => go(description),
@@ -18,9 +19,23 @@ pub(super) fn spec(name: &str, description: &str) -> Option<CommandSpec> {
         "vim" => vim(description),
         "jq" => jq(description),
         "just" => just(description),
+        "make" => make(description),
+        "ssh" => ssh(description),
+        "kill" => kill(description),
         "systemctl" => systemctl(description),
+        "zoxide" => zoxide(description),
+        "printenv" => printenv(description),
+        "fd" => fd(description),
         _ => return None,
     })
+}
+
+pub(super) fn supplemental_specs() -> [CommandSpec; 3] {
+    [
+        zoxide("query the zoxide directory database"),
+        printenv("print selected environment variables"),
+        fd("find filesystem entries"),
+    ]
 }
 
 fn docker(description: &str) -> CommandSpec {
@@ -134,6 +149,15 @@ fn npm(description: &str) -> CommandSpec {
         .with_subcommand(CommandSpec::new("publish", "publish a package"))
         .with_subcommand(no_positionals("outdated", "list outdated dependencies"))
         .with_subcommand(no_positionals("test", "run the package test script"))
+}
+
+fn node_package_manager(name: &str, description: &str) -> CommandSpec {
+    CommandSpec::new(name, description)
+        .with_option(terminal_option("--version", "print version information"))
+        .with_subcommand(
+            CommandSpec::new("run", "run a package script")
+                .with_generator(positional_generator(GeneratorKind::PackageScripts, 0)),
+        )
 }
 
 fn pip(description: &str) -> CommandSpec {
@@ -440,6 +464,11 @@ fn git(description: &str) -> CommandSpec {
                 .with_generator(positional_generator(GeneratorKind::GitCommits, 0)),
         )
         .with_subcommand(
+            CommandSpec::new("tag", "create, list, or delete tags")
+                .with_option(OptionSpec::new("-d", "delete tags").with_alias("--delete"))
+                .with_generator(positional_generator(GeneratorKind::GitTags, 0)),
+        )
+        .with_subcommand(
             no_positionals("status", "show the working tree status").with_option(
                 OptionSpec::new("-s", "show short-format status").with_alias("--short"),
             ),
@@ -655,6 +684,49 @@ fn just(description: &str) -> CommandSpec {
         .with_generator(option_directories("-d"))
 }
 
+fn make(description: &str) -> CommandSpec {
+    CommandSpec::new("make", description)
+        .with_option(value_option("-f", "read another makefile").with_alias("--file"))
+        .with_generator(positional_generator(GeneratorKind::MakeTargets, 0))
+}
+
+fn ssh(description: &str) -> CommandSpec {
+    CommandSpec::new("ssh", description)
+        .with_option(value_option("-p", "connect to a remote port"))
+        .with_generator(positional_generator(GeneratorKind::SshHosts, 0))
+}
+
+fn kill(description: &str) -> CommandSpec {
+    CommandSpec::new("kill", description)
+        .with_option(value_option("-s", "select the signal to send"))
+        .with_generator(positional_generator(GeneratorKind::Processes, 0))
+}
+
+fn zoxide(description: &str) -> CommandSpec {
+    CommandSpec::new("zoxide", description)
+        .with_subcommand(
+            CommandSpec::new("query", "search the directory database")
+                .with_generator(positional_generator(GeneratorKind::ZoxideDirectories, 0)),
+        )
+        .with_subcommand(CommandSpec::new("add", "add a directory to the database"))
+        .with_subcommand(CommandSpec::new(
+            "remove",
+            "remove a directory from the database",
+        ))
+}
+
+fn printenv(description: &str) -> CommandSpec {
+    CommandSpec::new("printenv", description)
+        .with_option(OptionSpec::new("--null", "end output with a null byte"))
+        .with_generator(positional_generator(GeneratorKind::EnvironmentVariables, 0))
+}
+
+fn fd(description: &str) -> CommandSpec {
+    CommandSpec::new("fd", description)
+        .with_option(value_option("--extension", "filter by file extension").with_alias("-e"))
+        .with_generator(option_generator(GeneratorKind::FileTypes, "--extension"))
+}
+
 fn systemctl(description: &str) -> CommandSpec {
     CommandSpec::new("systemctl", description)
         .with_option(OptionSpec::new("--user", "operate on the user service manager").global(true))
@@ -782,9 +854,12 @@ fn service_command(name: &str, description: &str) -> CommandSpec {
 mod tests {
     use super::*;
 
-    const ROOTS: [&str; 14] = [
+    const ROOTS: [&str; 23] = [
         "docker",
         "npm",
+        "pnpm",
+        "yarn",
+        "bun",
         "pip",
         "cargo",
         "go",
@@ -796,7 +871,13 @@ mod tests {
         "vim",
         "jq",
         "just",
+        "make",
+        "ssh",
+        "kill",
         "systemctl",
+        "zoxide",
+        "printenv",
+        "fd",
     ];
 
     #[test]
@@ -913,6 +994,11 @@ mod tests {
             &positional_generator(GeneratorKind::GitCommits, 0),
         );
         assert_generator(
+            "git",
+            &["tag"],
+            &positional_generator(GeneratorKind::GitTags, 0),
+        );
+        assert_generator(
             "tar",
             &[],
             &option_files("-f", &["tar", "tgz", "gz", "bz2", "xz"]),
@@ -928,6 +1014,47 @@ mod tests {
             "systemctl",
             &["start"],
             &positional_generator(GeneratorKind::Services, 0),
+        );
+    }
+
+    #[test]
+    fn dynamic_parity_generators_are_reachable() {
+        for root in ["pnpm", "yarn", "bun"] {
+            assert_generator(
+                root,
+                &["run"],
+                &positional_generator(GeneratorKind::PackageScripts, 0),
+            );
+        }
+        assert_generator(
+            "make",
+            &[],
+            &positional_generator(GeneratorKind::MakeTargets, 0),
+        );
+        assert_generator(
+            "ssh",
+            &[],
+            &positional_generator(GeneratorKind::SshHosts, 0),
+        );
+        assert_generator(
+            "zoxide",
+            &["query"],
+            &positional_generator(GeneratorKind::ZoxideDirectories, 0),
+        );
+        assert_generator(
+            "kill",
+            &[],
+            &positional_generator(GeneratorKind::Processes, 0),
+        );
+        assert_generator(
+            "printenv",
+            &[],
+            &positional_generator(GeneratorKind::EnvironmentVariables, 0),
+        );
+        assert_generator(
+            "fd",
+            &[],
+            &option_generator(GeneratorKind::FileTypes, "--extension"),
         );
     }
 

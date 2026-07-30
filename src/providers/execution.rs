@@ -604,8 +604,14 @@ impl DynamicExecutor {
         let line = tokenize(&query.line, query.cursor).ok()?;
         let committed = line.committed_tokens();
         let executable = committed.first()?.cooked.as_str();
-        if cobra_inference_eligibility(index, executable) != CobraInferenceEligibility::Eligible {
-            return None;
+        match cobra_inference_eligibility(index, executable) {
+            CobraInferenceEligibility::InvalidExecutable => return None,
+            CobraInferenceEligibility::CuratedDefinition
+                if curated_resolution_is_usable(index, &line) =>
+            {
+                return None;
+            }
+            CobraInferenceEligibility::Eligible | CobraInferenceEligibility::CuratedDefinition => {}
         }
         let request = CobraRequest::new(
             executable,
@@ -683,6 +689,15 @@ impl DynamicExecutor {
             expires_at,
         });
     }
+}
+
+fn curated_resolution_is_usable(index: &SpecIndex, line: &TokenizedLine) -> bool {
+    index.resolve(line).is_some_and(|resolution| {
+        !resolution.node.subcommands.is_empty()
+            || !resolution.available_options().is_empty()
+            || !resolution.node.generators.is_empty()
+            || resolution.node.max_positionals.is_some()
+    })
 }
 
 /// Converts normalized dynamic items into deterministic, inert spec suggestions.
@@ -2253,6 +2268,32 @@ mod tests {
             InsertionBehavior::Exact
         );
         assert_eq!(completion.suggestions[0].description(), "student");
+    }
+
+    #[test]
+    fn cobra_fills_only_bare_or_unresolved_curated_nodes() {
+        let temporary = tempfile::tempdir().unwrap();
+        temp_executable(temporary.path(), "communityctl");
+        let query = CompletionQuery::new("communityctl tr", 15, temporary.path(), 1).unwrap();
+        let context = context(temporary.path().as_os_str(), None);
+
+        let bare = SpecIndex::new([CommandSpec::new("communityctl", "catalog identity")]).unwrap();
+        let mut runner = FakeRunner::one(Ok(b"troy\n:0\n".to_vec()));
+        let completion = DynamicExecutor::new()
+            .complete_cobra_with(&bare, &query, context, &cancellation(false), &mut runner)
+            .unwrap();
+        assert_eq!(completion.suggestions[0].display(), "troy");
+
+        let modeled = SpecIndex::new([CommandSpec::new("communityctl", "curated")
+            .with_subcommand(CommandSpec::new("tree", "modeled subtree"))])
+        .unwrap();
+        let mut runner = FakeRunner::one(Ok(b"troy\n:0\n".to_vec()));
+        assert!(
+            DynamicExecutor::new()
+                .complete_cobra_with(&modeled, &query, context, &cancellation(false), &mut runner,)
+                .is_none()
+        );
+        assert!(runner.plans.is_empty());
     }
 
     #[test]

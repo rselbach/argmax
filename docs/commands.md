@@ -58,7 +58,7 @@ Generated from the same audited source used by argmax at runtime.
 | `dapr` | Dapr application runtime CLI | migrated | 0 | 0 | 0 |
 | `devspace` | Kubernetes development CLI | migrated | 0 | 0 | 0 |
 | `dive` | container image layer explorer | migrated | 0 | 0 | 0 |
-| `docker` | container build and runtime CLI | migrated | 7 | 3 | 0 |
+| `docker` | container build and runtime CLI | migrated | 11 | 16 | 2 |
 | `doctl` | DigitalOcean CLI | migrated | 0 | 0 | 0 |
 | `duckdb` | DuckDB command-line shell | migrated | 0 | 0 | 0 |
 | `eb` | AWS Elastic Beanstalk CLI | migrated | 0 | 0 | 0 |
@@ -153,7 +153,7 @@ Generated from the same audited source used by argmax at runtime.
 | `babel-node` | Run Babel-transformed programs | migrated | 0 | 0 | 0 |
 | `biome` | Lint and format web projects | migrated | 0 | 0 | 0 |
 | `browserify` | Bundle CommonJS modules | migrated | 0 | 0 | 0 |
-| `bun` | Run the Bun toolkit | migrated | 0 | 0 | 0 |
+| `bun` | Run the Bun toolkit | migrated | 1 | 1 | 1 |
 | `bunx` | Run Bun package binaries | migrated | 0 | 0 | 0 |
 | `capacitor` | Manage Capacitor native projects | migrated | 0 | 0 | 0 |
 | `commitlint` | Validate commit messages | migrated | 0 | 0 | 0 |
@@ -189,14 +189,14 @@ Generated from the same audited source used by argmax at runtime.
 | `ng` | Manage Angular projects | migrated | 0 | 0 | 0 |
 | `node` | Run JavaScript with Node.js | migrated | 0 | 0 | 0 |
 | `nodemon` | Restart Node.js programs on changes | migrated | 0 | 0 | 0 |
-| `npm` | Manage Node.js packages | migrated | 9 | 2 | 0 |
+| `npm` | Manage Node.js packages | migrated | 9 | 7 | 1 |
 | `npx` | Run package-provided commands | migrated | 0 | 0 | 0 |
 | `nuxi` | Manage Nuxt projects | migrated | 0 | 0 | 0 |
 | `nuxt` | Build Nuxt applications | migrated | 0 | 0 | 0 |
 | `parcel` | Build zero-configuration web projects | migrated | 0 | 0 | 0 |
 | `playwright` | Run Playwright browser automation | migrated | 0 | 0 | 0 |
 | `pm2` | Manage Node.js processes | migrated | 0 | 0 | 0 |
-| `pnpm` | Manage content-addressed packages | migrated | 0 | 0 | 0 |
+| `pnpm` | Manage content-addressed packages | migrated | 1 | 1 | 1 |
 | `pnpx` | Run pnpm package binaries | migrated | 0 | 0 | 0 |
 | `prettier` | Format source files | migrated | 0 | 0 | 0 |
 | `puppeteer` | Manage Puppeteer browsers | migrated | 0 | 0 | 0 |
@@ -226,7 +226,7 @@ Generated from the same audited source used by argmax at runtime.
 | `webpack-cli` | Invoke the webpack command line | migrated | 0 | 0 | 0 |
 | `webpack-dev-server` | Serve webpack development builds | migrated | 0 | 0 | 0 |
 | `xo` | Lint JavaScript projects | migrated | 0 | 0 | 0 |
-| `yarn` | Manage JavaScript packages | migrated | 0 | 0 | 0 |
+| `yarn` | Manage JavaScript packages | migrated | 1 | 1 | 1 |
 | `yarnpkg` | Invoke the Yarn package manager | aliased to `yarn` | 0 | 0 | 0 |
 | `zx` | Write shell scripts in JavaScript | migrated | 0 | 0 | 0 |
 
@@ -242,7 +242,7 @@ Generated from the same audited source used by argmax at runtime.
 | `mypy` | Check Python static types | migrated | 0 | 0 | 0 |
 | `nox` | Automate Python test sessions | migrated | 0 | 0 | 0 |
 | `pdm` | Manage modern Python projects | migrated | 0 | 0 | 0 |
-| `pip` | Install Python packages | migrated | 9 | 3 | 0 |
+| `pip` | Install Python packages | migrated | 14 | 9 | 4 |
 | `pip3` | Install Python 3 packages | migrated | 0 | 0 | 0 |
 | `pipenv` | Manage Python virtual environments | migrated | 0 | 0 | 0 |
 | `pipx` | Install isolated Python applications | migrated | 0 | 0 | 0 |
@@ -258,7 +258,7 @@ Generated from the same audited source used by argmax at runtime.
 
 | Command | Description | Status | Subcommands | Options | Generators |
 | --- | --- | --- | ---: | ---: | ---: |
-| `cargo` | Manage Rust projects | migrated | 9 | 4 | 0 |
+| `cargo` | Manage Rust projects | migrated | 9 | 21 | 10 |
 | `cargo-miri` | Run Rust code and tests under Miri | migrated | 0 | 0 | 0 |
 | `clippy-driver` | Run Rust lint analysis | migrated | 0 | 0 | 0 |
 | `mdbook` | Build books from Markdown | migrated | 0 | 0 | 0 |
@@ -274,7 +274,7 @@ Generated from the same audited source used by argmax at runtime.
 
 | Command | Description | Status | Subcommands | Options | Generators |
 | --- | --- | --- | ---: | ---: | ---: |
-| `go` | Go toolchain and module driver | migrated | 10 | 1 | 0 |
+| `go` | Go toolchain and module driver | migrated | 16 | 6 | 2 |
 | `gofmt` | Go source formatter | migrated | 0 | 0 | 0 |
 | `golangci-lint` | Go linters runner | migrated | 0 | 0 | 0 |
 
@@ -323,7 +323,7 @@ Generated from the same audited source used by argmax at runtime.
 | Command | Description | Status | Subcommands | Options | Generators |
 | --- | --- | --- | ---: | ---: | ---: |
 | `gh` | GitHub command-line client | migrated | 0 | 0 | 0 |
-| `git` | distributed version control system | migrated | 9 | 5 | 0 |
+| `git` | distributed version control system | migrated | 22 | 18 | 16 |
 | `git-flow` | Git flow workflow extensions | migrated | 0 | 0 | 0 |
 | `git-lfs` | Git large file storage client | migrated | 0 | 0 | 0 |
 | `gitk` | Git repository history browser | migrated | 0 | 0 | 0 |
@@ -336,7 +336,7 @@ Generated from the same audited source used by argmax at runtime.
 | Command | Description | Status | Subcommands | Options | Generators |
 | --- | --- | --- | ---: | ---: | ---: |
 | `apk` | manage Alpine Linux packages | migrated | 0 | 0 | 0 |
-| `apt` | manage Debian packages | migrated | 11 | 3 | 0 |
+| `apt` | manage Debian packages | migrated | 11 | 3 | 4 |
 | `apt-cache` | query Debian package metadata | migrated | 0 | 0 | 0 |
 | `apt-get` | retrieve and install Debian packages | migrated | 0 | 0 | 0 |
 | `brew` | manage Homebrew packages | migrated | 0 | 0 | 0 |
@@ -467,7 +467,7 @@ Generated from the same audited source used by argmax at runtime.
 | `just` | run recipes from a justfile | migrated | 0 | 14 | 3 |
 | `lerna` | run tasks across JavaScript packages | migrated | 0 | 0 | 0 |
 | `mage` | run Go-based build targets | migrated | 0 | 0 | 0 |
-| `make` | run Makefile build targets | migrated | 0 | 0 | 0 |
+| `make` | run Makefile build targets | migrated | 0 | 1 | 1 |
 | `nx` | run Nx workspace tasks | migrated | 0 | 0 | 0 |
 | `pants` | run Pants builds | migrated | 0 | 0 | 0 |
 | `plz` | run Please builds | migrated | 0 | 0 | 0 |
@@ -537,7 +537,7 @@ Generated from the same audited source used by argmax at runtime.
 | `iwconfig` | Configure legacy wireless interfaces | migrated | 0 | 0 | 0 |
 | `journalctl` | Query the systemd journal | migrated | 0 | 0 | 0 |
 | `kexec` | Load and boot another kernel | migrated | 0 | 0 | 0 |
-| `kill` | Send a signal to a process | migrated | 0 | 0 | 0 |
+| `kill` | Send a signal to a process | migrated | 0 | 1 | 1 |
 | `killall` | Signal processes by name | migrated | 0 | 0 | 0 |
 | `last` | Show recent login sessions | migrated | 0 | 0 | 0 |
 | `lastlog` | Report the most recent user logins | migrated | 0 | 0 | 0 |
@@ -610,7 +610,7 @@ Generated from the same audited source used by argmax at runtime.
 | `smem` | Report proportional process memory use | migrated | 0 | 0 | 0 |
 | `socat` | Relay bidirectional data streams | migrated | 0 | 0 | 0 |
 | `ss` | Inspect network sockets | migrated | 0 | 0 | 0 |
-| `ssh` | Open a secure remote shell | migrated | 0 | 0 | 0 |
+| `ssh` | Open a secure remote shell | migrated | 0 | 1 | 1 |
 | `ssh-add` | Load keys into an SSH agent | migrated | 0 | 0 | 0 |
 | `ssh-agent` | Hold private keys for SSH clients | migrated | 0 | 0 | 0 |
 | `ssh-keygen` | Create and manage SSH keys | migrated | 0 | 0 | 0 |
@@ -620,7 +620,7 @@ Generated from the same audited source used by argmax at runtime.
 | `sudo` | Execute a command with delegated privileges | migrated | 0 | 0 | 0 |
 | `sysctl` | Read and write kernel parameters | migrated | 0 | 0 | 0 |
 | `sysdiagnose` | Collect macOS diagnostic information | migrated | 0 | 0 | 0 |
-| `systemctl` | Control systemd units and services | migrated | 17 | 6 | 0 |
+| `systemctl` | Control systemd units and services | migrated | 17 | 12 | 14 |
 | `systemd-analyze` | Analyze systemd boot performance | migrated | 0 | 0 | 0 |
 | `systemd-cgls` | Show the systemd control-group tree | migrated | 0 | 0 | 0 |
 | `systemd-cgtop` | Monitor control-group resource use | migrated | 0 | 0 | 0 |
@@ -656,4 +656,14 @@ Generated from the same audited source used by argmax at runtime.
 | `wget` | Retrieve resources from the network | migrated | 0 | 0 | 0 |
 | `who` | Show logged-in users | migrated | 0 | 0 | 0 |
 | `whois` | Query internet registration records | migrated | 0 | 0 | 0 |
+
+## Supplemental runtime specifications
+
+These installed tools extend the frozen migration baseline with required local generators.
+
+| Command | Description | Subcommands | Options | Generators |
+| --- | --- | ---: | ---: | ---: |
+| `zoxide` | query the zoxide directory database | 3 | 0 | 1 |
+| `printenv` | print selected environment variables | 0 | 1 | 1 |
+| `fd` | find filesystem entries | 0 | 1 | 1 |
 

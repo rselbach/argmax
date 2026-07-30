@@ -417,22 +417,25 @@ fn runtime_catalog() -> Result<&'static RuntimeCatalog, CatalogError> {
 fn build_runtime_catalog() -> Result<RuntimeCatalog, CatalogError> {
     audit()?;
     let all_entries = entries();
-    let generated = all_entries.iter().filter_map(|entry| {
-        if !matches!(entry.status, MigrationStatus::Migrated) {
-            return None;
-        }
-        let mut root = command_spec(entry);
-        for alias in all_entries.iter().filter(|alias| {
-            matches!(
-                alias.status,
-                MigrationStatus::Aliased { canonical }
-                    if canonical.eq_ignore_ascii_case(entry.name)
-            )
-        }) {
-            root = root.with_alias(alias.name);
-        }
-        Some(root)
-    });
+    let generated = all_entries
+        .iter()
+        .filter_map(|entry| {
+            if !matches!(entry.status, MigrationStatus::Migrated) {
+                return None;
+            }
+            let mut root = command_spec(entry);
+            for alias in all_entries.iter().filter(|alias| {
+                matches!(
+                    alias.status,
+                    MigrationStatus::Aliased { canonical }
+                        if canonical.eq_ignore_ascii_case(entry.name)
+                )
+            }) {
+                root = root.with_alias(alias.name);
+            }
+            Some(root)
+        })
+        .chain(representative::supplemental_specs());
     index_roots(generated)
 }
 
@@ -529,13 +532,8 @@ pub fn markdown() -> Result<String, CatalogError> {
             };
             let structure =
                 matches!(entry.status, MigrationStatus::Migrated).then(|| command_spec(entry));
-            let (subcommands, options, generators) = structure.as_ref().map_or((0, 0, 0), |spec| {
-                (
-                    spec.subcommands.len(),
-                    spec.options.len(),
-                    spec.generators.len(),
-                )
-            });
+            let (subcommands, options, generators) =
+                structure.as_ref().map_or((0, 0, 0), structure_counts);
             writeln!(
                 output,
                 "| `{}` | {} | {} | {subcommands} | {options} | {generators} |",
@@ -547,13 +545,45 @@ pub fn markdown() -> Result<String, CatalogError> {
         }
         output.push('\n');
     }
+    output.push_str(
+        "## Supplemental runtime specifications\n\n\
+         These installed tools extend the frozen migration baseline with required local generators.\n\n\
+         | Command | Description | Subcommands | Options | Generators |\n\
+         | --- | --- | ---: | ---: | ---: |\n",
+    );
+    for spec in representative::supplemental_specs() {
+        let (subcommands, options, generators) = structure_counts(&spec);
+        writeln!(
+            output,
+            "| `{}` | {} | {subcommands} | {options} | {generators} |",
+            spec.name,
+            spec.description.replace('|', "\\|")
+        )
+        .expect("writing to a String cannot fail");
+    }
+    output.push('\n');
     Ok(output)
+}
+
+fn structure_counts(spec: &CommandSpec) -> (usize, usize, usize) {
+    let nested = spec
+        .subcommands
+        .iter()
+        .map(structure_counts)
+        .fold((0, 0, 0), |left, right| {
+            (left.0 + right.0, left.1 + right.1, left.2 + right.2)
+        });
+    (
+        spec.subcommands.len() + nested.0,
+        spec.options.len() + nested.1,
+        spec.generators.len() + nested.2,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::CompletionQuery;
+    use crate::completion::{CompletionQuery, GeneratorKind, tokenize};
 
     #[test]
     fn audit_accounts_for_the_complete_baseline() {
@@ -628,6 +658,35 @@ mod tests {
             .map(|suggestion| suggestion.display().to_string())
             .collect::<BTreeSet<_>>();
         assert!(aliases.contains("egrep"));
+    }
+
+    #[test]
+    fn every_required_dynamic_behavior_is_reachable_from_the_runtime_index() {
+        for (line, kind) in [
+            ("git tag ", GeneratorKind::GitTags),
+            ("pnpm run ", GeneratorKind::PackageScripts),
+            ("yarn run ", GeneratorKind::PackageScripts),
+            ("bun run ", GeneratorKind::PackageScripts),
+            ("make ", GeneratorKind::MakeTargets),
+            ("ssh ", GeneratorKind::SshHosts),
+            ("zoxide query ", GeneratorKind::ZoxideDirectories),
+            ("kill ", GeneratorKind::Processes),
+            ("printenv ", GeneratorKind::EnvironmentVariables),
+            ("fd --extension ", GeneratorKind::FileTypes),
+        ] {
+            let parsed = tokenize(line, line.len()).unwrap();
+            let resolution = spec_index()
+                .unwrap()
+                .resolve(&parsed)
+                .unwrap_or_else(|| panic!("runtime index did not resolve {line:?}"));
+            assert!(
+                resolution
+                    .active_generators()
+                    .iter()
+                    .any(|generator| generator.kind == kind),
+                "{kind:?} is not active for {line:?}"
+            );
+        }
     }
 
     #[test]
