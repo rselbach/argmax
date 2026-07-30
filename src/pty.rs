@@ -2849,10 +2849,8 @@ mod tests {
 
     #[test]
     fn closing_input_is_idempotent_and_future_writes_fail() {
-        let mut session = spawn_test_command(
-            Path::new("/bin/sh"),
-            &["-c", "line=; IFS= read -r line"],
-        );
+        let mut session =
+            spawn_test_command(Path::new("/bin/sh"), &["-c", "line=; IFS= read -r line"]);
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             if matches!(session.close_input().unwrap(), PtyClose::Closed) {
