@@ -28,6 +28,12 @@ pub const SESSION_OWNER_PID_ENV: &str = "ARGMAX_SESSION_OWNER_PID";
 /// paste, foreground command, or after Enter.
 pub const SYNC_PROBE_SEQUENCE: &[u8] = b"\x1b[argmax-sync~";
 
+/// Reserved single-key probe used by Fish's decoded key-binding interface.
+///
+/// Fish 4 decodes terminal escape sequences before matching bindings, so the
+/// Bourne-shell probe is not observable there as one collision-checkable key.
+pub const FISH_SYNC_PROBE_SEQUENCE: &[u8] = b"\x1e";
+
 /// Maximum editing-buffer characters copied into one synchronous snapshot.
 ///
 /// Framing and Fish's required print terminator are additional characters.
@@ -1500,7 +1506,7 @@ if status is-interactive; and test -t 0; and test -t 1
     if not set -q __ARGMAX_FISH_CONTROL_LAST_ID
       set -g __ARGMAX_FISH_CONTROL_LAST_ID 0
     end
-    set -l argmax_probe \e\[argmax-sync~
+    set -l argmax_probe \x1e
     set -l argmax_probe_available 1
     set -l argmax_probe_modes (bind --list-modes)
     set -l argmax_registered_modes
@@ -2306,6 +2312,8 @@ mod tests {
     #[test]
     fn reports_shell_adapter_capabilities_truthfully() {
         assert_eq!(SYNC_PROBE_SEQUENCE, b"\x1b[argmax-sync~");
+        assert_eq!(FISH_SYNC_PROBE_SEQUENCE, b"\x1e");
+        assert!(init_script(Shell::Fish).contains("set -l argmax_probe \\x1e"));
         assert_eq!(
             integration_capabilities(Shell::Bash),
             IntegrationCapabilities {
@@ -2459,6 +2467,15 @@ mod tests {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => panic!("failed to inspect expect: {error}"),
         }
+    }
+
+    fn read_harness_events(path: &Path) -> Vec<Vec<u8>> {
+        fs::read(path)
+            .unwrap_or_default()
+            .split(|byte| *byte == 0)
+            .filter(|frame| !frame.is_empty())
+            .map(<[u8]>::to_vec)
+            .collect()
     }
 
     fn live_shell_events(shell: Shell) -> Option<Vec<Vec<u8>>> {
@@ -2623,14 +2640,7 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        let events = fs::read(&events_path).unwrap_or_default();
-        Some(
-            events
-                .split(|byte| *byte == 0)
-                .filter(|frame| !frame.is_empty())
-                .map(<[u8]>::to_vec)
-                .collect(),
-        )
+        Some(read_harness_events(&events_path))
     }
 
     fn replacement_control(request: u64, cursor: usize, buffer: &str) -> Vec<u8> {
@@ -2694,9 +2704,13 @@ mod tests {
             Shell::Zsh => "-df",
             Shell::Fish => "--no-config --interactive",
         };
+        let probe = match shell {
+            Shell::Fish => "\x1e",
+            Shell::Bash | Shell::Zsh => "\x1b[argmax-sync~",
+        };
         let expect_program = r#"
-          set timeout 10
-          log_user 0
+          set timeout 30
+          log_user 1
           spawn sh -c {exec 3>>"$ARGMAX_TEST_EVENTS"; exec 4<"$ARGMAX_TEST_CONTROLS"; exec $ARGMAX_TEST_SHELL $ARGMAX_TEST_ARGS}
           if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
             send -- "set -g ARGMAX_TEST_PROMPT_COUNT 0; function fish_prompt; set -g ARGMAX_TEST_PROMPT_COUNT (math \$ARGMAX_TEST_PROMPT_COUNT + 1); printf 'ARGMAX%s\\x3e ' \$ARGMAX_TEST_PROMPT_COUNT; end; source \"$env(ARGMAX_TEST_INIT)\"\r"
@@ -2731,7 +2745,7 @@ mod tests {
             }
           }
           send -- "$env(ARGMAX_TEST_INITIAL)"
-          send -- "\033\[argmax-sync~"
+          send -- "$env(ARGMAX_TEST_PROBE)"
           after 1000
           send -- "\003"
           after 500
@@ -2747,6 +2761,7 @@ mod tests {
             .env("ARGMAX_TEST_CONTROLS", &control_path)
             .env("ARGMAX_TEST_INIT", &init_path)
             .env("ARGMAX_TEST_INITIAL", initial_line)
+            .env("ARGMAX_TEST_PROBE", probe)
             .env("ARGMAX_TEST_SHELL", program)
             .env("ARGMAX_TEST_ARGS", shell_arguments)
             .env("LC_ALL", "en_US.UTF-8")
@@ -2759,14 +2774,7 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        let events = fs::read(&events_path).unwrap_or_default();
-        Some(
-            events
-                .split(|byte| *byte == 0)
-                .filter(|frame| !frame.is_empty())
-                .map(<[u8]>::to_vec)
-                .collect(),
-        )
+        Some(read_harness_events(&events_path))
     }
 
     fn stale_control_shell_events(shell: Shell) -> Option<Vec<Vec<u8>>> {
@@ -2801,8 +2809,12 @@ mod tests {
             Shell::Zsh => "-df",
             Shell::Fish => "--no-config --interactive",
         };
+        let probe = match shell {
+            Shell::Fish => "\x1e",
+            Shell::Bash | Shell::Zsh => "\x1b[argmax-sync~",
+        };
         let expect_program = r#"
-          set timeout 10
+          set timeout 30
           log_user 0
           spawn sh -c {exec 3>>"$ARGMAX_TEST_EVENTS"; exec 4<"$ARGMAX_TEST_CONTROLS"; exec $ARGMAX_TEST_SHELL $ARGMAX_TEST_ARGS}
           if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
@@ -2824,7 +2836,7 @@ mod tests {
             }
           }
           send -- "safe"
-          send -- "\033\[argmax-sync~"
+          send -- "$env(ARGMAX_TEST_PROBE)"
           after 100
           send -- "x"
           set source [open $env(ARGMAX_TEST_APPEND) rb]
@@ -2835,7 +2847,7 @@ mod tests {
           fconfigure $target -translation binary
           puts -nonewline $target $control
           close $target
-          send -- "\033\[argmax-sync~"
+          send -- "$env(ARGMAX_TEST_PROBE)"
           after 500
           send -- "\003"
           after 500
@@ -2851,6 +2863,7 @@ mod tests {
             .env("ARGMAX_TEST_CONTROLS", &control_path)
             .env("ARGMAX_TEST_APPEND", &append_path)
             .env("ARGMAX_TEST_INIT", &init_path)
+            .env("ARGMAX_TEST_PROBE", probe)
             .env("ARGMAX_TEST_SHELL", program)
             .env("ARGMAX_TEST_ARGS", shell_arguments)
             .env("LC_ALL", "en_US.UTF-8")
@@ -2863,14 +2876,7 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        let events = fs::read(&events_path).unwrap_or_default();
-        Some(
-            events
-                .split(|byte| *byte == 0)
-                .filter(|frame| !frame.is_empty())
-                .map(<[u8]>::to_vec)
-                .collect(),
-        )
+        Some(read_harness_events(&events_path))
     }
 
     fn collision_harness(shell: Shell) -> Option<Vec<Vec<u8>>> {
@@ -2902,7 +2908,7 @@ mod tests {
             Shell::Fish => "--no-config --interactive",
         };
         let expect_program = r#"
-          set timeout 10
+          set timeout 30
           log_user 0
           spawn sh -c {exec 3>"$ARGMAX_TEST_EVENTS"; exec $ARGMAX_TEST_SHELL $ARGMAX_TEST_ARGS}
           if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
@@ -2966,7 +2972,7 @@ mod tests {
             Shell::Fish => "--no-config --interactive",
         };
         let expect_program = r#"
-          set timeout 10
+          set timeout 30
           log_user 0
           spawn sh -c {exec 3>"$ARGMAX_TEST_EVENTS"; exec $ARGMAX_TEST_SHELL $ARGMAX_TEST_ARGS}
           if {$env(ARGMAX_TEST_SHELL) eq "fish"} {

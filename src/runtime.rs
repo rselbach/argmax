@@ -26,6 +26,7 @@ use crate::completion::{CompletionQuery, ProviderBatch, Suggestion};
 use crate::config::{Mode, Settings, Shell};
 use crate::coordinator::BatchOutcome;
 use crate::history::HistoryFormat;
+use crate::integration::FISH_SYNC_PROBE_SEQUENCE;
 use crate::keybindings::KeybindingAction;
 use crate::learning::CommandOutcome;
 use crate::learning_store::LearningStore;
@@ -323,6 +324,7 @@ fn run_prepared_runtime(
             footer_hint: footer_hint(&keybindings),
         },
         services,
+        sync_probe_sequence(selected_shell_kind),
     );
     driver
         .pending
@@ -406,6 +408,13 @@ const fn shell_kind(shell: Shell) -> ShellKind {
         Shell::Bash => ShellKind::Bash,
         Shell::Zsh => ShellKind::Zsh,
         Shell::Fish => ShellKind::Fish,
+    }
+}
+
+const fn sync_probe_sequence(shell: ShellKind) -> &'static [u8] {
+    match shell {
+        ShellKind::Fish => FISH_SYNC_PROBE_SEQUENCE,
+        ShellKind::Bash | ShellKind::Zsh => SYNC_PROBE_SEQUENCE,
     }
 }
 
@@ -830,6 +839,7 @@ struct SessionDriver {
     signals: SignalEvents,
     decoder: ShellEventDecoder,
     pending: PendingWrites,
+    sync_probe_sequence: &'static [u8],
     output_receiver: mpsc::Receiver<ReaderMessage>,
     reader_state: ReadState,
     integration_state: ReadState,
@@ -1122,7 +1132,12 @@ fn drive_session(
 }
 
 impl SessionDriver {
-    fn new(transport: DriverTransport, overlay: InitialOverlay, services: RuntimeServices) -> Self {
+    fn new(
+        transport: DriverTransport,
+        overlay: InitialOverlay,
+        services: RuntimeServices,
+        sync_probe_sequence: &'static [u8],
+    ) -> Self {
         let ai_configured = services.ai.is_some();
         let screen = screen_at_cursor(overlay.screen_size, overlay.initial_cursor);
         Self {
@@ -1130,6 +1145,7 @@ impl SessionDriver {
             signals: transport.signals,
             decoder: ShellEventDecoder::new(StreamEpoch::INITIAL),
             pending: PendingWrites::default(),
+            sync_probe_sequence,
             output_receiver: transport.output_receiver,
             reader_state: ReadState::Open,
             integration_state: ReadState::Open,
@@ -1695,7 +1711,7 @@ impl SessionDriver {
                         }
                     }
                     self.pending
-                        .push(WriteDestination::Pty, SYNC_PROBE_SEQUENCE)?;
+                        .push(WriteDestination::Pty, self.sync_probe_sequence)?;
                 }
                 SessionEffect::StartQuery {
                     mode,
@@ -1966,6 +1982,12 @@ mod tests {
         assert_eq!(shell_kind(Shell::Bash), ShellKind::Bash);
         assert_eq!(shell_kind(Shell::Zsh), ShellKind::Zsh);
         assert_eq!(shell_kind(Shell::Fish), ShellKind::Fish);
+        assert_eq!(sync_probe_sequence(ShellKind::Bash), SYNC_PROBE_SEQUENCE);
+        assert_eq!(sync_probe_sequence(ShellKind::Zsh), SYNC_PROBE_SEQUENCE);
+        assert_eq!(
+            sync_probe_sequence(ShellKind::Fish),
+            FISH_SYNC_PROBE_SEQUENCE
+        );
     }
 
     #[test]
