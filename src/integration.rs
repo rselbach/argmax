@@ -636,15 +636,18 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
             builtin unset PS0 2>/dev/null || :
           fi
         fi
-        (( argmax_vi_command_attempted )) &&
+        if (( argmax_vi_command_attempted )); then
           builtin bind -m vi-command -r "$__ARGMAX_BASH_PROBE" \
             2>/dev/null || :
-        (( argmax_vi_insert_attempted )) &&
+        fi
+        if (( argmax_vi_insert_attempted )); then
           builtin bind -m vi-insert -r "$__ARGMAX_BASH_PROBE" \
             2>/dev/null || :
-        (( argmax_emacs_attempted )) &&
+        fi
+        if (( argmax_emacs_attempted )); then
           builtin bind -m emacs-standard -r "$__ARGMAX_BASH_PROBE" \
             2>/dev/null || :
+        fi
         builtin unset -f __argmax_emit __argmax_preexec __argmax_precmd \
           __argmax_postprompt __argmax_sync __argmax_control_apply \
           __argmax_control_drain __argmax_probe_is_unbound
@@ -2376,7 +2379,8 @@ mod tests {
         let output = child.wait_with_output().expect("wait for ShellCheck");
         assert!(
             output.status.success(),
-            "ShellCheck rejected Bash integration:\n{}",
+            "ShellCheck rejected Bash integration:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -2701,8 +2705,9 @@ mod tests {
             .expect("run shell control harness");
         assert!(
             output.status.success(),
-            "{program} control harness failed with {}:\n{}",
+            "{program} control harness failed with {}:\nstdout:\n{}\nstderr:\n{}",
             output.status,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         let events = fs::read(&events_path).unwrap_or_default();
@@ -2800,8 +2805,9 @@ mod tests {
             .expect("run stale shell control harness");
         assert!(
             output.status.success(),
-            "{program} stale-control harness failed with {}:\n{}",
+            "{program} stale-control harness failed with {}:\nstdout:\n{}\nstderr:\n{}",
             output.status,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         let events = fs::read(&events_path).unwrap_or_default();

@@ -2015,6 +2015,7 @@ fn stat_is_private_regular(stat: &FileStat) -> bool {
 }
 
 #[cfg(unix)]
+#[allow(clippy::useless_conversion)]
 fn stat_link_count(stat: &FileStat) -> u64 {
     u64::from(stat.st_nlink)
 }

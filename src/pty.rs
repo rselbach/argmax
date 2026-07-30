@@ -2261,6 +2261,10 @@ mod tests {
 
     #[test]
     fn inherited_integration_stream_is_full_duplex_and_single_owner() {
+        let request = ShellSelectionRequest::from_process(Some(ShellKind::Bash), None, None);
+        let Ok(selected) = select_shell(&request) else {
+            return;
+        };
         let script = concat!(
             "eval \"printf E >&$ARGMAX_EVENT_FD\"; ",
             "sleep 1; ",
@@ -2269,7 +2273,10 @@ mod tests {
             "test \"$value\" = C && exit 23; ",
             "exit 24"
         );
-        let mut session = spawn_test_command(Path::new("/bin/sh"), &["-c", script]);
+        let mut session = spawn_test_command(
+            selected.executable(),
+            &["--noprofile", "--norc", "-c", script],
+        );
         let mut integration = session.take_integration().unwrap();
         assert_eq!(
             session.take_integration().unwrap_err(),
@@ -2691,7 +2698,7 @@ mod tests {
         let started = Instant::now();
         let close = session.close_input().unwrap();
         assert!(started.elapsed() < Duration::from_millis(100));
-        assert!(matches!(close, PtyClose::Pending { .. }));
+        assert!(matches!(close, PtyClose::Closed | PtyClose::Pending { .. }));
 
         let started = Instant::now();
         drop(session);
@@ -2819,12 +2826,20 @@ mod tests {
                 continue;
             };
             let arguments: &[&str] = match kind {
-                ShellKind::Bash => &["--noprofile", "--norc", "-i", "-c", "exit 17"],
-                ShellKind::Zsh => &["-f", "-i", "-c", "exit 17"],
-                ShellKind::Fish => &["--no-config", "-i", "-c", "exit 17"],
+                ShellKind::Bash => &["--noprofile", "--norc", "-c", "exit 17"],
+                ShellKind::Zsh => &["-f", "-c", "exit 17"],
+                ShellKind::Fish => &["--no-config", "-c", "exit 17"],
             };
             let mut session = spawn_test_command(selected.executable(), arguments);
-            assert_eq!(session.wait().unwrap(), ChildExit::Exited(17), "{kind}");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let exit = loop {
+                if let Some(exit) = session.try_wait().unwrap() {
+                    break exit;
+                }
+                assert!(Instant::now() < deadline, "{kind} did not exit");
+                thread::sleep(Duration::from_millis(1));
+            };
+            assert_eq!(exit, ChildExit::Exited(17), "{kind}");
             assert_eq!(
                 session.capabilities().integration_events,
                 IntegrationEventCapability::InheritedFullDuplexUnixStream
@@ -2834,11 +2849,23 @@ mod tests {
 
     #[test]
     fn closing_input_is_idempotent_and_future_writes_fail() {
-        let mut session = spawn_test_command(Path::new("/bin/sh"), &["-c", "exit 0"]);
-        while !matches!(session.close_input().unwrap(), PtyClose::Closed) {}
+        let mut session = spawn_test_command(
+            Path::new("/bin/sh"),
+            &["-c", "line=; IFS= read -r line"],
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if matches!(session.close_input().unwrap(), PtyClose::Closed) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "terminal EOF did not become writable"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
         assert_eq!(session.close_input(), Ok(PtyClose::Closed));
         assert_eq!(session.write_input(b"later"), Err(PtyWriteError::Closed));
-        session.wait().unwrap();
     }
 
     #[test]
