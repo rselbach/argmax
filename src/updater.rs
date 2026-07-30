@@ -804,7 +804,8 @@ impl fmt::Debug for NotificationIntent {
     }
 }
 
-#[allow(clippy::manual_is_multiple_of)] // `is_multiple_of` is newer than the crate MSRV.
+// `is_multiple_of` is newer than the crate's Rust 1.85 MSRV.
+#[allow(unknown_lints, clippy::manual_is_multiple_of)]
 fn duration_millis_ceil(interval: Duration) -> Result<u64, AutomaticUpdaterError> {
     if interval.is_zero() {
         return Err(AutomaticUpdaterError::ZeroInterval);
@@ -864,7 +865,8 @@ mod tests {
     use super::*;
     use crate::version::ReleaseKind;
 
-    #[allow(clippy::duration_suboptimal_units)] // `Duration::from_mins` exceeds the crate MSRV.
+    // `Duration::from_mins` is newer than the crate's Rust 1.85 MSRV.
+    #[allow(unknown_lints, clippy::duration_suboptimal_units)]
     const MINUTE: Duration = Duration::from_secs(60);
 
     fn scheduler(

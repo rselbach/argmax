@@ -1209,6 +1209,7 @@ fn ensure_no_extended_acl(file: &File, operation: &'static str) -> Result<(), Up
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::unnecessary_wraps)]
 fn ensure_no_extended_acl(_file: &File, _operation: &'static str) -> Result<(), UpdateApplyError> {
     Ok(())
 }

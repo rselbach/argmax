@@ -1016,7 +1016,7 @@ fn parse_fraction_millis(fraction: Option<&str>) -> Result<u16, StateCorruption>
 }
 
 // `is_multiple_of` is newer than the crate's Rust 1.85 MSRV.
-#[allow(clippy::manual_is_multiple_of)]
+#[allow(unknown_lints, clippy::manual_is_multiple_of)]
 const fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,

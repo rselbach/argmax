@@ -1273,12 +1273,12 @@ mod tests {
 
     #[test]
     fn target_cannot_open_dev_tty_even_when_parent_has_a_controlling_terminal() {
-        let (mut pty, pts) = open_pty().unwrap();
+        let (mut master_pty, slave_pty) = open_pty().unwrap();
         let reader = thread::spawn(move || {
             let mut output = Vec::new();
             let mut buffer = [0_u8; 1024];
             loop {
-                match pty.read(&mut buffer) {
+                match master_pty.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(read) => output.extend_from_slice(&buffer[..read]),
                     Err(error) if error.raw_os_error() == Some(Errno::EIO as i32) => break,
@@ -1294,7 +1294,7 @@ mod tests {
                 &test_name("controlling_terminal_parent_subprocess"),
                 "--nocapture",
             ])
-            .spawn(pts)
+            .spawn(slave_pty)
             .unwrap();
         let status = child.wait().unwrap();
         let output = reader.join().unwrap();

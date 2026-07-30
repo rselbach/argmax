@@ -1156,17 +1156,18 @@ impl PtySession {
     }
 
     fn spawn_command(command: PtyCommand, size: PtySize) -> Result<Self, PtyError> {
-        let (pty, pts) = open_pty().map_err(|_| PtyError::Backend {
+        let (master_pty, slave_pty) = open_pty().map_err(|_| PtyError::Backend {
             stage: PtyStage::Open,
             io_kind: None,
         })?;
-        pty.resize(backend_size(size))
+        master_pty
+            .resize(backend_size(size))
             .map_err(|_| PtyError::Backend {
                 stage: PtyStage::Resize,
                 io_kind: None,
             })?;
 
-        let master = File::from(std::os::fd::OwnedFd::from(pty));
+        let master = File::from(std::os::fd::OwnedFd::from(master_pty));
         set_nonblocking(&master).map_err(|kind| PtyError::Backend {
             stage: PtyStage::Nonblocking,
             io_kind: Some(kind),
@@ -1214,7 +1215,7 @@ impl PtySession {
                 io_kind: Some(kind),
             }
         })?;
-        let spawn_result = command.spawn(pts);
+        let spawn_result = command.spawn(slave_pty);
         let restore_result = set_fd_flags(child_fd, inherited_flags);
         drop(spawn_guard);
 

@@ -459,9 +459,10 @@ main() {
     /*) ;;
     *) fail "TMPDIR must be an absolute path" ;;
   esac
-  [ -d "${install_requested_tmp_root}" ] \
-    && [ -w "${install_requested_tmp_root}" ] \
-    || fail "TMPDIR must be an existing writable directory"
+  if [ ! -d "${install_requested_tmp_root}" ] \
+    || [ ! -w "${install_requested_tmp_root}" ]; then
+    fail "TMPDIR must be an existing writable directory"
+  fi
   install_tmp_root=$(CDPATH='' cd -P "${install_requested_tmp_root}" && pwd) \
     || fail "could not resolve TMPDIR"
   text_is_safe "${install_tmp_root}" \

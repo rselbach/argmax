@@ -191,8 +191,9 @@ main() {
     || fail "release output directory contains unsupported control text"
 
   release_binary="target/${release_target}/release/argmax"
-  [ -f "${release_binary}" ] && [ -x "${release_binary}" ] \
-    || fail "built executable is missing: ${release_binary}"
+  if [ ! -f "${release_binary}" ] || [ ! -x "${release_binary}" ]; then
+    fail "built executable is missing: ${release_binary}"
+  fi
   release_reported=$("${release_binary}" version) \
     || fail "built executable did not report its version"
   is_semantic_version "${release_reported}" \

@@ -1015,6 +1015,7 @@ fn ensure_no_unsupported_acl(file: &File) -> Result<(), SetupError> {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::unnecessary_wraps)]
 fn ensure_no_unsupported_acl(_file: &File) -> Result<(), SetupError> {
     Ok(())
 }
@@ -1223,6 +1224,7 @@ struct TransactionFile {
     metadata: Option<PreservedMetadata>,
 }
 
+#[allow(clippy::useless_conversion)]
 fn preserve_source_metadata(
     file: &File,
     source: &SourceFile,

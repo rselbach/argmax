@@ -2035,6 +2035,7 @@ fn stat_device(stat: &FileStat) -> Option<u64> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
+#[allow(clippy::unnecessary_wraps)]
 const fn stat_device(stat: &FileStat) -> Option<u64> {
     Some(stat.st_dev)
 }
