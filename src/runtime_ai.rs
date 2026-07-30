@@ -174,6 +174,7 @@ pub struct AiDispatcherStatus {
 /// Session-local asynchronous AI completion scheduler.
 pub struct AiCompletionDispatcher {
     sender: SyncSender<RuntimeEvent>,
+    pending_reconfiguration: Arc<Mutex<Option<PendingReconfiguration>>>,
     output: Arc<Mutex<VecDeque<AuthorizedBatch>>>,
     authority: Arc<AtomicU64>,
     latest_generation: Arc<AtomicU64>,
@@ -209,6 +210,7 @@ impl AiCompletionDispatcher {
     ) -> io::Result<Self> {
         let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
         let (result_sender, result_receiver) = mpsc::sync_channel(MAX_REQUEST_WORKERS * 2);
+        let pending_reconfiguration = Arc::new(Mutex::new(None));
         let output = Arc::new(Mutex::new(VecDeque::new()));
         let authority = Arc::new(AtomicU64::new(0));
         let latest_generation = Arc::new(AtomicU64::new(0));
@@ -219,6 +221,7 @@ impl AiCompletionDispatcher {
         let alive = Arc::new(AtomicBool::new(true));
 
         let worker_output = Arc::clone(&output);
+        let worker_reconfiguration = Arc::clone(&pending_reconfiguration);
         let worker_authority = Arc::clone(&authority);
         let worker_latest_generation = Arc::clone(&latest_generation);
         let worker_queued_events = Arc::clone(&queued_events);
@@ -235,6 +238,7 @@ impl AiCompletionDispatcher {
                         receiver,
                         result_sender,
                         result_receiver,
+                        worker_reconfiguration,
                         worker_output,
                         worker_authority,
                         worker_latest_generation,
@@ -252,6 +256,7 @@ impl AiCompletionDispatcher {
 
         Ok(Self {
             sender,
+            pending_reconfiguration,
             output,
             authority,
             latest_generation,
@@ -307,13 +312,18 @@ impl AiCompletionDispatcher {
     /// events, revoking every request authorized by the prior configuration.
     #[must_use]
     pub fn reconfigure(&self, settings: Settings) -> bool {
-        let Some(_authority) = advance_authority(&self.authority) else {
+        if !self.alive.load(Ordering::Acquire) {
+            return false;
+        }
+        let Some(authority) = advance_authority(&self.authority) else {
             return false;
         };
-        matches!(
-            self.send_event(RuntimeEvent::Reconfigure { settings }),
-            SendDisposition::Queued
-        )
+        let mut pending = lock(&self.pending_reconfiguration);
+        *pending = Some(PendingReconfiguration {
+            settings,
+            authority,
+        });
+        true
     }
 
     /// Queues a completed command for workspace-level prompts and cancels any
@@ -428,14 +438,16 @@ enum RuntimeEvent {
     SettingsChanged {
         authority: u64,
     },
-    Reconfigure {
-        settings: Settings,
-    },
     CommandExecuted {
         command: String,
         authority: u64,
     },
     Shutdown,
+}
+
+struct PendingReconfiguration {
+    settings: Settings,
+    authority: u64,
 }
 
 struct QueryAuthority {
@@ -468,6 +480,7 @@ struct Scheduler {
     receiver: Receiver<RuntimeEvent>,
     result_sender: SyncSender<RequestResult>,
     result_receiver: Receiver<RequestResult>,
+    pending_reconfiguration: Arc<Mutex<Option<PendingReconfiguration>>>,
     output: Arc<Mutex<VecDeque<AuthorizedBatch>>>,
     authority: Arc<AtomicU64>,
     latest_generation: Arc<AtomicU64>,
@@ -492,6 +505,7 @@ impl Scheduler {
         receiver: Receiver<RuntimeEvent>,
         result_sender: SyncSender<RequestResult>,
         result_receiver: Receiver<RequestResult>,
+        pending_reconfiguration: Arc<Mutex<Option<PendingReconfiguration>>>,
         output: Arc<Mutex<VecDeque<AuthorizedBatch>>>,
         authority: Arc<AtomicU64>,
         latest_generation: Arc<AtomicU64>,
@@ -508,6 +522,7 @@ impl Scheduler {
             receiver,
             result_sender,
             result_receiver,
+            pending_reconfiguration,
             output,
             authority,
             latest_generation,
@@ -528,10 +543,12 @@ impl Scheduler {
 
     fn run(&mut self) {
         loop {
+            self.apply_pending_reconfiguration();
             match self.receiver.recv_timeout(SCHEDULER_TICK) {
                 Ok(RuntimeEvent::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Ok(event) => {
                     decrement_saturating(&self.queued_events);
+                    self.apply_pending_reconfiguration();
                     self.handle_event(event);
                     if self.drain_events() {
                         break;
@@ -549,10 +566,12 @@ impl Scheduler {
 
     fn drain_events(&mut self) -> bool {
         loop {
+            self.apply_pending_reconfiguration();
             match self.receiver.try_recv() {
                 Ok(RuntimeEvent::Shutdown) => return true,
                 Ok(event) => {
                     decrement_saturating(&self.queued_events);
+                    self.apply_pending_reconfiguration();
                     self.handle_event(event);
                 }
                 Err(TryRecvError::Empty | TryRecvError::Disconnected) => return false,
@@ -588,13 +607,6 @@ impl Scheduler {
                     self.synchronize_settings();
                 }
             }
-            RuntimeEvent::Reconfigure { settings } => {
-                self.options.settings = settings;
-                self.options.shared_settings = None;
-                self.settings_generation = 0;
-                self.settings = self.options.settings.clone();
-                self.apply_settings(self.authority.load(Ordering::Acquire));
-            }
             RuntimeEvent::CommandExecuted { command, authority } => {
                 if authority != self.authority.load(Ordering::Acquire) {
                     return;
@@ -607,6 +619,17 @@ impl Scheduler {
             }
             RuntimeEvent::Shutdown => {}
         }
+    }
+
+    fn apply_pending_reconfiguration(&mut self) {
+        let Some(pending) = lock(&self.pending_reconfiguration).take() else {
+            return;
+        };
+        self.options.settings = pending.settings;
+        self.options.shared_settings = None;
+        self.settings_generation = 0;
+        self.settings = self.options.settings.clone();
+        self.apply_settings(pending.authority);
     }
 
     fn synchronize_settings(&mut self) {
@@ -1581,6 +1604,46 @@ mod tests {
         assert!(batch.error.is_none());
         assert_eq!(batch.suggestions.len(), 1);
         assert_eq!(calls.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn explicit_reconfiguration_does_not_depend_on_event_queue_capacity() {
+        let (sender, receiver) = mpsc::sync_channel(EVENT_QUEUE_CAPACITY);
+        let queued_events = Arc::new(AtomicUsize::new(EVENT_QUEUE_CAPACITY));
+        for authority in 1..=EVENT_QUEUE_CAPACITY {
+            assert!(
+                sender
+                    .try_send(RuntimeEvent::SettingsChanged {
+                        authority: authority as u64,
+                    })
+                    .is_ok()
+            );
+        }
+        let pending_reconfiguration = Arc::new(Mutex::new(None));
+        let dispatcher = AiCompletionDispatcher {
+            sender,
+            pending_reconfiguration: Arc::clone(&pending_reconfiguration),
+            output: Arc::new(Mutex::new(VecDeque::new())),
+            authority: Arc::new(AtomicU64::new(0)),
+            latest_generation: Arc::new(AtomicU64::new(0)),
+            queued_events,
+            requests_started: Arc::new(AtomicU64::new(0)),
+            stale_results: Arc::new(AtomicU64::new(0)),
+            active_requests: Arc::new(AtomicUsize::new(0)),
+            alive: Arc::new(AtomicBool::new(true)),
+            worker: None,
+        };
+
+        assert!(dispatcher.reconfigure(settings(true)));
+        let pending = lock(&pending_reconfiguration);
+        assert!(pending.as_ref().is_some_and(|replacement| {
+            replacement.authority == 1 && replacement.settings.ai.enabled
+        }));
+        drop(pending);
+        assert_eq!(dispatcher.status().queued_events, EVENT_QUEUE_CAPACITY);
+
+        drop(receiver);
+        drop(dispatcher);
     }
 
     #[test]

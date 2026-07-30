@@ -746,6 +746,12 @@ impl Worker {
             if let Some(settings) = state.pending_settings.take() {
                 return WorkerItem::Settings(settings);
             }
+            if let Some(cwd) = state.pending_cwd.take() {
+                return WorkerItem::Cwd(cwd);
+            }
+            if let Some(command) = state.commands.pop_front() {
+                return WorkerItem::Command(command);
+            }
             if let Some(query) = state.pending_query.as_ref() {
                 let elapsed = query.submitted_at.elapsed();
                 if elapsed >= QUERY_DEBOUNCE {
@@ -764,12 +770,6 @@ impl Worker {
                     .unwrap_or_else(PoisonError::into_inner);
                 state = waited.0;
                 continue;
-            }
-            if let Some(cwd) = state.pending_cwd.take() {
-                return WorkerItem::Cwd(cwd);
-            }
-            if let Some(command) = state.commands.pop_front() {
-                return WorkerItem::Command(command);
             }
             state = self
                 .inbox
@@ -1653,6 +1653,52 @@ mod tests {
                     .resulting_line(coordinator.active_query().unwrap())
                     .is_ok_and(|line| line == "git status --short"))
         );
+    }
+
+    #[test]
+    fn completed_command_is_applied_before_an_already_due_query() {
+        let temporary = TempDirectory::new();
+        let dispatcher = dispatcher(LocalCompletionOptions::new(
+            ShellKind::Bash,
+            Settings::default(),
+            OsString::new(),
+        ));
+        let mut coordinator = CompletionCoordinator::new(LOCAL_COMPLETION_PROVIDERS, 100).unwrap();
+        let query = work(&mut coordinator, "git sta", &temporary.0);
+        let generation = query.query().generation;
+
+        {
+            let mut state = lock(&dispatcher.inbox.state);
+            state.commands.push_back(CompletedCommand {
+                command: "git status --short".to_owned(),
+                cwd: temporary.0.clone(),
+                timestamp: 4_000_000,
+                outcome: CommandOutcome::Success,
+            });
+            state.pending_query = Some(PendingQuery {
+                mode: SessionMode::History,
+                alias_expansion: false,
+                work: query,
+                submitted_at: Instant::now()
+                    .checked_sub(QUERY_DEBOUNCE)
+                    .unwrap_or_else(Instant::now),
+            });
+            dispatcher
+                .latest_generation
+                .store(generation, Ordering::Release);
+        }
+        dispatcher.inbox.ready.notify_one();
+
+        let batches = wait_for_batches(&dispatcher);
+        assert!(
+            batches
+                .iter()
+                .flat_map(|batch| &batch.suggestions)
+                .any(|suggestion| suggestion
+                    .resulting_line(coordinator.active_query().unwrap())
+                    .is_ok_and(|line| line == "git status --short"))
+        );
+        assert_eq!(dispatcher.status().processed_events, 1);
     }
 
     #[test]
