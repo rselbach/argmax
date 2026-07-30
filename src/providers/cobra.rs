@@ -154,9 +154,14 @@ impl CobraRequest {
     /// transient resolution, execution, timeout, and parse failures are not
     /// cacheable protocol results.
     #[must_use]
-    pub fn success_cache_key(&self, binary: CobraBinaryIdentity) -> CobraCacheKey {
+    pub fn success_cache_key(
+        &self,
+        binary: CobraBinaryIdentity,
+        working_directory: impl Into<PathBuf>,
+    ) -> CobraCacheKey {
         CobraCacheKey {
             binary,
+            working_directory: working_directory.into(),
             committed_arguments: self.committed_arguments.clone(),
             partial: self.partial.clone(),
         }
@@ -188,6 +193,8 @@ impl CobraBinaryIdentity {
 pub struct CobraCacheKey {
     /// Resolved executable identity and modification timestamp.
     pub binary: CobraBinaryIdentity,
+    /// Exact absolute working directory in which completion executes.
+    pub working_directory: PathBuf,
     /// Committed arguments preceding the active partial token.
     pub committed_arguments: Vec<String>,
     /// Active partial token sent as the final protocol argument.
@@ -553,33 +560,50 @@ mod tests {
     }
 
     #[test]
-    fn cache_key_includes_binary_path_mtime_arguments_and_partial() {
+    fn cache_key_includes_binary_path_mtime_cwd_arguments_and_partial() {
         let request = CobraRequest::new("kubectl", ["get", "pods"], "tr").unwrap();
         let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(42);
-        let key = request.success_cache_key(CobraBinaryIdentity::new("/opt/bin/kubectl", modified));
+        let key = request.success_cache_key(
+            CobraBinaryIdentity::new("/opt/bin/kubectl", modified),
+            "/srv/greendale",
+        );
 
         assert_eq!(key.binary.resolved_path, PathBuf::from("/opt/bin/kubectl"));
         assert_eq!(key.binary.modified, modified);
+        assert_eq!(key.working_directory, PathBuf::from("/srv/greendale"));
         assert_eq!(key.committed_arguments, ["get", "pods"]);
         assert_eq!(key.partial, "tr");
 
         let other_partial = CobraRequest::new("kubectl", ["get", "pods"], "tro")
             .unwrap()
-            .success_cache_key(CobraBinaryIdentity::new("/opt/bin/kubectl", modified));
+            .success_cache_key(
+                CobraBinaryIdentity::new("/opt/bin/kubectl", modified),
+                "/srv/greendale",
+            );
         let other_arguments = CobraRequest::new("kubectl", ["get pods"], "tr")
             .unwrap()
-            .success_cache_key(CobraBinaryIdentity::new("/opt/bin/kubectl", modified));
-        let other_mtime = request.success_cache_key(CobraBinaryIdentity::new(
-            "/opt/bin/kubectl",
-            modified + Duration::from_secs(1),
-        ));
-        let other_path =
-            request.success_cache_key(CobraBinaryIdentity::new("/usr/bin/kubectl", modified));
+            .success_cache_key(
+                CobraBinaryIdentity::new("/opt/bin/kubectl", modified),
+                "/srv/greendale",
+            );
+        let other_mtime = request.success_cache_key(
+            CobraBinaryIdentity::new("/opt/bin/kubectl", modified + Duration::from_secs(1)),
+            "/srv/greendale",
+        );
+        let other_path = request.success_cache_key(
+            CobraBinaryIdentity::new("/usr/bin/kubectl", modified),
+            "/srv/greendale",
+        );
+        let other_cwd = request.success_cache_key(
+            CobraBinaryIdentity::new("/opt/bin/kubectl", modified),
+            "/srv/city-college",
+        );
 
         assert_ne!(key, other_partial);
         assert_ne!(key, other_arguments);
         assert_ne!(key, other_mtime);
         assert_ne!(key, other_path);
+        assert_ne!(key, other_cwd);
     }
 
     #[test]

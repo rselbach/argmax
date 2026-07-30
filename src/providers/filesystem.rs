@@ -52,6 +52,23 @@ pub fn filesystem_suggestions(
     shell: ShellKind,
     options: &FilesystemOptions,
 ) -> Vec<Suggestion> {
+    filesystem_suggestions_bounded(query, shell, options, MAX_DIRECTORY_ENTRIES, || false)
+}
+
+/// Completes one token with an explicit scan bound and cooperative stop check.
+///
+/// A stopped scan returns no partial results. No worker is spawned, so a
+/// cancelled or expired lookup cannot leave filesystem work running.
+pub(super) fn filesystem_suggestions_bounded(
+    query: &CompletionQuery,
+    shell: ShellKind,
+    options: &FilesystemOptions,
+    maximum_entries: usize,
+    mut should_stop: impl FnMut() -> bool,
+) -> Vec<Suggestion> {
+    if should_stop() {
+        return Vec::new();
+    }
     let Ok(tokenized) = tokenize(&query.line, query.cursor) else {
         return Vec::new();
     };
@@ -65,6 +82,9 @@ pub fn filesystem_suggestions(
     let Ok(entries) = fs::read_dir(&directory) else {
         return Vec::new();
     };
+    if should_stop() {
+        return Vec::new();
+    }
 
     let allowed_extensions: Vec<_> = options
         .extensions
@@ -73,7 +93,13 @@ pub fn filesystem_suggestions(
         .collect();
     let mut candidates = Vec::new();
 
-    for entry in entries.take(MAX_DIRECTORY_ENTRIES).filter_map(Result::ok) {
+    for entry in entries.take(maximum_entries.min(MAX_DIRECTORY_ENTRIES)) {
+        if should_stop() {
+            return Vec::new();
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
@@ -86,6 +112,9 @@ pub fn filesystem_suggestions(
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
+        if should_stop() {
+            return Vec::new();
+        }
         let is_directory = metadata.is_dir();
         if options.directory_only && !is_directory {
             continue;
@@ -104,38 +133,65 @@ pub fn filesystem_suggestions(
         }
     }
 
+    if should_stop() {
+        return Vec::new();
+    }
     candidates.sort_by(|left, right| left.0.cmp(&right.0));
-    candidates
-        .into_iter()
-        .map(|(displayed_path, resolved_path, is_directory)| {
-            let insertion = if is_directory {
-                InsertionBehavior::Directory
-            } else {
-                options.file_insertion
-            };
-            let description = if is_directory {
-                "directory".to_owned()
-            } else {
-                file_description(&resolved_path)
-            };
-            let icon = if is_directory { "directory" } else { "file" };
-            let mut suggestion = Suggestion::new(
-                TextEdit {
-                    range: token.raw.clone(),
-                    replacement: quote_path(shell, &displayed_path),
-                },
-                &displayed_path,
-                description,
-                icon,
-                SuggestionSource::File,
-                insertion,
-                format!("file:{}", resolved_path.to_string_lossy()),
-            );
-            suggestion.static_priority = 0.45;
-            suggestion.confidence = 0.85;
-            suggestion
-        })
-        .collect()
+    let mut suggestions = Vec::with_capacity(candidates.len());
+    for (displayed_path, resolved_path, is_directory) in candidates {
+        if should_stop() {
+            return Vec::new();
+        }
+        suggestions.push(filesystem_suggestion(
+            shell,
+            options,
+            token.raw.clone(),
+            &displayed_path,
+            &resolved_path,
+            is_directory,
+        ));
+    }
+    if should_stop() {
+        Vec::new()
+    } else {
+        suggestions
+    }
+}
+
+fn filesystem_suggestion(
+    shell: ShellKind,
+    options: &FilesystemOptions,
+    replacement: std::ops::Range<usize>,
+    displayed_path: &str,
+    resolved_path: &Path,
+    is_directory: bool,
+) -> Suggestion {
+    let insertion = if is_directory {
+        InsertionBehavior::Directory
+    } else {
+        options.file_insertion
+    };
+    let description = if is_directory {
+        "directory".to_owned()
+    } else {
+        file_description(resolved_path)
+    };
+    let icon = if is_directory { "directory" } else { "file" };
+    let mut suggestion = Suggestion::new(
+        TextEdit {
+            range: replacement,
+            replacement: quote_path(shell, displayed_path),
+        },
+        displayed_path,
+        description,
+        icon,
+        SuggestionSource::File,
+        insertion,
+        format!("file:{}", resolved_path.to_string_lossy()),
+    );
+    suggestion.static_priority = 0.45;
+    suggestion.confidence = 0.85;
+    suggestion
 }
 
 /// Quotes or escapes a logical path as one token for the selected shell.
@@ -224,6 +280,7 @@ fn quote_fish_path(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -254,6 +311,29 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn bounded_scan_discards_partial_candidates_after_cooperative_stop() {
+        let temp = TempDirectory::new();
+        fs::write(temp.0.join("abed"), "study").unwrap();
+        fs::write(temp.0.join("troy"), "study").unwrap();
+        let checks = Cell::new(0_usize);
+
+        let suggestions = filesystem_suggestions_bounded(
+            &temp.query("open "),
+            ShellKind::Bash,
+            &FilesystemOptions::default(),
+            MAX_DIRECTORY_ENTRIES,
+            || {
+                let next = checks.get() + 1;
+                checks.set(next);
+                next >= 4
+            },
+        );
+
+        assert!(suggestions.is_empty());
+        assert_eq!(checks.get(), 4);
     }
 
     #[test]

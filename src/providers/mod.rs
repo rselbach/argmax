@@ -4,6 +4,7 @@ mod aliases;
 mod cache;
 mod cobra;
 mod dynamic;
+pub mod execution;
 mod filesystem;
 mod path;
 mod workspace;
