@@ -29,6 +29,7 @@ pub mod pty;
 pub mod ranking;
 pub mod release;
 pub mod reload;
+pub mod runtime;
 pub mod screen;
 pub mod selection;
 pub mod session;
