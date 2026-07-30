@@ -120,7 +120,7 @@ reset_run() {
   test_release_base=https://releases.invalid/download
 }
 
-run_installer() {
+run_installer_command() {
   ARGMAX_TEST_ASSET_DIR=${test_assets} \
     ARGMAX_TEST_CURL_MODE=${test_curl_mode} \
     ARGMAX_TEST_BINARY_VERSION=${test_reported_version} \
@@ -131,7 +131,15 @@ run_installer() {
     HOME=${test_run_home} \
     TMPDIR=${test_run_tmp} \
     PATH="${test_tools}:${test_system_path}" \
-    "${test_shell}" "${test_installer}"
+    "${test_shell}" "$@"
+}
+
+run_installer() {
+  run_installer_command "${test_installer}"
+}
+
+run_installer_from_stdin() {
+  run_installer_command <"${test_installer}"
 }
 
 write_old_binary() {
@@ -162,13 +170,16 @@ assert_no_staged_binary() {
 test_success_and_idempotence() {
   reset_run
   test_output=${test_root}/success.out
-  run_installer >"${test_output}"
+  run_installer_from_stdin >"${test_output}"
   [ "$("${test_bin}/argmax" version)" = 9.8.7 ] \
     || fail "verified binary was not installed"
   test_quoted_bin=$(shell_quote "${test_bin}")
   grep -F "  export PATH=${test_quoted_bin}:\"\$PATH\"" \
     "${test_output}" >/dev/null \
     || fail "installer did not print the exact PATH correction"
+  test_quoted_binary=$(shell_quote "${test_bin}/argmax")
+  grep -F "  ${test_quoted_binary} setup" "${test_output}" >/dev/null \
+    || fail "installer did not print the exact shell setup command"
 
   run_installer >/dev/null
   [ "$("${test_bin}/argmax" version)" = 9.8.7 ] \

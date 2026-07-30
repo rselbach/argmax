@@ -511,6 +511,10 @@ main() {
         "${install_quoted_directory}"
       ;;
   esac
+  install_quoted_binary=$(
+    shell_quote "${install_directory}/${PROGRAM_NAME}"
+  ) || fail "could not format the setup command"
+  printf 'finish shell setup with:\n  %s setup\n' "${install_quoted_binary}"
 }
 
 main "$@"

@@ -20,22 +20,30 @@ install argmax on the remote host.
 
 ## Install
 
-Download and inspect the installer, then run it locally. It selects the matching
-asset, downloads its `.sha256` file, verifies the binary, validates the version
-reported by the executable, and publishes it atomically.
+Install the latest stable release with one command:
+
+```sh
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --silent --show-error \
+  https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh \
+  | sh
+```
+
+The installer selects the matching asset, downloads its `.sha256` file, verifies
+the binary, validates the version reported by the executable, and publishes it
+atomically. It uses `/usr/local/bin` when that directory is writable and safe;
+otherwise it uses `$HOME/.local/bin`. Follow the exact PATH and `argmax setup`
+commands it prints, then open a new terminal.
+
+To inspect the installer before running it:
 
 ```sh
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output argmax-install.sh \
   https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh
 less argmax-install.sh
-```
-
-The installer uses `/usr/local/bin` when that directory is writable and safe;
-otherwise it uses `$HOME/.local/bin`:
-
-```sh
 sh argmax-install.sh
+rm argmax-install.sh
 ```
 
 To select an absolute directory instead:
@@ -44,14 +52,7 @@ To select an absolute directory instead:
 ARGMAX_INSTALL_DIR="$HOME/.local/bin" sh argmax-install.sh
 ```
 
-Remove the downloaded installer after the installation succeeds:
-
-```sh
-rm argmax-install.sh
-```
-
 If the chosen directory is not on `PATH`, the installer prints an exact command
-that prepends it. It does not edit shell configuration.
 
 Then install one marked shell hook and create the default config if it is absent:
 

@@ -9,6 +9,19 @@ unique private temporary directory. The checksum is validated before the
 existing executable can change, and the staged executable must report a valid
 version for the selected channel.
 
+The installer accepts its script over standard input, so the primary install is:
+
+```sh
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --silent --show-error \
+  https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh \
+  | sh
+```
+
+After publishing the binary, it prints exact commands for any required `PATH`
+change and for installing the shell integration. The installer itself does not
+modify shell configuration.
+
 Installer controls:
 
 | Variable | Effect |
