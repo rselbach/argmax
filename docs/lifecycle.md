@@ -173,7 +173,8 @@ argmax crash-log --clear
 
 The first command prints the newest report path or `no crash reports`. The
 second removes argmax-owned crash reports only and reports each removal or
-failure. See [debugging privacy](privacy.md#debugging-privacy) before sharing a
+failure. Writing a report also removes the oldest argmax-owned reports beyond
+the newest 32, so repeated crashes cannot fill the directory. See [debugging privacy](privacy.md#debugging-privacy) before sharing a
 report.
 
 ## Uninstall and data removal

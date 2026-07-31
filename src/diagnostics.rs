@@ -41,6 +41,8 @@ pub const MAX_CRASH_FAILURE_BYTES: usize = 64 * 1024;
 pub const MAX_CRASH_BACKTRACE_BYTES: usize = 512 * 1024;
 /// Maximum directory entries inspected by crash-report operations.
 pub const MAX_CRASH_DIRECTORY_ENTRIES: usize = 4_096;
+/// Maximum crash reports retained after writing a new one.
+pub const MAX_RETAINED_CRASH_REPORTS: usize = 32;
 
 const DEBUG_LOG_NAME: &str = "debug.log";
 const PREVIOUS_DEBUG_LOG_NAME: &str = "debug.previous.log";
@@ -605,10 +607,35 @@ impl CrashReportStore {
             if let Some(path) =
                 self.try_write_unix(directory_fd, name, temporary_name, rendered.as_bytes())?
             {
+                self.enforce_retention_unix();
                 return Ok(path);
             }
         }
         Err(DiagnosticError::ReportNameExhausted)
+    }
+
+    /// Removes the oldest reports beyond [`MAX_RETAINED_CRASH_REPORTS`].
+    ///
+    /// A process that crashes repeatedly would otherwise fill its report
+    /// directory without limit. This runs after a report has already been
+    /// written and is deliberately best-effort: the caller is on a crash path,
+    /// and failing to prune is never a reason to lose the report just written.
+    #[cfg(unix)]
+    fn enforce_retention_unix(&self) {
+        let Ok(scan) = self.scan_owned_report_names_unix() else {
+            return;
+        };
+        let Some(excess) = scan.names.len().checked_sub(MAX_RETAINED_CRASH_REPORTS) else {
+            return;
+        };
+        if excess == 0 {
+            return;
+        }
+        let mut names = scan.names;
+        names.sort_by_key(|name| parse_owned_crash_name(name));
+        names.truncate(excess);
+        let mut outcome = CrashClearOutcome::default();
+        drop(self.clear_scanned_unix(names, &mut outcome));
     }
 
     #[cfg(unix)]
@@ -3093,6 +3120,36 @@ mod tests {
         assert!(outcome.failures.is_empty());
         assert!(unrelated.exists());
         assert!(other.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writing_a_report_prunes_the_oldest_beyond_the_retention_limit() {
+        let directory = TestDirectory::new();
+        let store = CrashReportStore::open(directory.0.clone()).unwrap();
+        let mut written = Vec::new();
+        for index in 0..MAX_RETAINED_CRASH_REPORTS + 8 {
+            written.push(
+                store
+                    .write(&CrashReport::new(
+                        "1.0.0",
+                        &format!("failure {index}"),
+                        "frame",
+                    ))
+                    .unwrap(),
+            );
+        }
+
+        let remaining = fs::read_dir(&store.directory).unwrap().count();
+        assert_eq!(remaining, MAX_RETAINED_CRASH_REPORTS);
+        assert!(written.last().unwrap().exists(), "newest report was pruned");
+        assert!(!written[0].exists(), "oldest report survived pruning");
+        assert!(
+            written[written.len() - MAX_RETAINED_CRASH_REPORTS..]
+                .iter()
+                .all(|path| path.exists()),
+            "pruning removed a report inside the retention window"
+        );
     }
 
     #[cfg(unix)]
