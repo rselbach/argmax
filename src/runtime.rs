@@ -1396,6 +1396,14 @@ impl SessionDriver {
         for _ in 0..MAX_DRAIN_PER_TICK {
             match self.output_receiver.try_recv() {
                 Ok(ReaderMessage::Bytes(bytes)) => {
+                    // Reader progress extends the exit drain: already-produced
+                    // final output on a slow terminal must not be cut by a
+                    // deadline measured from the reap. Quiet orphans still
+                    // bound the exit, and a termination signal ends the drain
+                    // regardless.
+                    if self.child_exit.is_some() {
+                        self.exit_drain_deadline = Some(Instant::now() + EXIT_OUTPUT_DRAIN);
+                    }
                     let effects = reducer.observe_shell_output();
                     self.apply_effects(reducer, effects)?;
                     self.clear_overlay()?;
