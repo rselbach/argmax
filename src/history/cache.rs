@@ -117,15 +117,17 @@ impl HistoryCache {
 
     /// Returns persistent and current-session history in newest-first order.
     ///
-    /// `parser` receives at most the configured number of bytes and should
-    /// return valid records in file order, oldest to newest. Missing, unreadable,
-    /// invalid-UTF-8, and partially malformed files are isolated to this cache:
-    /// invalid UTF-8 is replaced lossily and record recovery is left to the
-    /// parser. Exact duplicate commands keep their newest occurrence.
+    /// `parser` receives at most the configured number of raw bytes and should
+    /// return valid records in file order, oldest to newest. Bytes are passed
+    /// undecoded because a format may escape bytes that are not valid UTF-8 on
+    /// their own, so only the parser knows how to recover the original text.
+    /// Missing, unreadable, and partially malformed files are isolated to this
+    /// cache, with record recovery left to the parser. Exact duplicate commands
+    /// keep their newest occurrence.
     #[must_use]
     pub fn merged<F>(&mut self, history_path: impl AsRef<Path>, parser: F) -> Vec<HistoryEntry>
     where
-        F: FnOnce(&str) -> Vec<HistoryEntry>,
+        F: FnOnce(&[u8]) -> Vec<HistoryEntry>,
     {
         let key = HistoryFileKey::capture(history_path);
         if self.cached.as_ref().is_none_or(|cached| cached.key != key) {
@@ -165,9 +167,9 @@ impl Default for HistoryCache {
     }
 }
 
-fn read_history_tail(path: &Path, max_bytes: usize) -> io::Result<String> {
+fn read_history_tail(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
     if max_bytes == 0 {
-        return Ok(String::new());
+        return Ok(Vec::new());
     }
 
     let mut file = fs::File::open(path)?;
@@ -182,15 +184,13 @@ fn read_history_tail(path: &Path, max_bytes: usize) -> io::Result<String> {
     let mut bytes = Vec::with_capacity(capacity);
     file.take(max_bytes_u64).read_to_end(&mut bytes)?;
 
-    let bytes = if start == 0 {
-        bytes.as_slice()
-    } else {
-        bytes
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(&[][..], |newline| &bytes[newline + 1..])
-    };
-    Ok(String::from_utf8_lossy(bytes).into_owned())
+    if start == 0 {
+        return Ok(bytes);
+    }
+    Ok(bytes
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .map_or_else(Vec::new, |newline| bytes[newline + 1..].to_vec()))
 }
 
 #[cfg(test)]
@@ -354,7 +354,7 @@ mod tests {
         let mut cache = HistoryCache::default();
 
         let entries = cache.merged(&path, |contents| {
-            contents
+            String::from_utf8_lossy(contents)
                 .lines()
                 .filter(|line| !line.contains("BROKEN"))
                 .map(HistoryEntry::new)
@@ -423,8 +423,8 @@ mod tests {
         assert_eq!(commands(&entries), ["git status"]);
     }
 
-    fn line_parser(contents: &str) -> Vec<HistoryEntry> {
-        contents
+    fn line_parser(contents: &[u8]) -> Vec<HistoryEntry> {
+        String::from_utf8_lossy(contents)
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(HistoryEntry::new)

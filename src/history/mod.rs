@@ -82,14 +82,45 @@ pub struct HistoryMatch {
 ///
 /// Empty records and incomplete metadata-only tails are ignored. Malformed
 /// metadata is isolated to its record and never prevents later commands from
-/// being returned.
+/// being returned. Bytes that are not valid UTF-8 after any format-specific
+/// unescaping are replaced lossily.
 #[must_use]
-pub fn parse_history(format: HistoryFormat, contents: &str) -> Vec<HistoryEntry> {
+pub fn parse_history(format: HistoryFormat, contents: &[u8]) -> Vec<HistoryEntry> {
     match format {
-        HistoryFormat::Zsh => parse_zsh(contents),
-        HistoryFormat::Bash => parse_bash(contents),
-        HistoryFormat::Fish => parse_fish(contents),
+        HistoryFormat::Zsh => parse_zsh(&String::from_utf8_lossy(&unmetafy(contents))),
+        HistoryFormat::Bash => parse_bash(&String::from_utf8_lossy(contents)),
+        HistoryFormat::Fish => parse_fish(&String::from_utf8_lossy(contents)),
     }
+}
+
+/// Reverses the escaping zsh applies when writing its history file.
+///
+/// zsh stores a byte it treats as special by writing the marker `0x83` followed
+/// by that byte with bit `0x20` flipped. Ordinary UTF-8 text contains such
+/// bytes, so a history file holding accented or non-Latin commands decodes to
+/// replacement characters unless the escape is reversed before decoding.
+fn unmetafy(contents: &[u8]) -> Vec<u8> {
+    const MARKER: u8 = 0x83;
+    const FLIPPED_BIT: u8 = 0x20;
+
+    if !contents.contains(&MARKER) {
+        return contents.to_vec();
+    }
+    let mut decoded = Vec::with_capacity(contents.len());
+    let mut bytes = contents.iter().copied();
+    while let Some(byte) = bytes.next() {
+        if byte != MARKER {
+            decoded.push(byte);
+            continue;
+        }
+        // A trailing marker is a truncated escape, which the bounded tail read
+        // can produce. Keeping it preserves the surrounding record.
+        match bytes.next() {
+            Some(escaped) => decoded.push(escaped ^ FLIPPED_BIT),
+            None => decoded.push(MARKER),
+        }
+    }
+    decoded
 }
 
 /// Merges file and session entries into newest-first search order.
@@ -993,7 +1024,7 @@ mod tests {
     fn parses_plain_and_extended_zsh_history() {
         let entries = parse_history(
             HistoryFormat::Zsh,
-            "  git status  \n: 1700000000:12;cargo test\n: 1700000010:0;echo done\n",
+            "  git status  \n: 1700000000:12;cargo test\n: 1700000010:0;echo done\n".as_bytes(),
         );
 
         assert_eq!(
@@ -1018,7 +1049,8 @@ mod tests {
     fn zsh_preserves_continued_commands_and_skips_malformed_metadata() {
         let entries = parse_history(
             HistoryFormat::Zsh,
-            ": 1700000000:1;printf 'one\\\ntwo'\n: 1700000001:bad;broken\necho valid\n: 123",
+            ": 1700000000:1;printf 'one\\\ntwo'\n: 1700000001:bad;broken\necho valid\n: 123"
+                .as_bytes(),
         );
 
         assert_eq!(entries.len(), 2);
@@ -1027,8 +1059,36 @@ mod tests {
     }
 
     #[test]
+    fn zsh_recovers_metafied_multibyte_commands() {
+        // zsh writes 0xc3 0x9f ("ß") as 0xc3 0x83 0xbf, because 0x9f is in the
+        // range it escapes. The same applies to "ü" as 0xc3 0xbc, which needs
+        // no escape, so both forms appear in one record.
+        let mut contents = Vec::from(b": 1700000000:0;echo Gr\xc3\xbc\xc3".as_slice());
+        contents.extend_from_slice(b"\x83\xbfe\n");
+
+        let entries = parse_history(HistoryFormat::Zsh, &contents);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].command, "echo Grüße");
+        assert!(!entries[0].command.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn only_zsh_history_is_unescaped_and_a_truncated_escape_is_kept() {
+        let bash = b"echo \xc3\x83\xbf\n";
+        assert_eq!(
+            parse_history(HistoryFormat::Bash, bash)[0].command,
+            String::from_utf8_lossy(b"echo \xc3\x83\xbf").as_ref()
+        );
+
+        let truncated = b"echo done\n\x83";
+        let entries = parse_history(HistoryFormat::Zsh, truncated);
+        assert_eq!(entries[0].command, "echo done");
+    }
+
+    #[test]
     fn zsh_keeps_plain_colon_commands() {
-        let entries = parse_history(HistoryFormat::Zsh, ": reload\n: 123abc\n");
+        let entries = parse_history(HistoryFormat::Zsh, ": reload\n: 123abc\n".as_bytes());
         assert_eq!(commands(&entries), vec![": reload", ": 123abc"]);
     }
 
@@ -1036,7 +1096,8 @@ mod tests {
     fn parses_bash_timestamps_for_only_the_following_command() {
         let entries = parse_history(
             HistoryFormat::Bash,
-            "#1700000000\n  git status  \necho plain\n# not-a-time\n#1700000010\ncargo test\n",
+            "#1700000000\n  git status  \necho plain\n# not-a-time\n#1700000010\ncargo test\n"
+                .as_bytes(),
         );
 
         assert_eq!(entries.len(), 4);
@@ -1049,7 +1110,7 @@ mod tests {
 
     #[test]
     fn bash_ignores_blank_records_and_incomplete_timestamp_tail() {
-        let entries = parse_history(HistoryFormat::Bash, "\nls\n  \n#1700000000\n");
+        let entries = parse_history(HistoryFormat::Bash, "\nls\n  \n#1700000000\n".as_bytes());
         assert_eq!(entries, vec![HistoryEntry::new("ls")]);
     }
 
@@ -1057,7 +1118,7 @@ mod tests {
     fn parses_fish_records_metadata_and_escaped_newlines() {
         let entries = parse_history(
             HistoryFormat::Fish,
-            "# fish history\n- cmd: echo one\\ntwo\n  when: 1700000000\n  paths:\n    - /tmp\n- cmd: printf '\\\\n'\n- cmd: cargo test\n  when: invalid\n",
+            "# fish history\n- cmd: echo one\\ntwo\n  when: 1700000000\n  paths:\n    - /tmp\n- cmd: printf '\\\\n'\n- cmd: cargo test\n  when: invalid\n".as_bytes(),
         );
 
         assert_eq!(entries.len(), 3);
@@ -1071,7 +1132,7 @@ mod tests {
     fn fish_tolerates_empty_and_malformed_tail_records() {
         let entries = parse_history(
             HistoryFormat::Fish,
-            "  when: 12\n- cmd:   \n  when: 13\n- cmd: echo ok\\\n",
+            "  when: 12\n- cmd:   \n  when: 13\n- cmd: echo ok\\\n".as_bytes(),
         );
         assert_eq!(entries, vec![HistoryEntry::new("echo ok\\")]);
     }
@@ -1375,7 +1436,7 @@ mod tests {
 
     #[test]
     fn preserves_exact_command_whitespace_during_parse_and_merge() {
-        let parsed = parse_history(HistoryFormat::Bash, "  echo Greendale  \n");
+        let parsed = parse_history(HistoryFormat::Bash, "  echo Greendale  \n".as_bytes());
         assert_eq!(parsed[0].command, "  echo Greendale  ");
 
         let merged = merge_history(
