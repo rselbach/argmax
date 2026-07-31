@@ -11,7 +11,9 @@ use std::fmt;
 use std::io::{self, Write};
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use nix::sys::termios::{SetArg, Termios, cfmakeraw, tcgetattr, tcsetattr};
 use nix::unistd::isatty;
@@ -28,6 +30,10 @@ pub const MAX_SERIALIZED_WRITE: usize = 64 * 1024;
 
 /// Largest inert ANSI cleanup program retained by a terminal guard.
 pub const MAX_OVERLAY_CLEANUP: usize = MAX_SERIALIZED_WRITE - 32;
+
+/// Maximum wait for the write boundary while restoring terminal state.
+const RESTORE_OUTPUT_TIMEOUT: Duration = Duration::from_secs(2);
+const OUTPUT_LOCK_POLL: Duration = Duration::from_millis(1);
 
 const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
 const HIDE_CURSOR: &[u8] = b"\x1b[?25l";
@@ -497,6 +503,51 @@ impl<W: Write> SerializedOutput<W> {
         self.write_frame(bytes)
     }
 
+    /// Writes one frame, giving up when the boundary stays contended.
+    ///
+    /// Only restoration uses this. Another thread can hold the write boundary
+    /// indefinitely while blocked on a flow-controlled terminal, and process
+    /// exit must not depend on that thread ever making progress, so a
+    /// persistently contended boundary becomes a reported failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputError::TooLarge`] for an oversized frame, and an I/O
+    /// error of kind [`io::ErrorKind::WouldBlock`] when the boundary stayed
+    /// held for the whole timeout.
+    pub fn write_overlay_within(&self, bytes: &[u8], timeout: Duration) -> Result<(), OutputError> {
+        if bytes.len() > MAX_SERIALIZED_WRITE {
+            return Err(OutputError::TooLarge {
+                actual: bytes.len(),
+                limit: MAX_SERIALIZED_WRITE,
+            });
+        }
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.writer.try_lock() {
+                Ok(mut writer) => {
+                    return writer
+                        .write_all(bytes)
+                        .and_then(|()| writer.flush())
+                        .map_err(OutputError::from);
+                }
+                Err(TryLockError::Poisoned(poisoned)) => {
+                    let mut writer = poisoned.into_inner();
+                    return writer
+                        .write_all(bytes)
+                        .and_then(|()| writer.flush())
+                        .map_err(OutputError::from);
+                }
+                Err(TryLockError::WouldBlock) => {
+                    if Instant::now() >= deadline {
+                        return Err(OutputError::Io(io::ErrorKind::WouldBlock));
+                    }
+                    thread::sleep(OUTPUT_LOCK_POLL);
+                }
+            }
+        }
+    }
+
     fn write_frame(&self, bytes: &[u8]) -> Result<(), OutputError> {
         if bytes.len() > MAX_SERIALIZED_WRITE {
             return Err(OutputError::TooLarge {
@@ -929,7 +980,10 @@ impl<T: AsFd, W: Write> TerminalGuard<T, W> {
                 self.restore_buffer.extend_from_slice(SHOW_CURSOR);
             }
 
-            match self.output.write_overlay(&self.restore_buffer) {
+            match self
+                .output
+                .write_overlay_within(&self.restore_buffer, RESTORE_OUTPUT_TIMEOUT)
+            {
                 Ok(()) => {
                     self.cleanup = None;
                     self.cursor_hidden = false;
@@ -1122,6 +1176,35 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn a_permanently_contended_boundary_yields_instead_of_waiting_forever() {
+        let output = SerializedOutput::new(Vec::new());
+        let held = output.clone();
+        let (holding_tx, holding_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let holder = thread::spawn(move || {
+            let _guard = recover_lock(&held.writer);
+            holding_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        holding_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let started = Instant::now();
+        let outcome = output.write_overlay_within(b"restore", Duration::from_millis(50));
+        let waited = started.elapsed();
+
+        assert_eq!(outcome, Err(OutputError::Io(io::ErrorKind::WouldBlock)));
+        assert!(waited < Duration::from_secs(1), "waited {waited:?}");
+
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(
+            output
+                .write_overlay_within(b"restore", Duration::from_secs(1))
+                .is_ok()
+        );
     }
 
     fn dimensions() -> TerminalDimensions {
