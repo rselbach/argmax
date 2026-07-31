@@ -847,15 +847,14 @@ impl PendingWrites {
         Ok(())
     }
 
-    fn discard_control(&mut self) {
+    fn discard(&mut self, destination: WriteDestination) {
         let discarded: usize = self
             .writes
             .iter()
-            .filter(|write| write.destination == WriteDestination::Control)
+            .filter(|write| write.destination == destination)
             .map(|write| write.bytes.len() - write.written)
             .sum();
-        self.writes
-            .retain(|write| write.destination != WriteDestination::Control);
+        self.writes.retain(|write| write.destination != destination);
         self.bytes -= discarded;
     }
 }
@@ -1360,7 +1359,25 @@ impl SessionDriver {
             };
             let remaining = &front.bytes[front.written..];
             let write = match front.destination {
-                WriteDestination::Pty => session.write_input(remaining),
+                WriteDestination::Pty => match session.write_input(remaining) {
+                    // A master write fails only when no slave can ever read
+                    // it again. If the child turns out to be gone, the queue
+                    // is undeliverable input, not a wrapper failure; erroring
+                    // here would discard the child's real exit status for a
+                    // rescue shell. The reap check covers the race where the
+                    // write fails before the regular child poll runs.
+                    Err(error) => {
+                        let exited = self.child_exit.is_some()
+                            || session.try_wait().is_ok_and(|exit| exit.is_some());
+                        if exited {
+                            self.pending.discard(WriteDestination::Pty);
+                            progress = true;
+                            continue;
+                        }
+                        Err(error)
+                    }
+                    write => write,
+                },
                 WriteDestination::Control => match self.integration.write_control(remaining) {
                     // The shell closed its integration descriptor, usually by
                     // exiting; queued frames are undeliverable forever. Drop
@@ -1373,7 +1390,7 @@ impl SessionDriver {
                             ..
                         },
                     ) => {
-                        self.pending.discard_control();
+                        self.pending.discard(WriteDestination::Control);
                         progress = true;
                         continue;
                     }
@@ -2080,7 +2097,7 @@ mod tests {
         pending.push(WriteDestination::Pty, *b"de").unwrap();
         let before = pending.available();
 
-        pending.discard_control();
+        pending.discard(WriteDestination::Control);
 
         assert_eq!(pending.available(), before + b"frame".len());
         assert_eq!(pending.writes.len(), 2);
@@ -2096,7 +2113,7 @@ mod tests {
             .push(WriteDestination::Control, *b"frame")
             .unwrap();
         partially_written.advance_front(2).unwrap();
-        partially_written.discard_control();
+        partially_written.discard(WriteDestination::Control);
         assert!(partially_written.is_empty());
         assert_eq!(partially_written.available(), MAX_PENDING_WRITE_BYTES);
     }
