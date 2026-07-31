@@ -102,6 +102,14 @@ state, learning data, and hooks remain untouched. An already-running wrapper
 continues using its original executable; after success, exit that argmax session
 naturally or open a new terminal as instructed.
 
+Each successful update leaves the executable it displaced beside the new one,
+named `.argmax-update-<32 lowercase hex>.tmp`, and an update that finds the
+current release already installed leaves the verified download under the same
+naming. These are retained deliberately: POSIX offers no way to unlink a
+specific inode, so removing a path could remove a file another process had just
+put there. They accumulate across updates and are removed by `argmax uninstall`,
+or by deleting them directly once no update is in progress.
+
 ### Roll back a binary
 
 The supported deterministic rollback is a verified pinned install. Obtain the
