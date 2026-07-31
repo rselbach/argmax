@@ -195,12 +195,13 @@ pub fn resolve_settings(
 }
 
 /// One malformed documented environment override.
+///
+/// The present value is never retained or displayed: pasted secrets land in
+/// environment variables often enough that echoing one back is a leak.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OverrideError {
     /// Exact environment variable name.
     pub variable: &'static str,
-    /// Present value that failed parsing.
-    pub value: String,
     /// Stable expected-value description.
     pub expected: &'static str,
 }
@@ -209,8 +210,8 @@ impl fmt::Display for OverrideError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "{}={:?}: expected {}",
-            self.variable, self.value, self.expected
+            "{} has an unusable value: expected {}",
+            self.variable, self.expected
         )
     }
 }
@@ -253,11 +254,7 @@ fn read_override<T>(
     match parse(&value) {
         Ok(parsed) => Some(parsed),
         Err(expected) => {
-            errors.push(OverrideError {
-                variable,
-                value,
-                expected,
-            });
+            errors.push(OverrideError { variable, expected });
             None
         }
     }
