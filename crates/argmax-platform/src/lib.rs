@@ -25,8 +25,8 @@ pub mod unix {
         // A negative identifier names a process group elsewhere in the wait
         // interfaces, and silently taking its magnitude would observe a
         // different process than the caller named.
-        let observed = u32::try_from(pid.get())
-            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let observed =
+            u32::try_from(pid.get()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
         // POSIX specifies that a zero `si_pid` distinguishes the WNOHANG case.
         // Starting from all-zero bytes also avoids observing uninitialized
         // padding when the kernel reports no state change.
