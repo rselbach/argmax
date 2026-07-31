@@ -123,7 +123,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
       if [[ ${ARGMAX_EVENT_FD-} =~ ^[0-9]+$ ]] &&
           (( 10#$ARGMAX_EVENT_FD >= 3 )); then
-        printf '%s\0' capability:unavailable \
+        builtin printf '%s\0' capability:unavailable \
           2>/dev/null 1>&"$ARGMAX_EVENT_FD" || :
       fi
     elif declare -F __argmax_emit >/dev/null ||
@@ -151,7 +151,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
            ${PROMPT_COMMAND[*]-} == *'__argmax_postprompt'* ]]; then
       if [[ ${ARGMAX_EVENT_FD-} =~ ^[0-9]+$ ]] &&
           (( 10#$ARGMAX_EVENT_FD >= 3 )); then
-        printf '%s\0' capability:unavailable \
+        builtin printf '%s\0' capability:unavailable \
           2>/dev/null 1>&"$ARGMAX_EVENT_FD" || :
       fi
     else
@@ -177,6 +177,11 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
         local argmax_prompt_attempted=0
         local argmax_index
         local argmax_restore_index
+
+        # The PS0/PS2 hooks rely on prompt-string expansion; without
+        # promptvars their literal text would print before every command
+        # and no lifecycle event would ever fire.
+        builtin shopt -q promptvars || return 1
 
         if argmax_ps0_declaration=$(builtin declare -p PS0 2>/dev/null); then
           if [[ $argmax_ps0_declaration != 'declare -- PS0' &&
@@ -233,7 +238,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           if (( ${#argmax_event} > 16417 )); then
             argmax_event=protocol-frame-oversized
           fi
-          printf '%s\0' "$argmax_event" \
+          builtin printf '%s\0' "$argmax_event" \
             2>/dev/null 1>&"$ARGMAX_EVENT_FD" || :
         }
 
@@ -527,7 +532,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           argmax_more=$(builtin bind -m "$argmax_keymap" -X 2>/dev/null) ||
             return 1
           argmax_bindings+=$'\n'$argmax_more
-          while IFS= read -r argmax_binding; do
+          while IFS= builtin read -r argmax_binding; do
             case $argmax_binding in
               *'"\e[argmax-sync~"'*) return 1 ;;
             esac
@@ -669,7 +674,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
       if ! __argmax_install; then
         if [[ ${ARGMAX_EVENT_FD-} =~ ^[0-9]+$ ]] &&
             (( 10#$ARGMAX_EVENT_FD >= 3 )); then
-          printf '%s\0' capability:unavailable \
+          builtin printf '%s\0' capability:unavailable \
             2>/dev/null 1>&"$ARGMAX_EVENT_FD" || :
         fi
       fi
@@ -716,7 +721,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
   elif [[ -n ${ARGMAX_PRIVATE_SESSION-} ]]; then
     if [[ ${ARGMAX_EVENT_FD-} =~ ^[0-9]+$ ]] &&
         (( 10#$ARGMAX_EVENT_FD >= 3 )); then
-      printf '%s\0' capability:unavailable \
+      builtin printf '%s\0' capability:unavailable \
         2>/dev/null 1>&"$ARGMAX_EVENT_FD" || :
     fi
   fi
@@ -2729,6 +2734,125 @@ mod tests {
                 .iter()
                 .any(|frame| frame.windows(6).any(|window| window == b"BROKEN")),
             "an alias intercepted the emit path: {events:?}"
+        );
+    }
+
+    fn hostile_bash_events(preparation: &str) -> Option<Vec<Vec<u8>>> {
+        if !expect_is_available() || !shell_is_available("bash") {
+            return None;
+        }
+        if !Command::new("bash")
+            .args([
+                "-c",
+                "(( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) ))",
+            ])
+            .status()
+            .expect("inspect Bash version")
+            .success()
+        {
+            return None;
+        }
+
+        let directory = HarnessDirectory::create(Shell::Bash);
+        let init_path = directory.0.join("init");
+        let events_path = directory.0.join("events");
+        fs::write(&init_path, init_script(Shell::Bash).as_bytes()).expect("write Bash init");
+        let expect_program = r#"
+          set timeout 10
+          log_user 0
+          spawn sh -c {exec 3>"$ARGMAX_TEST_EVENTS"; exec bash --noprofile --norc -i}
+          send -- "PS1='ARGMAX''> '\r"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 2 }
+            eof { exit 3 }
+          }
+          send -- "$env(ARGMAX_TEST_PREPARE)\r"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 4 }
+            eof { exit 5 }
+          }
+          send -- "source \"$env(ARGMAX_TEST_INIT)\"\r"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 6 }
+            eof { exit 7 }
+          }
+          send -- "echo hi"
+          send -- "\033\[argmax-sync~"
+          after 100
+          send -- "\r"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 8 }
+            eof { exit 9 }
+          }
+          send -- "exit\r"
+          expect eof
+        "#;
+        let output = Command::new("expect")
+            .args(["-c", expect_program])
+            .env("ARGMAX_PRIVATE_SESSION", "1")
+            .env("ARGMAX_EVENT_FD", "3")
+            .env("ARGMAX_TEST_EVENTS", &events_path)
+            .env("ARGMAX_TEST_INIT", &init_path)
+            .env("ARGMAX_TEST_PREPARE", preparation)
+            .output()
+            .expect("run hostile Bash harness");
+        let events = fs::read(&events_path).unwrap_or_default();
+        assert!(
+            output.status.success(),
+            "hostile Bash PTY harness failed with {}:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Some(
+            events
+                .split(|byte| *byte == 0)
+                .filter(|frame| !frame.is_empty())
+                .map(<[u8]>::to_vec)
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn bash_hooks_survive_a_user_printf_function() {
+        let Some(events) = hostile_bash_events("printf() { echo BROKEN \"$@\"; }; read() { :; }")
+        else {
+            return;
+        };
+        assert!(
+            events
+                .iter()
+                .any(|frame| frame == b"capability:sync-probe:0"),
+            "hooks did not install under a shadowed printf: {events:?}"
+        );
+        assert!(events.iter().any(|frame| frame == b"command-start:echo hi"));
+        assert!(
+            !events
+                .iter()
+                .any(|frame| frame.windows(6).any(|window| window == b"BROKEN")),
+            "a user function intercepted the emit path: {events:?}"
+        );
+    }
+
+    #[test]
+    fn bash_without_promptvars_declines_instead_of_printing_hook_text() {
+        let Some(events) = hostile_bash_events("shopt -u promptvars") else {
+            return;
+        };
+        assert!(
+            events
+                .iter()
+                .any(|frame| frame == b"capability:unavailable"),
+            "adapter installed prompt hooks without promptvars: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|frame| frame.starts_with(b"capability:sync-probe")),
+            "{events:?}"
         );
     }
 
