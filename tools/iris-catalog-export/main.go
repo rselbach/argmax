@@ -147,9 +147,12 @@ func readInventory(path string) ([]inventoryEntry, error) {
 		if strings.HasPrefix(line, "## ") {
 			start := strings.LastIndex(line, "(`")
 			end := strings.LastIndex(line, "/`)")
-			if start >= 0 && end > start {
-				category = line[start+2 : end]
+			if start < 0 || end <= start {
+				// Carrying the previous category forward would silently
+				// misattribute every row under a malformed heading.
+				return nil, fmt.Errorf("malformed inventory heading %q", line)
 			}
+			category = line[start+2 : end]
 			continue
 		}
 		if !strings.HasPrefix(line, "| **`") {
