@@ -386,7 +386,12 @@ fn resolve_kind(
 ) -> Option<SelectedShell> {
     if let Some(search_path) = search_path {
         for directory in std::env::split_paths(search_path).take(MAX_SEARCH_PATH_ENTRIES) {
-            let candidate = absolute_candidate(&directory.join(kind.as_str()))?;
+            // One entry that cannot be made absolute, such as a relative entry
+            // while the working directory is gone, only disqualifies itself.
+            // Abandoning the scan would hide a shell a later entry does name.
+            let Some(candidate) = absolute_candidate(&directory.join(kind.as_str())) else {
+                continue;
+            };
             if executable_file(&candidate) {
                 return Some(SelectedShell {
                     kind,
