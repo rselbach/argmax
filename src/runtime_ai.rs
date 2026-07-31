@@ -1592,12 +1592,19 @@ mod tests {
     }
 
     fn wait_for_batch(dispatcher: &AiCompletionDispatcher) -> ProviderBatch {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        // Generous because the whole suite runs concurrently: this bounds a
+        // hang, and a scheduling delay under load is not a failure. The batch
+        // is returned as soon as it arrives.
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if let Some(batch) = dispatcher.drain_batches(1).pop() {
                 return batch;
             }
-            assert!(Instant::now() < deadline, "AI batch did not arrive");
+            assert!(
+                Instant::now() < deadline,
+                "AI batch did not arrive; status={:?}",
+                dispatcher.status()
+            );
             thread::sleep(Duration::from_millis(5));
         }
     }
@@ -1812,9 +1819,9 @@ mod tests {
             dispatcher.submit_query(query("git", &cwd.0)),
             AiQueryAdmission::Queued
         );
-        let started_deadline = Instant::now() + Duration::from_secs(1);
+        let started_deadline = Instant::now() + Duration::from_secs(30);
         while calls.load(Ordering::Acquire) == 0 {
-            assert!(Instant::now() < started_deadline);
+            assert!(Instant::now() < started_deadline, "provider never started");
             thread::sleep(Duration::from_millis(2));
         }
         assert_eq!(
@@ -1829,9 +1836,12 @@ mod tests {
             batch.suggestions[0].edit().apply("git s").unwrap(),
             "git stash"
         );
-        let stale_deadline = Instant::now() + Duration::from_secs(1);
+        let stale_deadline = Instant::now() + Duration::from_secs(30);
         while dispatcher.status().stale_results == 0 {
-            assert!(Instant::now() < stale_deadline);
+            assert!(
+                Instant::now() < stale_deadline,
+                "superseded result was never discarded"
+            );
             thread::sleep(Duration::from_millis(2));
         }
         assert!(dispatcher.status().stale_results >= 1);
@@ -1855,15 +1865,20 @@ mod tests {
             dispatcher.submit_query(query("git", &cwd.0)),
             AiQueryAdmission::Queued
         );
-        let deadline = Instant::now() + Duration::from_secs(1);
+        // Generous deadlines: the suite runs concurrently, so these bound a
+        // hang rather than assert a scheduling latency.
+        let deadline = Instant::now() + Duration::from_secs(30);
         while calls.load(Ordering::Acquire) == 0 {
-            assert!(Instant::now() < deadline);
+            assert!(Instant::now() < deadline, "provider was never invoked");
             thread::sleep(Duration::from_millis(2));
         }
         dispatcher.cancel(CancellationReason::MenuNavigation);
-        let stale_deadline = Instant::now() + Duration::from_secs(1);
+        let stale_deadline = Instant::now() + Duration::from_secs(30);
         while dispatcher.status().stale_results == 0 {
-            assert!(Instant::now() < stale_deadline);
+            assert!(
+                Instant::now() < stale_deadline,
+                "cancelled result was never discarded"
+            );
             thread::sleep(Duration::from_millis(2));
         }
         assert!(dispatcher.drain_batches(8).is_empty());

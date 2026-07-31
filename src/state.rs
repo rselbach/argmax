@@ -1819,11 +1819,19 @@ seen-version = "v1.2.3"
             .write(true)
             .open(&lock_path)
             .unwrap();
-        rustix::fs::flock(
-            &holder,
-            rustix::fs::FlockOperation::NonBlockingLockExclusive,
-        )
-        .unwrap();
+        // Other tests register process-wide signal handlers, so this call can
+        // be interrupted; the production loop below retries for the same
+        // reason.
+        loop {
+            match rustix::fs::flock(
+                &holder,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive,
+            ) {
+                Ok(()) => break,
+                Err(rustix::io::Errno::INTR) => {}
+                Err(error) => panic!("could not hold the runtime state lock: {error:?}"),
+            }
+        }
 
         let started = Instant::now();
         let outcome = store.load();
