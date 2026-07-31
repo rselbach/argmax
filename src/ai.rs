@@ -25,6 +25,8 @@ pub enum AiRejection {
     MultipleLines,
     /// The response contained a terminal or other control character.
     ControlCharacter,
+    /// The response contained an invisible or directional formatting character.
+    InvisibleCharacter,
     /// A code fence or surrounding quote was malformed or unsupported.
     InvalidWrapper,
     /// The response did not preserve the input buffer byte for byte.
@@ -42,6 +44,7 @@ impl fmt::Display for AiRejection {
             Self::Empty => "AI response is empty",
             Self::MultipleLines => "AI response contains multiple lines",
             Self::ControlCharacter => "AI response contains a control character",
+            Self::InvisibleCharacter => "AI response contains an invisible character",
             Self::InvalidWrapper => "AI response has an invalid surrounding wrapper",
             Self::NonPrefix => "AI response does not preserve the exact input prefix",
             Self::Identical => "AI response is identical to the input buffer",
@@ -78,6 +81,9 @@ pub fn validate_candidate(input: &str, response: &str) -> Result<String, AiRejec
     if candidate.chars().any(char::is_control) {
         return Err(AiRejection::ControlCharacter);
     }
+    if candidate.chars().any(is_invisible) {
+        return Err(AiRejection::InvisibleCharacter);
+    }
     if !candidate.starts_with(input) {
         return Err(AiRejection::NonPrefix);
     }
@@ -112,6 +118,42 @@ pub fn ai_suggestion(query: &CompletionQuery, response: &str) -> Result<Suggesti
         InsertionBehavior::Exact,
         identity,
     ))
+}
+
+/// Returns whether a character occupies no width or reorders what surrounds it.
+///
+/// An accepted candidate is inserted into the shell buffer verbatim, so a
+/// character the user cannot see is a character the user cannot review. Bidi
+/// overrides, zero-width marks, and tag characters all let a response display
+/// as one command and execute as another. These are rejected rather than
+/// stripped, because silently altering a command is its own hazard.
+///
+/// The set is Unicode's format category, which `char::is_control` excludes.
+fn is_invisible(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00AD}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 fn strip_recognized_wrapper(response: &str) -> Result<&str, AiRejection> {
@@ -202,6 +244,31 @@ mod tests {
                 "git status --short"
             );
         }
+    }
+
+    #[test]
+    fn rejects_candidates_carrying_invisible_characters() {
+        let cases = [
+            "git status --short\u{200B}",
+            "git status --short\u{00AD}",
+            "git status --short\u{202E}",
+            "git status --short\u{2066}",
+            "git status --short\u{FEFF}",
+            "git status --short\u{E0041}",
+            "git status --sh\u{200D}ort",
+        ];
+        for response in cases {
+            assert_eq!(
+                validate_candidate("git status", response),
+                Err(AiRejection::InvisibleCharacter),
+                "accepted {response:?}"
+            );
+        }
+
+        assert_eq!(
+            validate_candidate("git commit", "git commit -m 'café Grüße 日本語'").unwrap(),
+            "git commit -m 'café Grüße 日本語'"
+        );
     }
 
     #[test]

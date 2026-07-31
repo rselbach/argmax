@@ -75,9 +75,11 @@ bounded staged diff listed above.
 Requests require at least three non-whitespace characters and are debounced and
 rate-spaced. Buffer changes, cursor movement away from the end, mode changes,
 menu navigation, command execution, provider changes, disablement, and session
-exit invalidate earlier work. A response is accepted only when it is one inert,
-control-free line beginning with the current buffer exactly. It is never
-executed automatically.
+exit invalidate earlier work. A response is accepted only when it is one inert line
+beginning with the current buffer exactly, carrying neither control
+characters nor invisible formatting characters such as bidirectional
+overrides, zero-width marks, or tag characters. It is never executed
+automatically.
 
 ## Local data
 
