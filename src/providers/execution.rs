@@ -977,6 +977,9 @@ struct ResolvedBinary {
 
 impl ResolvedBinary {
     fn from_executable(executable: &PathExecutable) -> Option<Self> {
+        if executable.from_working_directory {
+            return None;
+        }
         let metadata = fs::metadata(&executable.path).ok()?;
         if !metadata.is_file() || !is_executable(&metadata) {
             return None;
@@ -2381,6 +2384,32 @@ mod tests {
         assert_eq!(
             suggestions[0].resulting_line(&query).unwrap(),
             "study --member='/tmp/Troy Barnes' "
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generators_refuse_a_binary_supplied_by_the_working_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        temp_executable(temporary.path(), "git");
+        let index = dynamic_index("git", GeneratorKind::GitTags);
+        let query = CompletionQuery::new("git tr", 6, temporary.path(), 1).unwrap();
+        let mut executor = DynamicExecutor::new();
+        let mut runner = FakeRunner::one(Ok(b"troy\n".to_vec()));
+
+        let suggestions = executor.complete_curated_with(
+            &index,
+            &query,
+            context(OsStr::new(""), None),
+            &cancellation(false),
+            &mut runner,
+        );
+
+        assert!(suggestions.is_empty());
+        assert!(
+            runner.plans.is_empty(),
+            "ran {:?} from the working directory",
+            runner.plans
         );
     }
 

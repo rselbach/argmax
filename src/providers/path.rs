@@ -27,6 +27,14 @@ pub struct PathExecutable {
     pub name: String,
     /// First executable with this name in `PATH` order.
     pub path: PathBuf,
+    /// Whether a relative or empty `PATH` entry placed this in the working
+    /// directory.
+    ///
+    /// Such an executable is whatever the current directory happens to contain.
+    /// It stays offered as a suggestion, because the shell would run it, but
+    /// generators refuse to execute it: they run while the user types, before
+    /// the user has decided to run anything.
+    pub from_working_directory: bool,
 }
 
 /// Lazy executable snapshot invalidated by `PATH`, cwd, or directory metadata.
@@ -234,6 +242,7 @@ fn discover_path_snapshot(path_value: &OsStr, cwd: &Path) -> PathDiscovery {
     'directories: for configured_directory in
         std::env::split_paths(path_value).take(MAX_PATH_DIRECTORIES)
     {
+        let from_working_directory = !configured_directory.is_absolute();
         let directory = resolve_path_directory(configured_directory, cwd);
         let Ok(entries) = fs::read_dir(&directory) else {
             continue;
@@ -264,7 +273,14 @@ fn discover_path_snapshot(path_value: &OsStr, cwd: &Path) -> PathDiscovery {
             if !reserve_executable_bytes(&mut executable_bytes, item_bytes) {
                 break 'directories;
             }
-            executables.insert(name.clone(), PathExecutable { name, path });
+            executables.insert(
+                name.clone(),
+                PathExecutable {
+                    name,
+                    path,
+                    from_working_directory,
+                },
+            );
             if executables.len() >= MAX_EXECUTABLES {
                 break 'directories;
             }
@@ -454,10 +470,12 @@ mod tests {
                 PathExecutable {
                     name: "greendale".into(),
                     path: greendale,
+                    from_working_directory: false,
                 },
                 PathExecutable {
                     name: "troy".into(),
                     path: first_troy,
+                    from_working_directory: false,
                 },
             ]
         );
@@ -474,6 +492,7 @@ mod tests {
             vec![PathExecutable {
                 name: "dean".into(),
                 path: executable,
+                from_working_directory: true,
             }]
         );
     }
@@ -484,10 +503,12 @@ mod tests {
             PathExecutable {
                 name: "Git".into(),
                 path: "/bin/Git".into(),
+                from_working_directory: false,
             },
             PathExecutable {
                 name: "gist".into(),
                 path: "/bin/gist".into(),
+                from_working_directory: false,
             },
         ];
 
@@ -516,6 +537,7 @@ mod tests {
         let executables = vec![PathExecutable {
             name: "Dean;Pelton".into(),
             path,
+            from_working_directory: false,
         }];
         let suggestions = path_suggestions(&executables, "Dean", 0..4, ShellKind::Bash);
         assert_eq!(suggestions[0].edit.replacement, "'Dean;Pelton'");
@@ -537,6 +559,7 @@ mod tests {
             [PathExecutable {
                 name: "troy".into(),
                 path: troy,
+                from_working_directory: false,
             }]
         );
         assert_eq!(cache.scan_count, 1);
@@ -560,6 +583,7 @@ mod tests {
             [PathExecutable {
                 name: "abed".into(),
                 path: abed,
+                from_working_directory: false,
             }]
         );
         assert_eq!(cache.scan_count, 2);
@@ -584,6 +608,7 @@ mod tests {
             [PathExecutable {
                 name: "abed".into(),
                 path: abed,
+                from_working_directory: true,
             }]
         );
 
@@ -600,6 +625,7 @@ mod tests {
             [PathExecutable {
                 name: "dean".into(),
                 path: dean,
+                from_working_directory: false,
             }]
         );
     }
@@ -697,6 +723,7 @@ mod tests {
             [PathExecutable {
                 name: "troy".into(),
                 path: troy,
+                from_working_directory: false,
             }]
         );
         assert_eq!(cache.scan_count, 1);
@@ -746,6 +773,7 @@ mod tests {
             [PathExecutable {
                 name: "troy".into(),
                 path: troy,
+                from_working_directory: false,
             }]
         );
         assert!(matches!(
@@ -773,6 +801,7 @@ mod tests {
             [PathExecutable {
                 name: "abed".into(),
                 path: abed,
+                from_working_directory: false,
             }]
         );
         assert_eq!(cache.scan_count, 2);
