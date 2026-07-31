@@ -19,6 +19,11 @@ use super::{
 
 const CONFIG_FILE_NAME: &str = "config.toml";
 const MAX_BACKUP_COLLISIONS: u8 = 100;
+/// The reload poll runs on the interactive thread, so an unbounded wait on
+/// the cross-process lock would let one stopped or wedged process freeze
+/// keystroke forwarding in every other session.
+const CONFIG_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const CONFIG_LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(2);
 
 /// Platform paths considered for current and legacy configuration discovery.
 #[derive(Clone, Eq, PartialEq)]
@@ -404,6 +409,8 @@ pub enum ConfigStoreError {
     MigrationSourceChanged,
     /// An interrupted or conflicting migration claim requires recovery.
     MigrationRecoveryRequired,
+    /// Another process held the configuration lock past the bounded wait.
+    LockUnavailable,
 }
 
 impl ConfigStoreError {
@@ -441,6 +448,8 @@ impl fmt::Display for ConfigStoreError {
             Self::MigrationRecoveryRequired => {
                 formatter.write_str("an interrupted configuration migration requires recovery")
             }
+            Self::LockUnavailable => formatter
+                .write_str("another process is holding the configuration lock; retrying later"),
         }
     }
 }
@@ -591,9 +600,25 @@ fn acquire_config_lock(path: &Path) -> Result<File, ConfigStoreError> {
         return Err(ConfigStoreError::UnsafeFileType);
     }
     set_file_private(&file)?;
-    rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)
-        .map_err(rustix_error)
-        .map_err(|error| ConfigStoreError::io("lock configuration", error))?;
+    let deadline = std::time::Instant::now() + CONFIG_LOCK_TIMEOUT;
+    loop {
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => break,
+            Err(rustix::io::Errno::INTR) => {}
+            Err(rustix::io::Errno::WOULDBLOCK) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(ConfigStoreError::LockUnavailable);
+                }
+                std::thread::sleep(CONFIG_LOCK_POLL);
+            }
+            Err(error) => {
+                return Err(ConfigStoreError::io(
+                    "lock configuration",
+                    rustix_error(error),
+                ));
+            }
+        }
+    }
 
     let path_metadata = fs::symlink_metadata(&lock_path)
         .map_err(|error| ConfigStoreError::io("reinspect configuration lock", error))?;
@@ -1011,6 +1036,32 @@ mod tests {
     #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn a_held_lock_gives_up_instead_of_blocking_the_session() {
+        let home = tempfile::tempdir().unwrap();
+        let parent = home.path().join("argmax");
+        fs::create_dir(&parent).unwrap();
+        let path = parent.join(CONFIG_FILE_NAME);
+        fs::write(&path, b"[core]\nversion = 2\n").unwrap();
+
+        let holder = acquire_config_lock(&path).unwrap();
+        let started = std::time::Instant::now();
+        let outcome = ConfigStore::new(&path).load();
+        let waited = started.elapsed();
+        drop(holder);
+
+        assert!(
+            matches!(outcome, Err(ConfigStoreError::LockUnavailable)),
+            "{outcome:?}"
+        );
+        assert!(
+            waited < CONFIG_LOCK_TIMEOUT * 4,
+            "waited {waited:?} for a held lock"
+        );
+
+        assert!(ConfigStore::new(&path).load().unwrap().is_some());
     }
 
     fn replace_and_sync(path: &Path, bytes: &[u8]) {

@@ -357,6 +357,8 @@ pub enum ReloadStoreFailure {
     MigrationSourceChanged,
     /// Interrupted migration state needs explicit recovery.
     MigrationRecoveryRequired,
+    /// Another process held the configuration lock past the bounded wait.
+    LockUnavailable,
 }
 
 impl ReloadStoreFailure {
@@ -373,6 +375,7 @@ impl ReloadStoreFailure {
             ConfigStoreError::MigrationDestinationExists => Self::MigrationDestinationExists,
             ConfigStoreError::MigrationSourceChanged => Self::MigrationSourceChanged,
             ConfigStoreError::MigrationRecoveryRequired => Self::MigrationRecoveryRequired,
+            ConfigStoreError::LockUnavailable => Self::LockUnavailable,
         }
     }
 
@@ -429,6 +432,8 @@ impl fmt::Display for ReloadStoreFailure {
             Self::MigrationRecoveryRequired => {
                 formatter.write_str("an interrupted configuration migration needs recovery")
             }
+            Self::LockUnavailable => formatter
+                .write_str("another process is holding the configuration lock; retrying later"),
         }
     }
 }
