@@ -402,7 +402,10 @@ fn run_with_launcher(
                     drop(input.take());
                 }
                 Err(error) => {
-                    terminate_and_reap(&mut child, process_group)?;
+                    // The reason the request failed outranks any failure while
+                    // cleaning up after it: cleanup errors describe the
+                    // response to the problem, not the problem itself.
+                    let _ = terminate_and_reap(&mut child, process_group);
                     return Err(LocalProcessError::Launcher(error.kind()));
                 }
             }
@@ -412,7 +415,7 @@ fn run_with_launcher(
                 Ok(DrainState::Pending) => {}
                 Ok(DrainState::Eof) => stdout_eof = true,
                 Err(error) => {
-                    terminate_and_reap(&mut child, process_group)?;
+                    let _ = terminate_and_reap(&mut child, process_group);
                     return Err(error);
                 }
             }
@@ -421,7 +424,7 @@ fn run_with_launcher(
             Ok(exited) => exited,
             Err(error) => {
                 let kind = error.kind();
-                terminate_and_reap(&mut child, process_group)?;
+                let _ = terminate_and_reap(&mut child, process_group);
                 return Err(LocalProcessError::Wait(kind));
             }
         };
