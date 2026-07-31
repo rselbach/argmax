@@ -850,6 +850,10 @@ impl CrashReportStore {
     /// are listed as removed, while symlinks, non-files, and removal failures
     /// are listed as failures for explicit CLI reporting.
     ///
+    /// A directory holding more entries than one bounded scan can visit is
+    /// swept in repeated passes, so removal is never blocked by the number of
+    /// reports that accumulated.
+    ///
     /// # Errors
     ///
     /// Returns an error when the bounded directory scan itself cannot finish.
@@ -866,9 +870,28 @@ impl CrashReportStore {
 
     #[cfg(unix)]
     fn clear_unix(&self) -> Result<CrashClearOutcome, DiagnosticError> {
-        let directory_fd = self.directory_fd.raw();
         let mut outcome = CrashClearOutcome::default();
-        for name in self.owned_report_names_unix()? {
+        loop {
+            let scan = self.scan_owned_report_names_unix()?;
+            let removed_before = outcome.removed.len();
+            self.clear_scanned_unix(scan.names, &mut outcome)?;
+            // A directory holding more entries than one bounded scan can visit
+            // is swept in passes. Removal is what makes the next pass smaller,
+            // so a pass that removes nothing cannot be improved by repeating.
+            if !scan.truncated || outcome.removed.len() == removed_before {
+                return Ok(outcome);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn clear_scanned_unix(
+        &self,
+        names: Vec<OsString>,
+        outcome: &mut CrashClearOutcome,
+    ) -> Result<(), DiagnosticError> {
+        let directory_fd = self.directory_fd.raw();
+        for name in names {
             let path = self.directory.join(&name);
             match inspect_report_entry(directory_fd, &name) {
                 Ok(EntryInspection::Regular(_file, stat)) => {
@@ -906,7 +929,7 @@ impl CrashReportStore {
             }
         }
         sync_directory(directory_fd)?;
-        Ok(outcome)
+        Ok(())
     }
 
     #[cfg(not(unix))]
@@ -936,13 +959,24 @@ impl CrashReportStore {
 
     #[cfg(unix)]
     fn owned_report_names_unix(&self) -> Result<Vec<OsString>, DiagnosticError> {
+        let scan = self.scan_owned_report_names_unix()?;
+        if scan.truncated {
+            return Err(DiagnosticError::TooManyDirectoryEntries {
+                limit: MAX_CRASH_DIRECTORY_ENTRIES,
+            });
+        }
+        Ok(scan.names)
+    }
+
+    #[cfg(unix)]
+    fn scan_owned_report_names_unix(&self) -> Result<OwnedReportScan, DiagnosticError> {
         secure_owned_directory_descriptor(&self.directory, &self.directory_fd)?;
         let mut names = Vec::new();
+        let mut truncated = false;
         for (index, entry) in fs::read_dir(&self.directory)?.enumerate() {
             if index >= MAX_CRASH_DIRECTORY_ENTRIES {
-                return Err(DiagnosticError::TooManyDirectoryEntries {
-                    limit: MAX_CRASH_DIRECTORY_ENTRIES,
-                });
+                truncated = true;
+                break;
             }
             let name = entry?.file_name();
             if parse_owned_crash_name(&name).is_some() {
@@ -950,7 +984,7 @@ impl CrashReportStore {
             }
         }
         secure_owned_directory_descriptor(&self.directory, &self.directory_fd)?;
-        Ok(names)
+        Ok(OwnedReportScan { names, truncated })
     }
 
     #[cfg(not(unix))]
@@ -979,6 +1013,13 @@ impl fmt::Debug for CrashReportStore {
             .field("directory_bytes", &path_bytes(&self.directory))
             .finish_non_exhaustive()
     }
+}
+
+/// One bounded pass over owned crash-report names.
+#[cfg(unix)]
+struct OwnedReportScan {
+    names: Vec<OsString>,
+    truncated: bool,
 }
 
 /// Result of clearing known argmax crash reports.
@@ -3052,6 +3093,27 @@ mod tests {
         assert!(outcome.failures.is_empty());
         assert!(unrelated.exists());
         assert!(other.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clear_sweeps_more_reports_than_one_bounded_scan_visits() {
+        let directory = TestDirectory::new();
+        let store = CrashReportStore::open(directory.0.clone()).unwrap();
+        let total = MAX_CRASH_DIRECTORY_ENTRIES + 64;
+        for index in 0..total {
+            fs::write(store.directory.join(format!("crash-1-1-{index}.log")), b"x").unwrap();
+        }
+        assert!(matches!(
+            store.newest(),
+            Err(DiagnosticError::TooManyDirectoryEntries { .. })
+        ));
+
+        let outcome = store.clear().unwrap();
+
+        assert_eq!(outcome.removed.len(), total);
+        assert!(outcome.failures.is_empty());
+        assert_eq!(fs::read_dir(&store.directory).unwrap().count(), 0);
     }
 
     #[test]
