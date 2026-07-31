@@ -37,6 +37,12 @@ pub const MAX_LEARNING_SKELETON_BYTES: usize = 4 * 1024;
 pub const MAX_LEARNING_CWD_BYTES: usize = 16 * 1024;
 /// Maximum aggregate rows loaded into memory per table.
 pub const MAX_LEARNING_AGGREGATES: usize = 250_000;
+/// Maximum retained raw learning events.
+///
+/// Aggregates carry the ranking signal; the event rows exist for future
+/// analysis and would otherwise grow for the life of the installation until
+/// the database hit its page ceiling and every write failed permanently.
+pub const MAX_LEARNING_EVENTS: i64 = 50_000;
 /// Maximum aggregate key bytes loaded into memory per table.
 pub const MAX_LEARNING_AGGREGATE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -302,6 +308,16 @@ impl LearningStore {
                 ],
             )
             .map_err(|error| database_error("record learning event", error))?;
+
+        // Identifiers increase monotonically, so dropping everything below the
+        // newest identifier minus the retention count keeps exactly the most
+        // recent events using the primary-key index alone.
+        transaction
+            .execute(
+                "DELETE FROM learning_events WHERE id <= (SELECT MAX(id) FROM learning_events) - ?1",
+                params![MAX_LEARNING_EVENTS],
+            )
+            .map_err(|error| database_error("prune learning events", error))?;
 
         update_aggregates(&transaction, event, &cwd, successful, timestamp)?;
         verify_database_identity(self.path(), &anchor)?;
@@ -603,10 +619,12 @@ fn load_command_aggregates(
         )",
         "stored command aggregate",
     )?;
-    let limit = i64::try_from(MAX_LEARNING_AGGREGATES + 1).expect("aggregate limit fits i64");
+    // Ordering by usefulness rather than by key means an oversized table
+    // degrades to its most relevant rows instead of losing learning entirely.
+    let limit = i64::try_from(MAX_LEARNING_AGGREGATES).expect("aggregate limit fits i64");
     let mut statement = connection
         .prepare(
-            "SELECT scope, cwd, skeleton, successful_count, last_used_at FROM command_aggregates ORDER BY scope, cwd, skeleton LIMIT ?1",
+            "SELECT scope, cwd, skeleton, successful_count, last_used_at FROM command_aggregates ORDER BY last_used_at DESC, successful_count DESC LIMIT ?1",
         )
         .map_err(|error| database_error("prepare command aggregates", error))?;
     let rows = statement
@@ -625,10 +643,10 @@ fn load_command_aggregates(
     for row in rows {
         let (scope, cwd, skeleton, successful_count, last_used_at) =
             row.map_err(|error| database_error("decode command aggregate", error))?;
-        if aggregates.len() == MAX_LEARNING_AGGREGATES {
-            return Err(LearningStoreError::TooManyAggregates);
-        }
-        retained_bytes = add_aggregate_bytes(retained_bytes, cwd.len() + skeleton.len())?;
+        let Some(total) = added_aggregate_bytes(retained_bytes, cwd.len() + skeleton.len()) else {
+            break;
+        };
+        retained_bytes = total;
         validate_skeleton(&skeleton, "stored skeleton")?;
         let key = CommandAggregateKey {
             scope: decode_scope(scope, cwd)?,
@@ -669,10 +687,10 @@ fn load_transition_aggregates(
         )",
         "stored transition aggregate",
     )?;
-    let limit = i64::try_from(MAX_LEARNING_AGGREGATES + 1).expect("aggregate limit fits i64");
+    let limit = i64::try_from(MAX_LEARNING_AGGREGATES).expect("aggregate limit fits i64");
     let mut statement = connection
         .prepare(
-            "SELECT scope, cwd, prior_skeleton, current_skeleton, successful_count, last_used_at FROM transition_aggregates ORDER BY scope, cwd, prior_skeleton, current_skeleton LIMIT ?1",
+            "SELECT scope, cwd, prior_skeleton, current_skeleton, successful_count, last_used_at FROM transition_aggregates ORDER BY last_used_at DESC, successful_count DESC LIMIT ?1",
         )
         .map_err(|error| database_error("prepare transition aggregates", error))?;
     let rows = statement
@@ -692,13 +710,13 @@ fn load_transition_aggregates(
     for row in rows {
         let (scope, cwd, prior_skeleton, current_skeleton, successful_count, last_used_at) =
             row.map_err(|error| database_error("decode transition aggregate", error))?;
-        if aggregates.len() == MAX_LEARNING_AGGREGATES {
-            return Err(LearningStoreError::TooManyAggregates);
-        }
-        retained_bytes = add_aggregate_bytes(
+        let Some(total) = added_aggregate_bytes(
             retained_bytes,
             cwd.len() + prior_skeleton.len() + current_skeleton.len(),
-        )?;
+        ) else {
+            break;
+        };
+        retained_bytes = total;
         validate_skeleton(&prior_skeleton, "stored prior skeleton")?;
         validate_skeleton(&current_skeleton, "stored current skeleton")?;
         let key = TransitionAggregateKey {
@@ -721,14 +739,11 @@ fn decode_nonnegative(value: i64, field: &'static str) -> Result<u64, LearningSt
     u64::try_from(value).map_err(|_| LearningStoreError::InvalidInput(field))
 }
 
-fn add_aggregate_bytes(current: usize, additional: usize) -> Result<usize, LearningStoreError> {
-    let total = current
+/// Returns the new retained total, or none once the byte budget is spent.
+fn added_aggregate_bytes(current: usize, additional: usize) -> Option<usize> {
+    current
         .checked_add(additional)
-        .ok_or(LearningStoreError::TooMuchAggregateData)?;
-    if total > MAX_LEARNING_AGGREGATE_BYTES {
-        return Err(LearningStoreError::TooMuchAggregateData);
-    }
-    Ok(total)
+        .filter(|total| *total <= MAX_LEARNING_AGGREGATE_BYTES)
 }
 
 fn reject_invalid_aggregate_rows(
@@ -982,7 +997,8 @@ fn merge_imported_command(
     if aggregates.len() == MAX_LEARNING_AGGREGATES {
         return Err(LearningStoreError::TooManyAggregates);
     }
-    let retained_bytes = add_aggregate_bytes(retained_bytes, key.1.len() + key.2.len())?;
+    let retained_bytes = added_aggregate_bytes(retained_bytes, key.1.len() + key.2.len())
+        .ok_or(LearningStoreError::TooMuchAggregateData)?;
     aggregates.insert(
         key,
         ImportedAggregate {
@@ -1100,7 +1116,8 @@ fn merge_imported_transition(
         return Err(LearningStoreError::TooManyAggregates);
     }
     let retained_bytes =
-        add_aggregate_bytes(retained_bytes, key.1.len() + key.2.len() + key.3.len())?;
+        added_aggregate_bytes(retained_bytes, key.1.len() + key.2.len() + key.3.len())
+            .ok_or(LearningStoreError::TooMuchAggregateData)?;
     aggregates.insert(
         key,
         ImportedAggregate {
@@ -1683,6 +1700,46 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert_eq!(commands, ["git status --short", "git status --porcelain"]);
+    }
+
+    #[test]
+    fn retained_events_stay_bounded_while_aggregates_keep_every_success() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = LearningStore::new(temporary.path().join("argmax/learning.sqlite3"));
+        store
+            .record(&event("git status --short", 1, CommandOutcome::Success))
+            .unwrap();
+        let connection = Connection::open(store.path()).unwrap();
+        // Stand in for a long-lived database whose events already reach the
+        // retention bound; the next write must prune rather than grow.
+        connection
+            .execute(
+                "INSERT INTO learning_events (id, command, skeleton, cwd, observed_at, outcome)
+                 VALUES (?1, 'git status --old', 'git status', X'2f', 2, 1)",
+                params![MAX_LEARNING_EVENTS + 5],
+            )
+            .unwrap();
+
+        store
+            .record(&event("git status --new", 3, CommandOutcome::Success))
+            .unwrap();
+
+        let retained: i64 = connection
+            .query_row("SELECT COUNT(*) FROM learning_events", [], |row| row.get(0))
+            .unwrap();
+        assert!(
+            retained <= MAX_LEARNING_EVENTS,
+            "retained {retained} events"
+        );
+        let newest: String = connection
+            .query_row(
+                "SELECT command FROM learning_events ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(newest, "git status --new");
+        assert_eq!(local_command(&store.load().unwrap()).successful_count, 2);
     }
 
     #[test]
