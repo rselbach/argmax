@@ -37,6 +37,8 @@ pub const MAX_LEARNING_SKELETON_BYTES: usize = 4 * 1024;
 pub const MAX_LEARNING_CWD_BYTES: usize = 16 * 1024;
 /// Maximum aggregate rows loaded into memory per table.
 pub const MAX_LEARNING_AGGREGATES: usize = 250_000;
+/// Maximum learning events removed by one write's pruning pass.
+const PRUNE_BATCH_ROWS: i64 = 1_000;
 /// Maximum retained raw learning events.
 ///
 /// Aggregates carry the ranking signal; the event rows exist for future
@@ -76,6 +78,9 @@ CREATE TABLE IF NOT EXISTS command_aggregates (
     PRIMARY KEY (scope, cwd, skeleton)
 ) WITHOUT ROWID;
 
+CREATE INDEX IF NOT EXISTS command_aggregates_recency
+    ON command_aggregates(last_used_at DESC, successful_count DESC);
+
 CREATE TABLE IF NOT EXISTS transition_aggregates (
     scope INTEGER NOT NULL CHECK (scope IN (0, 1)),
     cwd BLOB NOT NULL,
@@ -85,6 +90,9 @@ CREATE TABLE IF NOT EXISTS transition_aggregates (
     last_used_at INTEGER NOT NULL CHECK (last_used_at >= 0),
     PRIMARY KEY (scope, cwd, prior_skeleton, current_skeleton)
 ) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS transition_aggregates_recency
+    ON transition_aggregates(last_used_at DESC, successful_count DESC);
 ";
 
 const UPSERT_COMMAND: &str = r"
@@ -309,13 +317,20 @@ impl LearningStore {
             )
             .map_err(|error| database_error("record learning event", error))?;
 
-        // Identifiers increase monotonically, so dropping everything below the
-        // newest identifier minus the retention count keeps exactly the most
-        // recent events using the primary-key index alone.
+        // Identifiers increase monotonically, so dropping identifiers below
+        // the newest minus the retention count keeps exactly the most recent
+        // events using the primary-key index alone. The per-write batch cap
+        // keeps a pre-retention backlog from being deleted inside one
+        // write-locked transaction; the backlog drains across commands.
         transaction
             .execute(
-                "DELETE FROM learning_events WHERE id <= (SELECT MAX(id) FROM learning_events) - ?1",
-                params![MAX_LEARNING_EVENTS],
+                "DELETE FROM learning_events WHERE id IN (
+                    SELECT id FROM learning_events
+                    WHERE id <= (SELECT MAX(id) FROM learning_events) - ?1
+                    ORDER BY id
+                    LIMIT ?2
+                )",
+                params![MAX_LEARNING_EVENTS, PRUNE_BATCH_ROWS],
             )
             .map_err(|error| database_error("prune learning events", error))?;
 
@@ -624,7 +639,7 @@ fn load_command_aggregates(
     let limit = i64::try_from(MAX_LEARNING_AGGREGATES).expect("aggregate limit fits i64");
     let mut statement = connection
         .prepare(
-            "SELECT scope, cwd, skeleton, successful_count, last_used_at FROM command_aggregates ORDER BY last_used_at DESC, successful_count DESC LIMIT ?1",
+            "SELECT scope, cwd, skeleton, successful_count, last_used_at FROM command_aggregates ORDER BY last_used_at DESC, successful_count DESC, scope, cwd, skeleton LIMIT ?1",
         )
         .map_err(|error| database_error("prepare command aggregates", error))?;
     let rows = statement
@@ -690,7 +705,7 @@ fn load_transition_aggregates(
     let limit = i64::try_from(MAX_LEARNING_AGGREGATES).expect("aggregate limit fits i64");
     let mut statement = connection
         .prepare(
-            "SELECT scope, cwd, prior_skeleton, current_skeleton, successful_count, last_used_at FROM transition_aggregates ORDER BY last_used_at DESC, successful_count DESC LIMIT ?1",
+            "SELECT scope, cwd, prior_skeleton, current_skeleton, successful_count, last_used_at FROM transition_aggregates ORDER BY last_used_at DESC, successful_count DESC, scope, cwd, prior_skeleton, current_skeleton LIMIT ?1",
         )
         .map_err(|error| database_error("prepare transition aggregates", error))?;
     let rows = statement
