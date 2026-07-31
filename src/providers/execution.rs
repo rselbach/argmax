@@ -105,6 +105,12 @@ pub struct GeneratorExecutionContext<'a> {
     pub include_hidden_files: bool,
     /// Git branch filtering settings.
     pub git: GitGeneratorSettings,
+    /// Whether an uncurated `PATH` executable may be run to infer completions.
+    ///
+    /// Inference runs the typed program itself. A program that does not
+    /// implement the Cobra convention receives an ordinary invocation, so this
+    /// stays disabled unless the user opts in.
+    pub infer_completions: bool,
 }
 
 impl std::fmt::Debug for GeneratorExecutionContext<'_> {
@@ -140,6 +146,7 @@ impl<'a> GeneratorExecutionContext<'a> {
                 filter_active_branch: true,
                 deduplicate_branches: true,
             },
+            infer_completions: false,
         }
     }
 }
@@ -636,7 +643,7 @@ impl DynamicExecutor {
         cancellation: &CancellationToken,
         runner: &mut R,
     ) -> Option<CobraExecution> {
-        if cancellation.is_cancelled() || !query.cwd.is_absolute() {
+        if !context.infer_completions || cancellation.is_cancelled() || !query.cwd.is_absolute() {
             return None;
         }
         let line = tokenize(&query.line, query.cursor).ok()?;
@@ -1717,6 +1724,7 @@ mod tests {
     fn context<'a>(path: &'a OsStr, home: Option<&'a Path>) -> GeneratorExecutionContext<'a> {
         GeneratorExecutionContext {
             home_directory: home,
+            infer_completions: true,
             ..GeneratorExecutionContext::new(ShellKind::Bash, path)
         }
     }
@@ -2374,6 +2382,44 @@ mod tests {
             suggestions[0].resulting_line(&query).unwrap(),
             "study --member='/tmp/Troy Barnes' "
         );
+    }
+
+    #[test]
+    fn inference_runs_no_process_until_the_user_opts_in() {
+        let temporary = tempfile::tempdir().unwrap();
+        temp_executable(temporary.path(), "communityctl");
+        let index = SpecIndex::new([]).unwrap();
+        let line = "communityctl tr";
+        let query = CompletionQuery::new(line, line.len(), temporary.path(), 1).unwrap();
+        let disabled =
+            GeneratorExecutionContext::new(ShellKind::Bash, temporary.path().as_os_str());
+        assert!(!disabled.infer_completions);
+
+        let mut executor = DynamicExecutor::new();
+        let mut runner = FakeRunner::one(Ok(b"troy\tstudent\n:2\n".to_vec()));
+        assert!(
+            executor
+                .complete_cobra_with(&index, &query, disabled, &cancellation(false), &mut runner)
+                .is_none()
+        );
+        assert!(
+            runner.plans.is_empty(),
+            "inference ran {:?} while disabled",
+            runner.plans
+        );
+
+        assert!(
+            executor
+                .complete_cobra_with(
+                    &index,
+                    &query,
+                    context(temporary.path().as_os_str(), None),
+                    &cancellation(false),
+                    &mut runner,
+                )
+                .is_some()
+        );
+        assert_eq!(runner.plans.len(), 1);
     }
 
     #[test]

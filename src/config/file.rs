@@ -38,6 +38,10 @@ shell = ""
 mode = "last"
 debug = false
 expand-alias = true
+# Runs an uncurated PATH program as "<program> __complete ..." while typing to
+# infer its completions. Programs that are not Cobra commands see an ordinary
+# invocation, so enable this only where every program on PATH is trusted.
+infer-completions = false
 
 [ui]
 style = "modern"
@@ -487,6 +491,9 @@ fn apply_core(raw: &RawCore, settings: &mut Settings, problems: &mut Vec<ConfigP
     if let Some(expand_alias) = raw.expand_alias {
         settings.core.expand_alias = expand_alias;
     }
+    if let Some(infer_completions) = raw.infer_completions {
+        settings.core.infer_completions = infer_completions;
+    }
 }
 
 fn apply_ui(raw: &RawUi, settings: &mut Settings, problems: &mut Vec<ConfigProblem>) {
@@ -712,6 +719,8 @@ struct RawCore {
     debug: Option<bool>,
     #[serde(alias = "expand_alias")]
     expand_alias: Option<bool>,
+    #[serde(alias = "infer_completions")]
+    infer_completions: Option<bool>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
 }
@@ -831,6 +840,7 @@ impl<'a> OutputConfig<'a> {
                 },
                 debug: settings.core.debug,
                 expand_alias: settings.core.expand_alias,
+                infer_completions: settings.core.infer_completions,
             },
             ui: OutputUi {
                 style: match settings.ui.style {
@@ -888,6 +898,7 @@ struct OutputCore<'a> {
     mode: &'a str,
     debug: bool,
     expand_alias: bool,
+    infer_completions: bool,
 }
 
 #[derive(Serialize)]

@@ -28,6 +28,7 @@ The current schema is version 2. `argmax config init` writes these values:
 | `core.mode` | `"last"` | Restore the last selection, or force `spec`/`history` at session start. |
 | `core.debug` | `false` | Private diagnostic logging. |
 | `core.expand-alias` | `true` | Expand an exact root alias on a typed space. |
+| `core.infer-completions` | `false` | Run an uncurated `PATH` program to infer its completions. See [inferred completions](#inferred-completions). |
 | `ui.style` | `"modern"` | `modern` or `classic`. |
 | `ui.nerd-fonts` | `true` | Permit Nerd Font icon glyphs. |
 | `ui.hidden-files` | `false` | Include dot-prefixed filesystem results. |
@@ -66,6 +67,22 @@ debug logging reports the missing field; local completion continues normally.
 When `api_key_env` is configured, that environment variable or the compatibility
 `api_key` fallback must contain the credential. Providers that do not require
 authentication may omit both fields.
+
+## Inferred completions
+
+argmax ships curated definitions for common commands. For a command it does not
+recognize, it can instead ask the program itself by running
+`<program> __complete <arguments>`, the convention Cobra-based tools follow.
+
+This runs the typed program while you type, before you press Enter, and argmax
+cannot know in advance whether an unrecognized program implements that
+convention. A program that does not implement it receives an ordinary
+invocation with unfamiliar arguments and may act on it. `core.infer-completions`
+is therefore `false` by default; enable it only where every executable on `PATH`
+is trusted.
+
+Curated definitions, filesystem candidates, history, and AI completion are
+unaffected by this setting.
 
 ## Environment overrides
 

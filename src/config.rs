@@ -195,6 +195,11 @@ pub struct Core {
     pub debug: bool,
     /// Whether an exact root alias expands when the user types a space.
     pub expand_alias: bool,
+    /// Whether uncurated `PATH` executables may be run to infer completions.
+    ///
+    /// Disabled by default: inference runs the typed program itself, so a
+    /// program that is not a Cobra command sees an ordinary invocation.
+    pub infer_completions: bool,
 }
 
 impl Default for Core {
@@ -205,6 +210,7 @@ impl Default for Core {
             mode: Mode::Last,
             debug: false,
             expand_alias: true,
+            infer_completions: false,
         }
     }
 }
@@ -810,6 +816,7 @@ mod tests {
         assert_eq!(settings.core.mode, Mode::Last);
         assert!(!settings.core.debug);
         assert!(settings.core.expand_alias);
+        assert!(!settings.core.infer_completions);
         assert_eq!(settings.ui.style, Style::Modern);
         assert!(settings.ui.nerd_fonts);
         assert!(!settings.ui.hidden_files);

@@ -1182,6 +1182,7 @@ fn execution_context<'a>(
             filter_active_branch: settings.git.filter_active_branch,
             deduplicate_branches: settings.git.deduplicate_branches,
         },
+        infer_completions: settings.core.infer_completions,
     }
 }
 
@@ -1466,6 +1467,16 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         panic!("worker did not process {count} events");
+    }
+
+    #[test]
+    fn execution_context_carries_the_inference_opt_in() {
+        let options =
+            LocalCompletionOptions::new(ShellKind::Bash, Settings::default(), OsString::new());
+        let mut settings = Settings::default();
+        assert!(!execution_context(&options, &settings).infer_completions);
+        settings.core.infer_completions = true;
+        assert!(execution_context(&options, &settings).infer_completions);
     }
 
     #[test]
