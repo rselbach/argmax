@@ -12,6 +12,7 @@ use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use directories::{BaseDirs, ProjectDirs};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -25,6 +26,9 @@ pub const CURRENT_STATE_VERSION: u32 = 2;
 pub const MAX_STATE_BYTES: usize = 256 * 1024;
 
 const STATE_FILE_NAME: &str = "state.toml";
+/// Maximum wait for the cross-process runtime state lock.
+const STATE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+const STATE_LOCK_POLL: Duration = Duration::from_millis(2);
 const MAX_BACKUP_COLLISIONS: u8 = 100;
 
 /// Last interactive completion mode selected by the user.
@@ -570,6 +574,8 @@ pub enum StateStoreError {
     MigrationSourceChanged,
     /// The process-wide lock pathname no longer names the locked inode.
     LockReplaced,
+    /// Another process held the runtime state lock past the bounded wait.
+    LockUnavailable,
     /// Filesystem failure classified without retaining a path.
     Io {
         operation: &'static str,
@@ -618,6 +624,9 @@ impl fmt::Display for StateStoreError {
             }
             Self::LockReplaced => {
                 formatter.write_str("runtime state lock was replaced; write was preserved")
+            }
+            Self::LockUnavailable => {
+                formatter.write_str("another process held the runtime state lock")
             }
             Self::Io { operation, kind } => write!(formatter, "{operation}: {kind:?}"),
         }
@@ -1311,9 +1320,28 @@ fn acquire_lock(path: &Path) -> Result<StateLock, StateStoreError> {
         .map_err(|error| StateStoreError::io("open runtime state lock", error))?;
     validate_open_file(&file)?;
     set_file_private(&file)?;
-    rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)
-        .map_err(rustix_error)
-        .map_err(|error| StateStoreError::io("lock runtime state", error))?;
+    // Session startup reads this store before the PTY exists, so waiting
+    // without a bound would let one stalled process hold every new session at
+    // the door. The wait is bounded and the caller falls back to defaults.
+    let deadline = Instant::now() + STATE_LOCK_TIMEOUT;
+    loop {
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => break,
+            Err(rustix::io::Errno::INTR) => {}
+            Err(rustix::io::Errno::WOULDBLOCK) => {
+                if Instant::now() >= deadline {
+                    return Err(StateStoreError::LockUnavailable);
+                }
+                std::thread::sleep(STATE_LOCK_POLL);
+            }
+            Err(error) => {
+                return Err(StateStoreError::io(
+                    "lock runtime state",
+                    rustix_error(error),
+                ));
+            }
+        }
+    }
 
     let opened = file
         .metadata()
@@ -1777,5 +1805,40 @@ seen-version = "v1.2.3"
         assert!(!debug.contains("Troy-secret"));
         assert!(!debug.contains("Annie-secret"));
         assert!(!debug.contains("private-token"));
+    }
+
+    #[test]
+    fn a_lock_held_by_another_process_gives_up_instead_of_blocking_startup() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = store(temporary.path());
+        store.store_mode(LastMode::Spec).unwrap();
+
+        let lock_path = sidecar_path(store.path(), ".lock").unwrap();
+        let holder = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        rustix::fs::flock(
+            &holder,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .unwrap();
+
+        let started = Instant::now();
+        let outcome = store.load();
+        let waited = started.elapsed();
+
+        assert!(
+            matches!(outcome, Err(StateStoreError::LockUnavailable)),
+            "{outcome:?}"
+        );
+        assert!(
+            waited < STATE_LOCK_TIMEOUT * 4,
+            "waited {waited:?} for a held lock"
+        );
+
+        rustix::fs::flock(&holder, rustix::fs::FlockOperation::Unlock).unwrap();
+        assert!(store.load().is_ok());
     }
 }
