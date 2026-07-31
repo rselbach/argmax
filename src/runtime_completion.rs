@@ -993,11 +993,14 @@ impl Worker {
             now: unix_seconds_now(),
             prior_skeleton: self.prior_skeleton.as_deref(),
         };
+        // The query's active token is the same for every candidate, so it is
+        // tokenized once per batch rather than once per suggestion.
+        let active_token = active_query_token(query);
         let candidates = merged
             .into_iter()
             .map(|suggestion| {
                 let skeleton = suggestion_skeleton(self.index, query, &suggestion);
-                let quality = match_quality(query, &suggestion);
+                let quality = match_quality(&active_token, &suggestion);
                 LocalRankingCandidate::new(suggestion, skeleton, quality)
             })
             .collect::<Vec<_>>();
@@ -1303,22 +1306,25 @@ fn valid_skeleton(skeleton: &str) -> bool {
             })
 }
 
-fn match_quality(query: &CompletionQuery, suggestion: &Suggestion) -> f64 {
-    let active = tokenize(&query.line, query.cursor)
+fn active_query_token(query: &CompletionQuery) -> String {
+    tokenize(&query.line, query.cursor)
         .ok()
         .map_or_else(String::new, |line| {
             line.active_token().cooked.to_lowercase()
-        });
+        })
+}
+
+fn match_quality(active: &str, suggestion: &Suggestion) -> f64 {
     let display = suggestion.display().to_lowercase();
     if active.is_empty() {
         0.5
     } else if display == active {
         1.0
-    } else if display.starts_with(&active) {
+    } else if display.starts_with(active) {
         0.9
-    } else if display.contains(&active) {
+    } else if display.contains(active) {
         0.65
-    } else if is_subsequence(&active, &display) {
+    } else if is_subsequence(active, &display) {
         0.4
     } else {
         0.2

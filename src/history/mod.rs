@@ -135,7 +135,7 @@ pub fn merge_history(persistent: &[HistoryEntry], session: &[HistoryEntry]) -> V
     let mut merged = Vec::with_capacity(persistent.len() + session.len());
 
     for entry in session.iter().rev().chain(persistent.iter().rev()) {
-        if entry.command.trim().is_empty() || !seen.insert(entry.command.clone()) {
+        if entry.command.trim().is_empty() || !seen.insert(entry.command.as_str()) {
             continue;
         }
         merged.push(entry.clone());
@@ -166,7 +166,7 @@ pub fn search_history(
             .into_iter()
             .take(LIMIT)
             .map(|(_, entry)| HistoryMatch {
-                entry,
+                entry: entry.clone(),
                 tier: HistoryTier::Prefix,
                 fuzzy_score: 0,
             })
@@ -222,7 +222,7 @@ pub fn search_history_with_specs(
             .into_iter()
             .take(LIMIT)
             .map(|(_, entry)| HistoryMatch {
-                entry,
+                entry: entry.clone(),
                 tier: HistoryTier::Prefix,
                 fuzzy_score: 0,
             })
@@ -419,16 +419,21 @@ fn decode_fish_command(encoded: &str) -> String {
     decoded
 }
 
-fn unique_newest(entries: &[HistoryEntry]) -> Vec<(usize, HistoryEntry)> {
+/// Borrows the newest occurrence of each distinct command.
+///
+/// Entries are borrowed rather than cloned: this runs on every keystroke over
+/// the whole history, while only the bounded set of ranked matches is ever
+/// returned to the caller.
+fn unique_newest(entries: &[HistoryEntry]) -> Vec<(usize, &HistoryEntry)> {
     let mut seen = HashSet::new();
     entries
         .iter()
         .enumerate()
         .filter_map(|(recency, entry)| {
-            if entry.command.trim().is_empty() || !seen.insert(entry.command.clone()) {
+            if entry.command.trim().is_empty() || !seen.insert(entry.command.as_str()) {
                 return None;
             }
-            Some((recency, entry.clone()))
+            Some((recency, entry))
         })
         .collect()
 }
@@ -471,7 +476,7 @@ struct SpecTraversal<'a> {
 }
 
 fn collect_spec_matches(
-    entries: &[(usize, HistoryEntry)],
+    entries: &[(usize, &HistoryEntry)],
     queries: &[SpecQueryIntent],
     aliases: &[(&str, &str)],
     specs: &SpecIndex,
@@ -491,7 +496,7 @@ fn collect_spec_matches(
                 })
                 .min_by(compare_quality)?;
             Some(RankedMatch {
-                entry: entry.clone(),
+                entry: (*entry).clone(),
                 quality,
                 recency: *recency,
             })
@@ -500,7 +505,7 @@ fn collect_spec_matches(
 }
 
 fn collect_tokenized_line_matches(
-    entries: &[(usize, HistoryEntry)],
+    entries: &[(usize, &HistoryEntry)],
     query_alternatives: &[String],
     aliases: &[(&str, &str)],
 ) -> Vec<RankedMatch> {
@@ -517,7 +522,7 @@ fn collect_tokenized_line_matches(
                 })
                 .min_by(compare_quality)?;
             Some(RankedMatch {
-                entry: entry.clone(),
+                entry: (*entry).clone(),
                 quality,
                 recency: *recency,
             })
@@ -742,7 +747,7 @@ const fn is_history_whitespace(character: char) -> bool {
 }
 
 fn collect_matches(
-    entries: &[(usize, HistoryEntry)],
+    entries: &[(usize, &HistoryEntry)],
     query_alternatives: &[String],
     aliases: &[(&str, &str)],
     structured: bool,
@@ -764,7 +769,7 @@ fn collect_matches(
                 })
                 .min_by(compare_quality)?;
             Some(RankedMatch {
-                entry: entry.clone(),
+                entry: (*entry).clone(),
                 quality,
                 recency: *recency,
             })

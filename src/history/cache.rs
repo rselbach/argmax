@@ -140,8 +140,7 @@ impl HistoryCache {
             .cached
             .as_ref()
             .map_or(&[][..], |cached| cached.entries.as_slice());
-        let session = self.session.iter().cloned().collect::<Vec<_>>();
-        merge_history(persistent, &session)
+        merge_history(persistent, self.session.make_contiguous())
     }
 
     /// Forgets the persistent snapshot so the next request reloads it.
