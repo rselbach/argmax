@@ -101,6 +101,8 @@ pub struct GeneratorExecutionContext<'a> {
     pub home_directory: Option<&'a Path>,
     /// Structured environment-variable names; values are neither accepted nor retained.
     pub environment_names: &'a [String],
+    /// Provider credential variables withheld from generator subprocesses.
+    pub credential_environment: &'a [OsString],
     /// Whether filesystem completion includes dot-prefixed entries.
     pub include_hidden_files: bool,
     /// Git branch filtering settings.
@@ -141,6 +143,7 @@ impl<'a> GeneratorExecutionContext<'a> {
             path,
             home_directory: None,
             environment_names: &[],
+            credential_environment: &[],
             include_hidden_files: false,
             git: GitGeneratorSettings {
                 filter_active_branch: true,
@@ -683,6 +686,7 @@ impl DynamicExecutor {
                 output_limit: MAX_COBRA_OUTPUT_BYTES,
                 path: context.path.to_os_string(),
                 home: context.home_directory.map(Path::to_path_buf),
+                credential_environment: context.credential_environment.to_vec(),
             };
             let output = runner.run(&plan).ok()?;
             if cancellation.is_cancelled() {
@@ -1039,6 +1043,7 @@ impl PreparedGenerator {
                     output_limit: MAX_DYNAMIC_OUTPUT_BYTES,
                     path: context.path.to_os_string(),
                     home: context.home_directory.map(Path::to_path_buf),
+                    credential_environment: context.credential_environment.to_vec(),
                 };
                 let output = runner.run(&plan)?;
                 let ProcessParser::GitBranches(settings) = parser else {
@@ -1063,6 +1068,7 @@ impl PreparedGenerator {
                     output_limit: MAX_DYNAMIC_OUTPUT_BYTES,
                     path: context.path.to_os_string(),
                     home: context.home_directory.map(Path::to_path_buf),
+                    credential_environment: context.credential_environment.to_vec(),
                 })?;
                 let remote_names = parse_git_remotes(&remotes)
                     .map_err(|_error| ())?
@@ -1191,6 +1197,7 @@ struct ProcessPlan {
     output_limit: usize,
     path: OsString,
     home: Option<PathBuf>,
+    credential_environment: Vec<OsString>,
 }
 
 trait CommandRunner {
@@ -1218,6 +1225,13 @@ impl CommandRunner for NativeCommandRunner {
                 Some(home.as_os_str().to_os_string()),
             ));
         }
+        // Generators run inside arbitrary checkouts and never need a
+        // provider credential, so the configured variables are withheld.
+        environment.extend(
+            plan.credential_environment
+                .iter()
+                .map(|name| (name.clone(), None)),
+        );
         let request = LocalProcessRequest::new(
             plan.program.as_os_str(),
             plan.arguments.clone(),
@@ -1687,6 +1701,7 @@ mod tests {
     struct FakeRunner {
         responses: Vec<Result<Vec<u8>, ()>>,
         plans: Vec<(PathBuf, Vec<OsString>, Duration, usize, PathBuf)>,
+        credentials: Vec<Vec<OsString>>,
     }
 
     impl FakeRunner {
@@ -1694,6 +1709,7 @@ mod tests {
             Self {
                 responses: vec![response],
                 plans: Vec::new(),
+                credentials: Vec::new(),
             }
         }
     }
@@ -1707,6 +1723,7 @@ mod tests {
                 plan.output_limit,
                 plan.cwd.clone(),
             ));
+            self.credentials.push(plan.credential_environment.clone());
             self.responses.remove(0)
         }
     }
@@ -1768,11 +1785,15 @@ mod tests {
             let mut runner = FakeRunner {
                 responses: vec![Ok(Vec::new()); 2],
                 plans: Vec::new(),
+                credentials: Vec::new(),
             };
+            let credentials = [OsString::from("GREENDALE_API_KEY")];
+            let mut generator_context = context(temporary.path().as_os_str(), None);
+            generator_context.credential_environment = &credentials;
             executor.complete_curated_with(
                 &index,
                 &query,
-                context(temporary.path().as_os_str(), None),
+                generator_context,
                 &cancellation(false),
                 &mut runner,
             );
@@ -1789,6 +1810,13 @@ mod tests {
                     plan.1
                 );
             }
+            assert!(
+                runner
+                    .credentials
+                    .iter()
+                    .all(|withheld| withheld.as_slice() == credentials),
+                "{label} spawned a process without withholding credentials"
+            );
         }
     }
 
@@ -2013,6 +2041,7 @@ mod tests {
                 Ok(b"team/core\n".to_vec()),
             ],
             plans: Vec::new(),
+            credentials: Vec::new(),
         };
         let suggestions = executor.complete_curated_with(
             &index,
@@ -2052,6 +2081,7 @@ mod tests {
                 .flat_map(|_| [Ok(branches.to_vec()), Ok(b"origin\n".to_vec())])
                 .collect(),
             plans: Vec::new(),
+            credentials: Vec::new(),
         };
         let mut executor = DynamicExecutor::new();
         let default_context = context(temporary.path().as_os_str(), None);
@@ -2157,6 +2187,7 @@ mod tests {
         let mut runner = FakeRunner {
             responses: Vec::new(),
             plans: Vec::new(),
+            credentials: Vec::new(),
         };
         let suggestions = DynamicExecutor::new().complete_curated_with(
             &index,
@@ -2290,6 +2321,7 @@ mod tests {
         let mut runner = FakeRunner {
             responses: vec![Ok(b"troy\n".to_vec()), Err(())],
             plans: Vec::new(),
+            credentials: Vec::new(),
         };
         let first = executor.complete_curated_with(
             &index,
@@ -2332,6 +2364,7 @@ mod tests {
         let mut runner = FakeRunner {
             responses: Vec::new(),
             plans: Vec::new(),
+            credentials: Vec::new(),
         };
         let first_names = vec!["TROY".to_owned()];
         let first = executor.complete_curated_with(

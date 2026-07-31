@@ -425,6 +425,24 @@ impl fmt::Display for AiReadinessError {
 impl Error for AiReadinessError {}
 
 impl Ai {
+    /// Names of every configured provider credential variable, deduplicated.
+    ///
+    /// Subprocesses spawned for completion or context never need a
+    /// credential, and they run inside arbitrary checkouts, so callers
+    /// withhold these variables from their environment.
+    #[must_use]
+    pub fn credential_environment_names(&self) -> Vec<std::ffi::OsString> {
+        let mut names: Vec<std::ffi::OsString> = self
+            .providers
+            .values()
+            .filter_map(|provider| provider.api_key_env.as_deref())
+            .map(std::ffi::OsString::from)
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
     /// Reports whether enabled AI has the minimum provider fields needed to
     /// attempt a request. Disabled AI is always operationally ready.
     ///

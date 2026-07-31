@@ -927,7 +927,7 @@ impl Scheduler {
             }
         }
 
-        let credential_environment = credential_environment_names(&self.settings.ai);
+        let credential_environment = self.settings.ai.credential_environment_names();
         let (workspace, git) =
             gather_broader_context(level, query, &self.recent_commands, &credential_environment);
         if query.cancellation().is_cancelled() {
@@ -1086,23 +1086,6 @@ fn context_key(
     query.cursor.hash(&mut hasher);
     recent_commands.hash(&mut hasher);
     hasher.finish()
-}
-
-/// Names of every configured provider credential variable, deduplicated.
-///
-/// Context subprocesses never need the credential, and a hostile checkout
-/// influences what they read, so the variables are withheld from their
-/// environment.
-fn credential_environment_names(ai: &Ai) -> Vec<OsString> {
-    let mut names: Vec<OsString> = ai
-        .providers
-        .values()
-        .filter_map(|provider| provider.api_key_env.as_deref())
-        .map(OsString::from)
-        .collect();
-    names.sort_unstable();
-    names.dedup();
-    names
 }
 
 fn gather_broader_context(
@@ -1743,7 +1726,7 @@ mod tests {
             },
         );
 
-        let names = credential_environment_names(&settings.ai);
+        let names = settings.ai.credential_environment_names();
         assert_eq!(
             names,
             vec![

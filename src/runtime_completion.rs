@@ -946,7 +946,8 @@ impl Worker {
         let Some(index) = self.index else {
             return Vec::new();
         };
-        let context = execution_context(&self.options, settings);
+        let credential_environment = settings.ai.credential_environment_names();
+        let context = execution_context(&self.options, settings, &credential_environment);
         if let Some(lookup) = resolve_alias_for_lookup(aliases, query) {
             let suggestions = self.dynamic.complete_curated(
                 index,
@@ -969,7 +970,8 @@ impl Worker {
         let Some(index) = self.index else {
             return Vec::new();
         };
-        let context = execution_context(&self.options, settings);
+        let credential_environment = settings.ai.credential_environment_names();
+        let context = execution_context(&self.options, settings, &credential_environment);
         self.dynamic
             .complete_cobra(index, query, context, work.cancellation())
             .map_or_else(Vec::new, |result| result.suggestions)
@@ -1184,12 +1186,14 @@ impl AliasCache {
 fn execution_context<'a>(
     options: &'a LocalCompletionOptions,
     settings: &Settings,
+    credential_environment: &'a [OsString],
 ) -> GeneratorExecutionContext<'a> {
     GeneratorExecutionContext {
         shell: options.shell,
         path: &options.path,
         home_directory: options.home_directory.as_deref(),
         environment_names: &options.environment_names,
+        credential_environment,
         include_hidden_files: settings.ui.hidden_files,
         git: GitGeneratorSettings {
             filter_active_branch: settings.git.filter_active_branch,
@@ -1505,9 +1509,9 @@ mod tests {
         let options =
             LocalCompletionOptions::new(ShellKind::Bash, Settings::default(), OsString::new());
         let mut settings = Settings::default();
-        assert!(!execution_context(&options, &settings).infer_completions);
+        assert!(!execution_context(&options, &settings, &[]).infer_completions);
         settings.core.infer_completions = true;
-        assert!(execution_context(&options, &settings).infer_completions);
+        assert!(execution_context(&options, &settings, &[]).infer_completions);
     }
 
     #[test]
