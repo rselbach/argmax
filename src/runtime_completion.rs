@@ -1066,6 +1066,16 @@ impl Worker {
     }
 
     fn record_command(&mut self, completed: CompletedCommand) {
+        // A leading blank is the shells' established "keep this out of
+        // history" convention. This store outlives shell history and has no
+        // expiry, so honoring it matters more here than there.
+        if completed
+            .command
+            .starts_with(|character: char| character.is_whitespace())
+        {
+            self.prior_skeleton = None;
+            return;
+        }
         let history =
             HistoryEntry::new(completed.command.clone()).with_timestamp(completed.timestamp);
         if self.options.history.is_some() {
@@ -1258,10 +1268,25 @@ fn fallback_skeleton(command: &str) -> Option<String> {
         line.push(' ');
     }
     let parsed = tokenize(&line, line.len()).ok()?;
-    parsed
-        .committed_tokens()
-        .first()
-        .map(|token| token.cooked.clone())
+    let first = parsed.committed_tokens().first()?;
+    // A leading NAME=value assignment carries the value itself, which the
+    // spec-aware skeleton deliberately skips. Reaching here means the line
+    // was only assignments, so there is no command to key ranking on.
+    if is_environment_assignment(&first.cooked) {
+        return None;
+    }
+    Some(first.cooked.clone())
+}
+
+fn is_environment_assignment(token: &str) -> bool {
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && !name.starts_with(|character: char| character.is_ascii_digit())
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 fn valid_skeleton(skeleton: &str) -> bool {
@@ -1744,6 +1769,68 @@ mod tests {
                     .is_ok_and(|line| line == "git status --short"))
         );
         assert_eq!(dispatcher.status().processed_events, 1);
+    }
+
+    #[test]
+    fn a_leading_blank_keeps_a_command_out_of_the_learning_store() {
+        let temporary = TempDirectory::new();
+        let store = LearningStore::new(temporary.0.join("argmax/learning.sqlite3"));
+        let dispatcher = dispatcher(
+            LocalCompletionOptions::new(ShellKind::Fish, Settings::default(), OsString::new())
+                .with_learning_store(store.clone()),
+        );
+
+        assert_eq!(
+            dispatcher
+                .record_completed_command(
+                    " export TOKEN=greendale",
+                    &temporary.0,
+                    1,
+                    CommandOutcome::Success
+                )
+                .unwrap(),
+            CommandEventAdmission::Queued
+        );
+        assert_eq!(
+            dispatcher
+                .record_completed_command("git status", &temporary.0, 2, CommandOutcome::Success)
+                .unwrap(),
+            CommandEventAdmission::Queued
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if store.load().is_ok_and(|state| !state.commands.is_empty()) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "learning store never recorded");
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let recorded = store.load().unwrap();
+        assert!(
+            recorded
+                .commands
+                .keys()
+                .all(|key| !key.skeleton.contains("TOKEN")),
+            "a blank-prefixed command reached the store: {:?}",
+            recorded.commands.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_bare_assignment_never_becomes_a_ranking_skeleton() {
+        assert_eq!(fallback_skeleton("AWS_SECRET_ACCESS_KEY=xyz"), None);
+        assert_eq!(fallback_skeleton("_TOKEN=abc"), None);
+        assert_eq!(
+            fallback_skeleton("git status"),
+            Some("git status".split(' ').next().unwrap().to_owned())
+        );
+        // A leading digit is not a valid variable name, so this stays a command.
+        assert_eq!(
+            fallback_skeleton("7zip=archive"),
+            Some("7zip=archive".to_owned())
+        );
     }
 
     #[test]
