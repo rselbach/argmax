@@ -313,7 +313,13 @@ impl DebugLog {
 
         let active_bytes = private_file_length(&active_stat)?;
         if active_bytes > MAX_DEBUG_LOG_BYTES {
-            return Err(DiagnosticError::UnsafePath);
+            // An active log past the maximum cannot have been produced by this
+            // writer, so something else appended to it or an older version left
+            // it behind. Failing here disabled logging permanently; replacing
+            // it restores a bounded log on the next record. It is not retained
+            // as the previous log, because copying it aside is exactly the
+            // unbounded work the maximum exists to prevent.
+            return self.replace_active_record_unix(directory_fd, &active_stat, record);
         }
         let record_bytes = u64::try_from(record.len()).unwrap_or(u64::MAX);
         if active_bytes.saturating_add(record_bytes) <= self.max_bytes {
@@ -339,6 +345,31 @@ impl DebugLog {
             active_bytes,
             record,
         )
+    }
+
+    /// Replaces an unusable active log with one holding only `record`.
+    #[cfg(unix)]
+    fn replace_active_record_unix(
+        &self,
+        directory_fd: RawFd,
+        active_stat: &FileStat,
+        record: &[u8],
+    ) -> Result<(), DiagnosticError> {
+        let mut replacement =
+            create_synced_temporary(&self.directory, directory_fd, "active", |file| {
+                file.write_all(record).map_err(Into::into)
+            })?;
+        if let Err(error) =
+            ensure_entry_unchanged(directory_fd, OsStr::new(DEBUG_LOG_NAME), active_stat)
+        {
+            return Err(cleanup_temporary_after_error(&mut replacement, error));
+        }
+        if let Err(error) =
+            rename_temporary(directory_fd, &mut replacement, OsStr::new(DEBUG_LOG_NAME))
+        {
+            return Err(cleanup_temporary_after_error(&mut replacement, error));
+        }
+        sync_directory(directory_fd)
     }
 
     #[cfg(unix)]
@@ -3140,6 +3171,28 @@ mod tests {
         assert!(outcome.failures.is_empty());
         assert!(unrelated.exists());
         assert!(other.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_oversized_active_log_is_replaced_rather_than_disabling_logging() {
+        let directory = TestDirectory::new();
+        let log = DebugLog::open(directory.0.clone(), session()).unwrap();
+        log.write(DiagnosticLevel::Info, "greendale", "first")
+            .unwrap();
+        let active = log.directory.join(DEBUG_LOG_NAME);
+        let oversized = vec![b'x'; usize::try_from(MAX_DEBUG_LOG_BYTES).unwrap() + 1];
+        fs::write(&active, &oversized).unwrap();
+
+        log.write(DiagnosticLevel::Info, "greendale", "second")
+            .unwrap();
+
+        let contents = fs::read_to_string(&active).unwrap();
+        assert!(contents.contains("second"), "{contents:?}");
+        assert!(!contents.contains('x'));
+        assert!(u64::try_from(contents.len()).unwrap() <= MAX_DEBUG_LOG_BYTES);
+        log.write(DiagnosticLevel::Info, "greendale", "third")
+            .unwrap();
     }
 
     #[cfg(unix)]
