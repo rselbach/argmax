@@ -531,8 +531,10 @@ fn secure_existing_parent(path: &Path) -> Result<(), ConfigStoreError> {
         return Err(ConfigStoreError::UnsafeDirectoryType);
     }
     #[cfg(unix)]
-    fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
-        .map_err(|error| ConfigStoreError::io("secure configuration directory", error))?;
+    if metadata.permissions().mode() & 0o777 != 0o700 {
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|error| ConfigStoreError::io("secure configuration directory", error))?;
+    }
     Ok(())
 }
 
@@ -552,8 +554,18 @@ fn secure_directory(path: &Path) -> Result<(), ConfigStoreError> {
 
 fn set_file_private(file: &File) -> Result<(), ConfigStoreError> {
     #[cfg(unix)]
-    file.set_permissions(fs::Permissions::from_mode(0o600))
-        .map_err(|error| ConfigStoreError::io("secure configuration", error))?;
+    {
+        // Reload polls this path about once a second. Permissions that are
+        // already private need no write, so only broader ones are tightened;
+        // the file can hold provider credentials.
+        let metadata = file
+            .metadata()
+            .map_err(|error| ConfigStoreError::io("inspect configuration", error))?;
+        if metadata.permissions().mode() & 0o777 != 0o600 {
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|error| ConfigStoreError::io("secure configuration", error))?;
+        }
+    }
     Ok(())
 }
 
