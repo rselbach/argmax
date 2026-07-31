@@ -11,7 +11,7 @@ use std::fmt;
 use std::fs::{self, File};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
@@ -64,6 +64,7 @@ const LOCAL_CONTEXT_PROCESS_TIMEOUT: Duration = Duration::from_millis(350);
 const MAX_DIRECTORY_ENTRIES_INSPECTED: usize = 4_096;
 const MAX_HELP_SUBCOMMANDS: usize = 8;
 const MAX_HELP_OPTIONS: usize = 16;
+const MAX_STATUS_PATHS: usize = 40;
 
 type Transport = dyn Fn(PreparedAiRequest) -> Result<String, SanitizedProviderError> + Send + Sync;
 
@@ -1438,22 +1439,29 @@ fn gather_git_context(
     cancellation: &CancellationToken,
     credential_environment: &[OsString],
 ) -> GitPromptData {
+    let Some(git) = resolve_trusted_git() else {
+        return GitPromptData {
+            status: None,
+            staged_diff: None,
+            branch_names: Vec::new(),
+            recent_commit_subjects: Vec::new(),
+        };
+    };
     GitPromptData {
-        status: git_output(
-            root,
-            &["status", "--short", "--branch", "--untracked-files=normal"],
-            MAX_GIT_STATUS_BYTES,
-            cancellation,
-            credential_environment,
-        ),
+        status: git_status_summary(&git, root, cancellation, credential_environment),
+        // Textconv is on by default for diff and, unlike the external diff
+        // driver, is not covered by --no-ext-diff; both name repository
+        // configured programs.
         staged_diff: git_output(
+            &git,
             root,
-            &["diff", "--cached", "--no-ext-diff"],
+            &["diff", "--cached", "--no-ext-diff", "--no-textconv"],
             MAX_STAGED_DIFF_BYTES,
             cancellation,
             credential_environment,
         ),
         branch_names: git_lines(
+            &git,
             root,
             &["branch", "--format=%(refname:short)"],
             MAX_BRANCH_NAMES,
@@ -1461,6 +1469,7 @@ fn gather_git_context(
             credential_environment,
         ),
         recent_commit_subjects: git_lines(
+            &git,
             root,
             &["log", "-6", "--pretty=format:%s"],
             MAX_COMMIT_SUBJECTS,
@@ -1470,7 +1479,91 @@ fn gather_git_context(
     }
 }
 
+/// Summarizes working-tree state without reading tracked file content.
+///
+/// `git status` refreshes the index, which pipes stat-dirty files through
+/// any clean filter the repository's own configuration names, so a hostile
+/// checkout could execute programs during a supposedly read-only query.
+/// `diff-files` reports stat-level differences and `ls-files --others`
+/// walks the tree without opening tracked content; neither consults a
+/// repository-configured program.
+fn git_status_summary(
+    git: &Path,
+    root: &Path,
+    cancellation: &CancellationToken,
+    credential_environment: &[OsString],
+) -> Option<String> {
+    let modified = git_output(
+        git,
+        root,
+        &["diff-files", "--name-only"],
+        MAX_GIT_STATUS_BYTES,
+        cancellation,
+        credential_environment,
+    );
+    let untracked = git_output(
+        git,
+        root,
+        &["ls-files", "--others", "--exclude-standard"],
+        MAX_GIT_STATUS_BYTES,
+        cancellation,
+        credential_environment,
+    );
+    compose_status_summary(modified.as_deref(), untracked.as_deref())
+}
+
+fn compose_status_summary(modified: Option<&str>, untracked: Option<&str>) -> Option<String> {
+    if modified.is_none() && untracked.is_none() {
+        return None;
+    }
+    let mut summary = String::new();
+    for path in modified.unwrap_or_default().lines().take(MAX_STATUS_PATHS) {
+        summary.push_str(" M ");
+        summary.push_str(path);
+        summary.push('\n');
+    }
+    for path in untracked.unwrap_or_default().lines().take(MAX_STATUS_PATHS) {
+        summary.push_str("?? ");
+        summary.push_str(path);
+        summary.push('\n');
+    }
+    if summary.is_empty() {
+        return Some("clean".to_owned());
+    }
+    summary.truncate(MAX_GIT_STATUS_BYTES);
+    Some(summary)
+}
+
+/// Resolves git to an absolute executable through absolute `PATH` entries.
+///
+/// Context queries run with the hostile checkout as their working
+/// directory, so a relative or empty `PATH` entry must not let that
+/// checkout supply the binary; the completion generators apply the same
+/// rule during their `PATH` scan.
+fn resolve_trusted_git() -> Option<PathBuf> {
+    resolve_trusted_git_in(&std::env::var_os("PATH")?)
+}
+
+fn resolve_trusted_git_in(path: &std::ffi::OsStr) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    for directory in std::env::split_paths(path) {
+        if !directory.is_absolute() {
+            continue;
+        }
+        let candidate = directory.join("git");
+        let Ok(metadata) = std::fs::metadata(&candidate) else {
+            continue;
+        };
+        if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 fn git_lines(
+    git: &Path,
     root: &Path,
     arguments: &[&str],
     limit: usize,
@@ -1478,6 +1571,7 @@ fn git_lines(
     credential_environment: &[OsString],
 ) -> Vec<String> {
     git_output(
+        git,
         root,
         arguments,
         MAX_GIT_STATUS_BYTES,
@@ -1502,7 +1596,29 @@ fn git_argv(arguments: &[&str]) -> Vec<OsString> {
         .collect()
 }
 
+/// Environment for a context subprocess: stable output settings, no
+/// optional index locks, and no provider credentials.
+fn git_environment(credential_environment: &[OsString]) -> Vec<(OsString, Option<OsString>)> {
+    let mut environment = vec![
+        (OsString::from("LC_ALL"), Some(OsString::from("C"))),
+        (OsString::from("TERM"), Some(OsString::from("dumb"))),
+        (OsString::from("NO_COLOR"), Some(OsString::from("1"))),
+        (OsString::from("CLICOLOR"), Some(OsString::from("0"))),
+        (
+            OsString::from("GIT_OPTIONAL_LOCKS"),
+            Some(OsString::from("0")),
+        ),
+    ];
+    environment.extend(
+        credential_environment
+            .iter()
+            .map(|name| (name.clone(), None)),
+    );
+    environment
+}
+
 fn git_output(
+    git: &Path,
     root: &Path,
     arguments: &[&str],
     limit: usize,
@@ -1513,19 +1629,13 @@ fn git_output(
         return None;
     }
     let request = LocalProcessRequest::new(
-        "git",
+        git.as_os_str(),
         git_argv(arguments),
         root,
         LOCAL_CONTEXT_PROCESS_TIMEOUT,
         limit,
     )
-    .and_then(|request| {
-        request.with_environment_overrides(
-            credential_environment
-                .iter()
-                .map(|name| (name.clone(), None)),
-        )
-    })
+    .and_then(|request| request.with_environment_overrides(git_environment(credential_environment)))
     .ok()?;
     let output = run_local_process(&request).ok()?;
     if cancellation.is_cancelled() || !output.exit().success() {
@@ -1640,6 +1750,89 @@ mod tests {
                 OsString::from("ANNIE_TOKEN"),
                 OsString::from("GREENDALE_API_KEY")
             ]
+        );
+    }
+
+    #[test]
+    fn trusted_git_resolution_skips_relative_path_entries() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TemporaryDirectory::new();
+        let real = directory.0.join("bin");
+        std::fs::create_dir_all(&real).unwrap();
+        let git = real.join("git");
+        std::fs::write(&git, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let path = std::env::join_paths([
+            Path::new("relative-bin").to_path_buf(),
+            Path::new("").to_path_buf(),
+            real.clone(),
+        ])
+        .unwrap();
+        assert_eq!(resolve_trusted_git_in(&path), Some(git));
+
+        let relative_only = std::env::join_paths([Path::new("relative-bin")]).unwrap();
+        assert_eq!(resolve_trusted_git_in(&relative_only), None);
+    }
+
+    #[test]
+    fn git_status_summary_reports_worktree_state_without_index_refresh() {
+        let directory = TemporaryDirectory::new();
+        let root = &directory.0;
+        let git = resolve_trusted_git().expect("git on PATH");
+        let run = |arguments: &[&str]| {
+            std::process::Command::new(&git)
+                .args(arguments)
+                .current_dir(root)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", root)
+                .output()
+                .expect("run git")
+        };
+        if !run(&["init", "--quiet"]).status.success() {
+            return;
+        }
+        fs::write(root.join("annie.txt"), b"greendale\n").unwrap();
+
+        // The exact argument vectors the summary spawns must succeed against
+        // a real repository and report worktree state without refreshing the
+        // index through repository-configured programs.
+        let untracked_argv = git_argv(&["ls-files", "--others", "--exclude-standard"]);
+        let untracked = run(&untracked_argv
+            .iter()
+            .map(|argument| argument.to_str().unwrap())
+            .collect::<Vec<_>>());
+        assert!(untracked.status.success());
+        let modified_argv = git_argv(&["diff-files", "--name-only"]);
+        let modified = run(&modified_argv
+            .iter()
+            .map(|argument| argument.to_str().unwrap())
+            .collect::<Vec<_>>());
+        assert!(modified.status.success());
+
+        let summary = compose_status_summary(
+            Some(std::str::from_utf8(&modified.stdout).unwrap()),
+            Some(std::str::from_utf8(&untracked.stdout).unwrap()),
+        )
+        .unwrap();
+        assert!(summary.contains("?? annie.txt"), "{summary}");
+    }
+
+    #[test]
+    fn status_summary_composition_is_bounded_and_fails_closed() {
+        assert_eq!(compose_status_summary(None, None), None);
+        assert_eq!(
+            compose_status_summary(Some(""), Some("")).as_deref(),
+            Some("clean")
+        );
+        assert_eq!(
+            compose_status_summary(Some("a.txt"), Some("b.txt")).as_deref(),
+            Some(" M a.txt\n?? b.txt\n")
+        );
+        assert_eq!(
+            compose_status_summary(None, Some("b.txt")).as_deref(),
+            Some("?? b.txt\n")
         );
     }
 
