@@ -35,7 +35,13 @@ const COMMAND_STOP_PREFIX: &[u8] = b"command-stop:";
 const WORKING_DIRECTORY_PREFIX: &[u8] = b"cwd:";
 const PROMPT_READY: &[u8] = b"prompt-ready";
 const RELOAD_REQUEST_PREFIX: &[u8] = crate::reload::RELOAD_REQUEST_PREFIX;
-const MAX_WORKING_DIRECTORY_BYTES: usize = 16 * 1024;
+/// Maximum accepted working-directory path reported by a shell hook.
+///
+/// A directory accepted here is assigned to the session and later used to start
+/// a query, which enforces its own bound. Deriving this limit from that one
+/// keeps a reported directory from being accepted and then rejected by every
+/// query until the directory changes again.
+const MAX_WORKING_DIRECTORY_BYTES: usize = crate::coordinator::MAX_QUERY_CWD_BYTES;
 
 /// Exact submitted command bytes reported by a shell lifecycle hook.
 #[derive(Clone, Eq, PartialEq)]
