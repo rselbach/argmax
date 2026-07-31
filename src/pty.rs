@@ -1758,7 +1758,15 @@ fn write_nonblocking(writer: &mut impl Write, bytes: &[u8]) -> Result<PtyWrite, 
     match writer.write(bytes) {
         Ok(written) if written == bytes.len() => Ok(PtyWrite::Complete),
         Ok(written) => Ok(PtyWrite::Partial { written }),
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+        // An interrupted write consumed nothing, so it is retryable exactly
+        // like a blocked one. Reporting it as an I/O failure would let a signal
+        // arriving mid-write end the session.
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+            ) =>
+        {
             Ok(PtyWrite::Partial { written: 0 })
         }
         Err(error) => Err(PtyWriteError::Io {
@@ -2887,5 +2895,36 @@ mod tests {
         };
         let error = select_shell(&request).unwrap_err();
         assert!(!format!("{error:?}").contains(file.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn an_interrupted_write_is_retryable_rather_than_fatal() {
+        struct FailingWriter(io::ErrorKind);
+
+        impl Write for FailingWriter {
+            fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+                Err(io::Error::from(self.0))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        for kind in [io::ErrorKind::Interrupted, io::ErrorKind::WouldBlock] {
+            assert_eq!(
+                write_nonblocking(&mut FailingWriter(kind), b"greendale"),
+                Ok(PtyWrite::Partial { written: 0 }),
+                "{kind:?} was not retryable"
+            );
+        }
+
+        assert_eq!(
+            write_nonblocking(&mut FailingWriter(io::ErrorKind::BrokenPipe), b"greendale"),
+            Err(PtyWriteError::Io {
+                kind: io::ErrorKind::BrokenPipe,
+                written: 0,
+            })
+        );
     }
 }
