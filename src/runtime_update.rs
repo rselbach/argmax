@@ -40,6 +40,8 @@ pub const MAX_PERIODIC_JITTER: Duration = Duration::from_secs(30);
 pub const MAX_FAILURE_BACKOFF_MULTIPLIER: u32 = 8;
 
 const MAX_PENDING_NOTICES: usize = 1;
+const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_millis(100);
+const WORKER_SHUTDOWN_POLL: Duration = Duration::from_millis(1);
 
 /// Immutable inputs for one session-local automatic-update worker.
 pub struct RuntimeUpdateOptions {
@@ -404,9 +406,23 @@ impl Drop for RuntimeUpdateWorker {
             state.pending_mode = None;
         }
         self.inbox.ready.notify_all();
-        if let Some(worker) = self.worker.take() {
-            drop(worker.join());
+        let Some(worker) = self.worker.take() else {
+            return;
+        };
+        // A check already in flight cannot observe shutdown until its network
+        // request finishes or times out. The terminal has been restored by this
+        // point, so waiting for it would leave the user looking at a shell that
+        // has already exited. The worker is left to finish on its own instead;
+        // it publishes state through atomic replacement, so abandoning it
+        // cannot leave a partial write behind.
+        let deadline = Instant::now() + WORKER_SHUTDOWN_GRACE;
+        while !worker.is_finished() {
+            if Instant::now() >= deadline {
+                return;
+            }
+            thread::sleep(WORKER_SHUTDOWN_POLL);
         }
+        drop(worker.join());
     }
 }
 
@@ -1001,6 +1017,50 @@ mod tests {
         let options =
             RuntimeUpdateOptions::discover(updater(false, UpdateChannel::Stable)).unwrap();
         assert_eq!(options.current_version.as_ref(), RUNNING_VERSION);
+    }
+
+    #[test]
+    fn dropping_the_worker_does_not_wait_for_a_stalled_check() {
+        struct StalledFetcher {
+            started: Arc<AtomicBool>,
+        }
+
+        impl ReleaseFetcher for StalledFetcher {
+            fn fetch(
+                &self,
+                _source: &ReleaseSource,
+                _channel: UpdateChannel,
+            ) -> Result<FetchedRelease, NetworkFailure> {
+                self.started.store(true, Ordering::Relaxed);
+                thread::sleep(Duration::from_secs(5));
+                Err(NetworkFailure::Timeout)
+            }
+        }
+
+        let temporary = TempDir::new().unwrap();
+        let started = Arc::new(AtomicBool::new(false));
+        let mut settings = RuntimeUpdateOptions::new(
+            "1.0.0",
+            updater(true, UpdateChannel::Stable),
+            RuntimeStateStore::new(temporary.path().join("argmax/state.toml")),
+        );
+        settings.fetcher = Arc::new(StalledFetcher {
+            started: Arc::clone(&started),
+        });
+        settings.jitter_seed = 0;
+        settings.startup_jitter_limit = Duration::ZERO;
+
+        let worker = RuntimeUpdateWorker::spawn(settings).unwrap();
+        wait_until(|| started.load(Ordering::Relaxed));
+
+        let dropped_at = Instant::now();
+        drop(worker);
+        let waited = dropped_at.elapsed();
+
+        assert!(
+            waited < Duration::from_secs(1),
+            "exit waited {waited:?} for a stalled update check"
+        );
     }
 
     #[test]
