@@ -986,12 +986,6 @@ fn ghost_plan(
     }
     let result = candidate.resulting_line(query).ok()?;
     let suffix = ghost_suffix(&query.line, &result)?;
-    // Ghost text is written verbatim into the terminal. A suffix carrying
-    // control bytes, such as a preserved multi-line history command, cannot
-    // be drawn as one inline hint; it simply renders no ghost.
-    if suffix.chars().any(char::is_control) {
-        return None;
-    }
     let starts_at_grapheme_boundary = UnicodeSegmentation::grapheme_indices(result.as_str(), true)
         .any(|(index, _)| index == query.line.len());
     let first = suffix.chars().next()?;

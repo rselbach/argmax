@@ -244,6 +244,8 @@ pub enum QueryIneligibility {
     InputTooShort,
     /// The cursor is not exactly at the end of the buffer.
     CursorNotAtEnd,
+    /// The buffer contains control characters, such as a multi-line command.
+    ControlCharacters,
 }
 
 /// Immutable snapshot of the currently observed shell input.
@@ -1070,6 +1072,12 @@ impl Lifecycle {
         if cursor != buffer.len() {
             return Some(QueryIneligibility::CursorNotAtEnd);
         }
+        // A restored multi-line command is a legitimate buffer, but the
+        // prompt input contract rejects control characters; skipping the
+        // request beats surfacing a provider failure for every keystroke.
+        if buffer.chars().any(char::is_control) {
+            return Some(QueryIneligibility::ControlCharacters);
+        }
         None
     }
 
@@ -1276,6 +1284,15 @@ mod tests {
             (
                 "trimmed input too short",
                 (Setup::Ready, " g ", 3, QueryIneligibility::InputTooShort),
+            ),
+            (
+                "multi-line buffer",
+                (
+                    Setup::Ready,
+                    "printf 'one\ntwo'",
+                    16,
+                    QueryIneligibility::ControlCharacters,
+                ),
             ),
         ]);
 

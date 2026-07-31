@@ -1069,6 +1069,13 @@ impl SessionReducer {
         let Some(suffix) = ghost_suffix(&query.line, &result) else {
             return false;
         };
+        // A control-bearing suffix, such as a preserved multi-line history
+        // command, is never rendered as ghost text, so accepting it would
+        // insert content the user cannot see. The unhandled arrow key
+        // forwards to the shell as an ordinary cursor movement.
+        if suffix.chars().any(char::is_control) {
+            return false;
+        }
         let mut text = String::with_capacity(query.line.len().saturating_add(suffix.len()));
         text.push_str(&query.line);
         text.push_str(suffix);
@@ -1781,6 +1788,37 @@ mod tests {
             SessionEffect::ReplaceBuffer(replacement) if replacement.as_str() == "git"
         )));
         assert_eq!(reducer.mode(), SessionMode::Spec);
+    }
+
+    #[test]
+    fn ghost_acceptance_refuses_an_invisible_multi_line_suffix() {
+        let (mut reducer, mut decoder) = ready();
+        let generation = synchronize(&mut reducer, &mut decoder, b"printf", "printf", 6);
+        present(
+            &mut reducer,
+            generation,
+            suggestion(
+                "printf",
+                "printf 'one\ntwo'",
+                SuggestionSource::History,
+                InsertionBehavior::Exact,
+            ),
+        );
+
+        // No ghost is ever rendered for a control-bearing suffix, so the
+        // arrow key must not silently insert content the user cannot see.
+        let reduction = reducer.route_input(b"\x1b[C");
+        let effects = reduction.effects().effects();
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, SessionEffect::ReplaceBuffer(_))),
+            "{:?}",
+            reduction.effects()
+        );
+        assert!(effects.iter().any(
+            |effect| matches!(effect, SessionEffect::ForwardInput(bytes) if bytes.as_ref() == b"\x1b[C")
+        ));
     }
 
     #[test]
