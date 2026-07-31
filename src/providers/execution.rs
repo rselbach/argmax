@@ -42,6 +42,36 @@ const MAX_DIRECT_FILES: usize = 8_192;
 const MAX_MANIFEST_VALUES: usize = MAX_DYNAMIC_ITEMS;
 const MAX_IDENTITY_BYTES: usize = 8 * 1024;
 
+/// Command-line configuration applied to every git generator invocation.
+///
+/// A working directory carries its own `.git/config`, which the repository
+/// author controls rather than the user. Both `core.fsmonitor` and
+/// `core.hooksPath` name programs git executes during otherwise read-only
+/// queries, so a generator running in an untrusted checkout would execute
+/// repository-supplied commands. Command-line `-c` wins over every file-based
+/// source, so neutralizing them here cannot be overridden by the repository.
+///
+/// `core.fsmonitor` is cleared rather than set to `false`: git releases before
+/// 2.36 read the value as a hook path, where `false` resolves to an executable
+/// on `PATH`, while an empty value is inert for every version.
+const GIT_READ_ONLY_CONFIG: [&str; 6] = [
+    "-c",
+    "color.ui=false",
+    "-c",
+    "core.fsmonitor=",
+    "-c",
+    "core.hooksPath=/dev/null",
+];
+
+/// Prefixes [`GIT_READ_ONLY_CONFIG`] to one git generator's own arguments.
+fn git_arguments<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+    GIT_READ_ONLY_CONFIG
+        .iter()
+        .copied()
+        .chain(rest.iter().copied())
+        .collect()
+}
+
 /// Git-specific dynamic completion behavior.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GitGeneratorSettings {
@@ -387,35 +417,27 @@ impl DynamicExecutor {
         match spec.kind {
             GeneratorKind::GitBranches => process(
                 "git",
-                &[
-                    "-c",
-                    "color.ui=false",
+                &git_arguments(&[
                     "for-each-ref",
                     "--format=%(refname)%09%(HEAD)",
                     "refs/heads",
                     "refs/remotes",
-                ],
+                ]),
                 ProcessParser::GitBranches(context.git),
             ),
             GeneratorKind::GitRemotes => process(
                 "git",
-                &["-c", "color.ui=false", "remote"],
+                &git_arguments(&["remote"]),
                 ProcessParser::GitRemotes,
             ),
             GeneratorKind::GitTags => process(
                 "git",
-                &["-c", "color.ui=false", "tag", "--list"],
+                &git_arguments(&["tag", "--list"]),
                 ProcessParser::GitTags,
             ),
             GeneratorKind::GitStashes => process(
                 "git",
-                &[
-                    "-c",
-                    "color.ui=false",
-                    "stash",
-                    "list",
-                    "--format=%gd%x09%gs",
-                ],
+                &git_arguments(&["stash", "list", "--format=%gd%x09%gs"]),
                 ProcessParser::GitStashes,
             ),
             GeneratorKind::GitCommits => {
@@ -425,30 +447,24 @@ impl DynamicExecutor {
                     cache_identity: Some(binary.cache_identity()),
                     source: GeneratorSource::Process {
                         binary,
-                        arguments: [
-                            "-c".into(),
-                            "color.ui=false".into(),
-                            "log".into(),
-                            maximum.into(),
-                            "--format=%h%x09%s".into(),
-                        ]
-                        .into(),
+                        arguments: git_arguments(&["log", &maximum, "--format=%h%x09%s"])
+                            .into_iter()
+                            .map(OsString::from)
+                            .collect(),
                         parser: ProcessParser::GitCommits,
                     },
                 })
             }
             GeneratorKind::GitFiles => process(
                 "git",
-                &[
-                    "-c",
-                    "color.ui=false",
+                &git_arguments(&[
                     "ls-files",
                     "-z",
                     "--cached",
                     "--modified",
                     "--others",
                     "--exclude-standard",
-                ],
+                ]),
                 ProcessParser::GitFiles,
             ),
             GeneratorKind::PackageScripts => Self::nearest_snapshot(&query.cwd, &["package.json"])
@@ -1026,9 +1042,10 @@ impl PreparedGenerator {
                     .ok_or(())?;
                 let remotes = runner.run(&ProcessPlan {
                     program: binary.path,
-                    arguments: ["-c", "color.ui=false", "remote"]
+                    arguments: git_arguments(&["remote"])
+                        .into_iter()
                         .map(OsString::from)
-                        .into(),
+                        .collect(),
                     cwd: cwd.to_path_buf(),
                     timeout: remaining,
                     output_limit: MAX_DYNAMIC_OUTPUT_BYTES,
@@ -1719,6 +1736,50 @@ mod tests {
     }
 
     #[test]
+    fn every_git_generator_neutralizes_repository_supplied_configuration() {
+        let kinds = [
+            GeneratorKind::GitBranches,
+            GeneratorKind::GitRemotes,
+            GeneratorKind::GitTags,
+            GeneratorKind::GitStashes,
+            GeneratorKind::GitCommits,
+            GeneratorKind::GitFiles,
+        ];
+        for kind in kinds {
+            let label = format!("{kind:?}");
+            let temporary = tempfile::tempdir().unwrap();
+            temp_executable(temporary.path(), "git");
+            let index = dynamic_index("git", kind);
+            let query = CompletionQuery::new("git ", 4, temporary.path(), 1).unwrap();
+            let mut executor = DynamicExecutor::new();
+            let mut runner = FakeRunner {
+                responses: vec![Ok(Vec::new()); 2],
+                plans: Vec::new(),
+            };
+            executor.complete_curated_with(
+                &index,
+                &query,
+                context(temporary.path().as_os_str(), None),
+                &cancellation(false),
+                &mut runner,
+            );
+
+            assert!(!runner.plans.is_empty(), "{label} ran no process");
+            let required = GIT_READ_ONLY_CONFIG
+                .map(OsString::from)
+                .into_iter()
+                .collect::<Vec<_>>();
+            for plan in &runner.plans {
+                assert!(
+                    plan.1.starts_with(&required),
+                    "{label} argv {:?} omits the neutralizing configuration",
+                    plan.1
+                );
+            }
+        }
+    }
+
+    #[test]
     fn curated_roots_and_unsafe_names_block_cobra_inference() {
         let index =
             SpecIndex::new([CommandSpec::new("kubectl", "curated").with_alias("k")]).unwrap();
@@ -1917,7 +1978,10 @@ mod tests {
         assert_eq!(runner.plans[0].0, binary);
         assert_eq!(
             runner.plans[0].1,
-            ["-c", "color.ui=false", "tag", "--list"].map(OsString::from)
+            git_arguments(&["tag", "--list"])
+                .into_iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>()
         );
         assert_eq!(runner.plans[0].2, Duration::from_millis(150));
         assert_eq!(runner.plans[0].3, MAX_DYNAMIC_OUTPUT_BYTES);
@@ -1954,7 +2018,10 @@ mod tests {
         assert_eq!(runner.plans.len(), 2);
         assert_eq!(
             runner.plans[1].1,
-            ["-c", "color.ui=false", "remote"].map(OsString::from)
+            git_arguments(&["remote"])
+                .into_iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>()
         );
         assert!(runner.plans[1].2 <= Duration::from_millis(150));
     }
