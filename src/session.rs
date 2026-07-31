@@ -26,10 +26,11 @@ use crate::shell_events::{
 
 /// Most effects one bounded input reduction can emit.
 ///
-/// Input routing already caps decisions. Six effects per decision leaves room
-/// for invalidation, mode, replacement, rendering, forwarding, and a fault,
-/// followed by one synchronization request.
-pub const MAX_SESSION_EFFECTS: usize = MAX_ROUTE_BATCH_EVENTS * 6 + 1;
+/// Input routing already caps decisions. Seven effects per decision leaves
+/// room for boundary release, invalidation, mode, replacement with its paired
+/// synchronization request, rendering, and forwarding, followed by one
+/// batch-final synchronization request.
+pub const MAX_SESSION_EFFECTS: usize = MAX_ROUTE_BATCH_EVENTS * 7 + 1;
 
 /// Completion mode selected for the current session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -863,9 +864,7 @@ impl SessionReducer {
         let Ok(replacement) = BufferReplacement::new(text, cursor) else {
             return effects;
         };
-        if self.begin_replacement(replacement, ReplacementKind::AliasExpansion, &mut effects) {
-            self.issue_probe_if_safe(&mut effects, false);
-        }
+        let _ = self.begin_replacement(replacement, ReplacementKind::AliasExpansion, &mut effects);
         effects
     }
 
@@ -1187,6 +1186,29 @@ impl SessionReducer {
         }
         let _ = self.completion.cancel_active_query();
         self.completion.dismiss_suggestions();
+        self.probe_needed = true;
+        // A replacement may only reach the runtime together with its
+        // correlated synchronization request; later events in the same batch
+        // can legitimately suppress the batch-final request, so the pair is
+        // emitted here or not at all.
+        if self.shell.capability() != BufferSyncCapability::Probe {
+            effects.push(SessionEffect::ClearOverlay);
+            return false;
+        }
+        let nonce = match self.shell.begin_sync_probe() {
+            Ok(nonce) => nonce,
+            Err(ProbeRequestError::AlreadyPending | ProbeRequestError::NotAtEditablePrompt) => {
+                effects.push(SessionEffect::ClearOverlay);
+                return false;
+            }
+            Err(error) => {
+                self.probe_needed = false;
+                effects.push(SessionEffect::ClearOverlay);
+                effects.push(SessionEffect::Fault(SessionFault::Probe(error)));
+                return false;
+            }
+        };
+        self.probe_needed = false;
         self.pending_replacement = Some(PendingReplacement {
             replacement: replacement.clone(),
             kind,
@@ -1197,9 +1219,9 @@ impl SessionReducer {
         ) {
             self.clear_history_preview_authority();
         }
-        self.probe_needed = true;
         effects.push(SessionEffect::ClearOverlay);
         effects.push(SessionEffect::ReplaceBuffer(replacement));
+        effects.push(SessionEffect::RequestBufferSync(nonce));
         true
     }
 
@@ -1704,10 +1726,60 @@ mod tests {
         let enter = effects.iter().position(
             |effect| matches!(effect, SessionEffect::ForwardInput(bytes) if bytes.as_ref() == b"\r"),
         );
-        assert!(
-            replacement.is_some_and(|replacement| enter.is_some_and(|enter| replacement < enter))
-        );
+        let sync = effects
+            .iter()
+            .position(|effect| matches!(effect, SessionEffect::RequestBufferSync(_)));
+        assert!(replacement.is_some_and(|replacement| {
+            sync.is_some_and(|sync| enter.is_some_and(|enter| replacement < sync && sync < enter))
+        }));
         assert_eq!(forwarded(reduction.effects()), b"\r");
+    }
+
+    #[test]
+    fn history_preview_and_enter_in_one_batch_pair_replacement_with_sync() {
+        let (mut reducer, mut decoder) = ready();
+        let _ = synchronize(&mut reducer, &mut decoder, b"git", "git", 3);
+        let toggle = reducer.route_input(b"\x12");
+        let generation = toggle
+            .effects()
+            .effects()
+            .iter()
+            .find_map(|effect| match effect {
+                SessionEffect::StartQuery { mode, work, .. } if *mode == SessionMode::History => {
+                    Some(work.query().generation)
+                }
+                _ => None,
+            })
+            .unwrap();
+        present(
+            &mut reducer,
+            generation,
+            suggestion(
+                "git",
+                "git status",
+                SuggestionSource::History,
+                InsertionBehavior::Exact,
+            ),
+        );
+
+        let reduction = reducer.route_input(b"\x1b[A\r");
+        let effects = reduction.effects().effects();
+        let replacement = effects.iter().position(|effect| {
+            matches!(
+                effect,
+                SessionEffect::ReplaceBuffer(replacement)
+                    if replacement.as_str() == "git status"
+            )
+        });
+        let sync = effects
+            .iter()
+            .position(|effect| matches!(effect, SessionEffect::RequestBufferSync(_)));
+        let enter = effects.iter().position(
+            |effect| matches!(effect, SessionEffect::ForwardInput(bytes) if bytes.as_ref() == b"\r"),
+        );
+        assert!(replacement.is_some_and(|replacement| {
+            sync.is_some_and(|sync| enter.is_some_and(|enter| replacement < sync && sync < enter))
+        }));
     }
 
     #[test]
@@ -2735,9 +2807,8 @@ mod tests {
             .iter()
             .position(|effect| matches!(effect, SessionEffect::RequestBufferSync(_)));
         assert!(replacement.is_some_and(|replacement| {
-            escape.is_some_and(|escape| {
-                sync.is_some_and(|sync| replacement < escape && escape < sync)
-            })
+            escape
+                .is_some_and(|escape| sync.is_some_and(|sync| replacement < sync && sync < escape))
         }));
         assert_eq!(reducer.mode(), SessionMode::Spec);
         assert!(reducer.replacement_pending());
