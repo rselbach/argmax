@@ -14,6 +14,9 @@ pub const DEFAULT_MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 /// Default maximum number of commands retained from the current session.
 pub const DEFAULT_MAX_SESSION_ENTRIES: usize = 16 * 1024;
 
+/// Maximum bytes retained from the current session across all entries.
+const MAX_SESSION_BYTES: usize = 4 * 1024 * 1024;
+
 /// Filesystem identity used to detect changes to the active history file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HistoryFileKey {
@@ -85,6 +88,7 @@ struct CachedHistory {
 pub struct HistoryCache {
     cached: Option<CachedHistory>,
     session: VecDeque<HistoryEntry>,
+    session_bytes: usize,
     max_history_bytes: usize,
     max_session_entries: usize,
 }
@@ -96,6 +100,7 @@ impl HistoryCache {
         Self {
             cached: None,
             session: VecDeque::new(),
+            session_bytes: 0,
             max_history_bytes,
             max_session_entries,
         }
@@ -103,15 +108,25 @@ impl HistoryCache {
 
     /// Records one command executed in the current shell session immediately.
     ///
-    /// Empty commands are ignored. Once the configured bound is reached, the
-    /// oldest session command is discarded.
+    /// Empty and oversized commands are ignored. Once the entry or byte bound
+    /// is reached, the oldest session commands are discarded.
     pub fn record_session(&mut self, entry: HistoryEntry) {
+        let bytes = entry.command.len();
         if entry.command.trim().is_empty() || self.max_session_entries == 0 {
             return;
         }
-        if self.session.len() == self.max_session_entries {
-            self.session.pop_front();
+        if bytes > MAX_SESSION_BYTES {
+            return;
         }
+        while self.session.len() >= self.max_session_entries
+            || self.session_bytes.saturating_add(bytes) > MAX_SESSION_BYTES
+        {
+            let Some(removed) = self.session.pop_front() else {
+                break;
+            };
+            self.session_bytes = self.session_bytes.saturating_sub(removed.command.len());
+        }
+        self.session_bytes += bytes;
         self.session.push_back(entry);
     }
 
@@ -151,6 +166,7 @@ impl HistoryCache {
     /// Removes commands recorded during the current session.
     pub fn clear_session(&mut self) {
         self.session.clear();
+        self.session_bytes = 0;
     }
 
     /// Returns the currently cached filesystem key, if persistent history loaded.
@@ -420,6 +436,27 @@ mod tests {
         });
         assert_eq!(calls.get(), 2);
         assert_eq!(commands(&entries), ["git status"]);
+    }
+
+    #[test]
+    fn session_storage_is_byte_bounded() {
+        let mut cache = HistoryCache::with_limits(1024, usize::MAX);
+        let large = "x".repeat(MAX_SESSION_BYTES / 2 + 1);
+        cache.record_session(HistoryEntry::new(large.clone()));
+        cache.record_session(HistoryEntry::new("echo Troy"));
+        cache.record_session(HistoryEntry::new(large));
+        // The second large entry cannot coexist with the first inside the
+        // byte budget; the oldest entry is evicted to admit it.
+        assert!(cache.session_bytes <= MAX_SESSION_BYTES);
+        assert_eq!(cache.session.len(), 2);
+        assert_eq!(cache.session[0].command, "echo Troy");
+
+        // An entry larger than the whole budget is refused outright.
+        cache.record_session(HistoryEntry::new("y".repeat(MAX_SESSION_BYTES + 1)));
+        assert_eq!(cache.session.len(), 2);
+
+        cache.clear_session();
+        assert_eq!(cache.session_bytes, 0);
     }
 
     fn line_parser(contents: &[u8]) -> Vec<HistoryEntry> {
