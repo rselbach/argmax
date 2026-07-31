@@ -51,11 +51,14 @@ type optionSpec struct {
 func main() {
 	var irisRoot string
 	var output string
+	var wantInventory int
 	flag.StringVar(&irisRoot, "iris-root", ".", "path to the IRIS repository")
 	flag.StringVar(&output, "output", "", "destination JSON file; stdout when empty")
+	flag.IntVar(&wantInventory, "expect-inventory", 0,
+		"fail unless the inventory has exactly this many entries; 0 disables the check")
 	flag.Parse()
 
-	catalog, err := buildCatalog(irisRoot)
+	catalog, err := buildCatalog(irisRoot, wantInventory)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "iris-catalog-export: %v\n", err)
 		os.Exit(1)
@@ -79,13 +82,16 @@ func main() {
 	}
 }
 
-func buildCatalog(irisRoot string) (exportCatalog, error) {
+func buildCatalog(irisRoot string, wantInventory int) (exportCatalog, error) {
 	inventory, err := readInventory(filepath.Join(irisRoot, "commands", "README.md"))
 	if err != nil {
 		return exportCatalog{}, err
 	}
-	if len(inventory) != 567 {
-		return exportCatalog{}, fmt.Errorf("inventory has %d entries; expected 567", len(inventory))
+	// The expected count is supplied by the caller. Hard-coding it made any
+	// legitimate change to the upstream catalog fail the export until the
+	// number was edited here.
+	if wantInventory > 0 && len(inventory) != wantInventory {
+		return exportCatalog{}, fmt.Errorf("inventory has %d entries; want %d", len(inventory), wantInventory)
 	}
 
 	commands := make([]commandSpec, 0, len(spec.Registry))

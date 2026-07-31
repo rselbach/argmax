@@ -1,0 +1,8 @@
+github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
+github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
+github.com/versenilvis/fuzzy v0.1.0-rc1.2 h1:wX7v7Oxt+3O9VOiBpmMwpWZCkCdeYeicjUXwqCKI5BY=
+github.com/versenilvis/fuzzy v0.1.0-rc1.2/go.mod h1:TCgCwxBa4px8NhCXH8SPePCyJsf/qPsl1i+G/HDdjyg=
+github.com/versenilvis/iris v0.4.19 h1:SNzbSDWRyWC7No4AnDq10yaQ5M2kGB5rsvEZ8csSyns=
+github.com/versenilvis/iris v0.4.19/go.mod h1:BozwUTWg3O844mj1w+GoTSWu7sogURr8zUzdxrizJrU=
+go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
+go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
