@@ -1407,7 +1407,7 @@ if status is-interactive; and test -t 0; and test -t 1
         set -l argmax_parts (
           begin
             printf 'argmax-read-start\0'
-            command /bin/dd bs=4096 count=1 \
+            command dd bs=4096 count=1 \
               <&$ARGMAX_CONTROL_FD 2>/dev/null
             printf '\0argmax-read-end\0'
           end | string split0
