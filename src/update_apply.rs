@@ -379,6 +379,7 @@ fn apply_update_from_reader_with_hooks<R: Read, B: FnOnce(), C: FnOnce()>(
         .sync_all()
         .map_err(|error| UpdateApplyError::io("sync update transaction directory", error))?;
     validate_prepublication(&target, &source, &transaction)?;
+    transaction.adopt_published_mode(source.snapshot.metadata.mode)?;
 
     before_exchange();
     validate_prepublication(&target, &source, &transaction)?;
@@ -918,6 +919,46 @@ impl<'a> TransactionFile<'a> {
         Ok(())
     }
 
+    /// Adopts the mode the published executable must carry.
+    ///
+    /// The transaction is written privately so a partially written executable is
+    /// never runnable by anyone else, but publishing it privately would withdraw
+    /// access from every other user of a shared installation. The installed
+    /// executable's own mode is restored instead, immediately before the
+    /// exchange and ahead of the final validation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a mode that is writable beyond its owner, carries a set-user-ID
+    /// or set-group-ID bit, or is not executable by its owner.
+    fn adopt_published_mode(&mut self, mode: u32) -> Result<(), UpdateApplyError> {
+        let published = mode & 0o7777;
+        if published & SET_USER_OR_GROUP_ID_BITS != 0
+            || has_group_or_other_write(published)
+            || published & 0o100 == 0
+        {
+            return Err(UpdateApplyError::UnsafeCurrentExecutable);
+        }
+        self.file
+            .set_permissions(std::fs::Permissions::from_mode(published))
+            .map_err(|error| UpdateApplyError::io("publish update transaction mode", error))?;
+        self.file
+            .sync_all()
+            .map_err(|error| UpdateApplyError::io("sync published update transaction", error))?;
+        ensure_no_extended_acl(&self.file, "republish update transaction access controls")?;
+        let snapshot = FileSnapshot::capture(&self.file, "reinspect update transaction")?;
+        if snapshot.metadata.mode & 0o7777 != published
+            || snapshot.metadata.links != 1
+            || snapshot.metadata.length == 0
+            || snapshot.metadata.length > MAX_UPDATE_ARTIFACT_BYTES
+            || snapshot.metadata.mode & FILE_TYPE_MASK != REGULAR_FILE_TYPE
+        {
+            return Err(UpdateApplyError::UnsafeDownloadedArtifact);
+        }
+        self.snapshot = Some(snapshot);
+        Ok(())
+    }
+
     fn is_current_at(&self, name: &OsStr, before_exchange: bool) -> Result<bool, UpdateApplyError> {
         if !file_identity_matches_at(self.parent, &self.file, name)? {
             return Ok(false);
@@ -1433,6 +1474,25 @@ mod tests {
     }
 
     #[test]
+    fn update_publishes_the_mode_the_installation_already_had() {
+        for mode in [0o755, 0o700, 0o750, 0o555] {
+            let directory = TempDir::new().unwrap();
+            let executable = executable(directory.path());
+            fs::set_permissions(&executable, fs::Permissions::from_mode(mode)).unwrap();
+            let mut artifact = Cursor::new(NEW_BYTES);
+
+            apply_update_from_reader(&metadata_for(NEW_BYTES), &mut artifact, &executable).unwrap();
+
+            assert_eq!(fs::read(&executable).unwrap(), NEW_BYTES);
+            assert_eq!(
+                fs::metadata(&executable).unwrap().mode() & 0o7777,
+                mode,
+                "update did not preserve mode {mode:o}"
+            );
+        }
+    }
+
+    #[test]
     fn verified_update_is_atomic_private_and_retains_prior_executable() {
         let directory = TempDir::new().unwrap();
         let executable = executable(directory.path());
@@ -1448,7 +1508,7 @@ mod tests {
             }
         );
         assert_eq!(fs::read(&executable).unwrap(), NEW_BYTES);
-        assert_eq!(fs::metadata(&executable).unwrap().mode() & 0o7777, 0o700);
+        assert_eq!(fs::metadata(&executable).unwrap().mode() & 0o7777, 0o755);
         let transactions = transaction_entries(directory.path());
         assert_eq!(transactions.len(), 1);
         assert_eq!(
@@ -1652,7 +1712,7 @@ mod tests {
             }
         );
         assert_eq!(fs::read(&executable).unwrap(), NEW_BYTES);
-        assert_eq!(fs::metadata(&executable).unwrap().mode() & 0o7777, 0o700);
+        assert_eq!(fs::metadata(&executable).unwrap().mode() & 0o7777, 0o755);
     }
 
     #[test]
