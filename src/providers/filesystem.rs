@@ -227,9 +227,15 @@ fn resolve_fragment<'a>(
 }
 
 fn extension_allowed(path: &Path, allowed_extensions: &[&str]) -> bool {
+    // Filters are collected case-insensitively, so matching them exactly would
+    // drop a file whose extension differs only in case from an accepted filter.
     path.extension()
         .and_then(OsStr::to_str)
-        .is_some_and(|extension| allowed_extensions.contains(&extension))
+        .is_some_and(|extension| {
+            allowed_extensions
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(extension))
+        })
 }
 
 fn file_description(path: &Path) -> String {
@@ -385,6 +391,27 @@ mod tests {
                 .map(|suggestion| suggestion.display.as_str())
                 .collect::<Vec<_>>(),
             ["main.rs", "nested"]
+        );
+    }
+
+    #[test]
+    fn extension_filters_ignore_case() {
+        let temp = TempDirectory::new();
+        fs::write(temp.0.join("main.RS"), "").unwrap();
+        fs::write(temp.0.join("notes.txt"), "").unwrap();
+        let options = FilesystemOptions {
+            extensions: vec![".rs".into()],
+            ..FilesystemOptions::default()
+        };
+
+        let suggestions = filesystem_suggestions(&temp.query("open "), ShellKind::Zsh, &options);
+
+        assert_eq!(
+            suggestions
+                .iter()
+                .map(|suggestion| suggestion.display.as_str())
+                .collect::<Vec<_>>(),
+            ["main.RS"]
         );
     }
 
