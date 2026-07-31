@@ -1699,6 +1699,14 @@ impl SessionDriver {
                     self.route_input(reducer, &buffer[..read])?;
                     self.escape_deadline = Some(Instant::now() + STANDALONE_ESCAPE_TIMEOUT);
                 } else {
+                    // The router may retain a partial escape, UTF-8 scalar, or
+                    // paste-end prefix from when interception was still on.
+                    // Drain it ahead of the new bytes so the foreground
+                    // program sees the stream in typed order instead of a
+                    // stranded prefix resurfacing at the next prompt.
+                    self.escape_deadline = None;
+                    let (_, effects) = reducer.finish_input().into_parts();
+                    self.apply_effects(reducer, effects)?;
                     let effects = reducer.observe_shell_output();
                     self.apply_effects(reducer, effects)?;
                     self.pending.push(WriteDestination::Pty, &buffer[..read])?;

@@ -689,7 +689,11 @@ impl SessionReducer {
         self.reduce_route_batch(batch)
     }
 
-    /// Drains incomplete input at EOF without inventing bytes.
+    /// Drains incomplete input without inventing bytes.
+    ///
+    /// Used at EOF and when interception ends while the router retains a
+    /// partial sequence, so the retained bytes precede any directly
+    /// forwarded input.
     #[must_use]
     pub fn finish_input(&mut self) -> InputReduction {
         let batch = self.input.finish();
@@ -1733,6 +1737,34 @@ mod tests {
             sync.is_some_and(|sync| enter.is_some_and(|enter| replacement < sync && sync < enter))
         }));
         assert_eq!(forwarded(reduction.effects()), b"\r");
+    }
+
+    #[test]
+    fn finish_input_forwards_a_retained_partial_sequence_intact() {
+        let (mut reducer, mut decoder) = ready();
+        let _ = synchronize(&mut reducer, &mut decoder, b"git", "git", 3);
+
+        let retained = reducer.route_input(b"\x1b[");
+        assert!(
+            !retained
+                .effects()
+                .effects()
+                .iter()
+                .any(|effect| matches!(effect, SessionEffect::ForwardInput(_)))
+        );
+
+        let reduction = reducer.finish_input();
+        let forwarded: Vec<u8> = reduction
+            .effects()
+            .effects()
+            .iter()
+            .filter_map(|effect| match effect {
+                SessionEffect::ForwardInput(bytes) => Some(bytes.as_ref().to_vec()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(forwarded, b"\x1b[");
     }
 
     #[test]
