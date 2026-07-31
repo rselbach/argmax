@@ -986,6 +986,12 @@ fn ghost_plan(
     }
     let result = candidate.resulting_line(query).ok()?;
     let suffix = ghost_suffix(&query.line, &result)?;
+    // Ghost text is written verbatim into the terminal. A suffix carrying
+    // control bytes, such as a preserved multi-line history command, cannot
+    // be drawn as one inline hint; it simply renders no ghost.
+    if suffix.chars().any(char::is_control) {
+        return None;
+    }
     let starts_at_grapheme_boundary = UnicodeSegmentation::grapheme_indices(result.as_str(), true)
         .any(|(index, _)| index == query.line.len());
     let first = suffix.chars().next()?;
@@ -2344,6 +2350,23 @@ mod tests {
             )
             .unwrap();
         assert!(frame.ghost().is_none());
+    }
+
+    #[test]
+    fn multi_line_suffix_renders_no_ghost() {
+        let screen = screen(40, 6, b"> git");
+        let query = query("git");
+        let selection = selection(vec![suggestion("git one\ntwo", "", "git")], 0);
+        let mut renderer = OverlayRenderer::new();
+        let frame = renderer
+            .render(
+                screen.snapshot(),
+                OverlayRequest::new(&query, &selection),
+                ui(Style::Classic),
+            )
+            .unwrap();
+        assert!(frame.ghost().is_none());
+        assert!(!frame.transaction().bytes().contains(&b'\n'));
     }
 
     #[test]

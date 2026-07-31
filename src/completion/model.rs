@@ -218,7 +218,13 @@ impl Suggestion {
         insertion: InsertionBehavior,
         identity: impl Into<String>,
     ) -> Self {
-        edit.replacement.retain(|character| !character.is_control());
+        // The replacement is shell-buffer data, never terminal output.
+        // Newlines and tabs are meaningful command bytes whose removal
+        // changes what the shell would execute, so they survive; remaining
+        // control characters stay stripped as smuggled-escape defense.
+        // Rendered text is sanitized separately below.
+        edit.replacement
+            .retain(|character| !character.is_control() || matches!(character, '\n' | '\t'));
         Self {
             edit,
             display: sanitize_terminal_text(display.as_ref()),
@@ -410,7 +416,24 @@ mod tests {
             InsertionBehavior::Exact,
             "git",
         );
-        assert_eq!(suggestion.edit().replacement, "git[31m");
+        assert_eq!(suggestion.edit().replacement, "git[31m\n");
+    }
+
+    #[test]
+    fn replacement_preserves_command_whitespace_and_strips_escapes() {
+        let suggestion = Suggestion::new(
+            TextEdit {
+                range: 0..0,
+                replacement: "printf 'one\ntwo'\t\u{1b}[31m\u{7}".into(),
+            },
+            "printf",
+            "",
+            "command",
+            SuggestionSource::History,
+            InsertionBehavior::Exact,
+            "history",
+        );
+        assert_eq!(suggestion.edit().replacement, "printf 'one\ntwo'\t[31m");
     }
 
     #[test]
