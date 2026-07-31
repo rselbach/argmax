@@ -1049,16 +1049,13 @@ impl Perform for TerminalMachine {
                 }
             }
             0x0D => self.surface_mut().carriage_return(),
-            0x84 => self.surface_mut().linefeed(),
-            0x85 => {
-                self.surface_mut().linefeed();
-                self.surface_mut().carriage_return();
-            }
-            0x88 => {
-                let column = usize::from(self.surface().cursor.column);
-                self.tab_stops[column] = true;
-            }
-            0x8D => self.surface_mut().reverse_index(),
+            // Raw C1 motions (IND, NEL, HTS, RI) reach this path only through
+            // invalid UTF-8 or a UTF-8-encoded C1 scalar, and real terminals
+            // disagree on whether those move the cursor or print a
+            // replacement glyph. Trusting them would let child output steer
+            // overlay writes onto coordinates the terminal never moved to,
+            // so they suppress the overlay like every other C1. The reliable
+            // ESC-encoded forms stay modeled in esc_dispatch.
             _ => self.mark_unsafe(),
         }
     }
@@ -1846,10 +1843,9 @@ mod tests {
         assert!(csi.snapshot().overlay_safe());
 
         let c1 = assert_vte_partition_invariant("C1 NEL", b"\xE0\x85X", terminal_size);
-        assert_eq!(c1.row_text(0).as_deref(), Some("�"));
-        assert_eq!(c1.row_text(1).as_deref(), Some("X"));
-        assert_eq!(c1.snapshot().cursor(), CursorPosition::new(1, 1));
-        assert!(c1.snapshot().overlay_safe());
+        assert_eq!(c1.row_text(0).as_deref(), Some("�X"));
+        assert_eq!(c1.snapshot().cursor(), CursorPosition::new(0, 2));
+        assert!(!c1.snapshot().overlay_safe());
 
         let osc =
             assert_vte_partition_invariant("OSC", b"\xC3\x1b]0;Greendale\x07X", terminal_size);
@@ -1871,7 +1867,8 @@ mod tests {
         let _ = split_nel.observe(&[0xC2]);
         let _ = split_nel.observe(&[0x85]);
         assert_eq!(split_nel.snapshot(), whole_nel.snapshot());
-        assert_eq!(whole_nel.snapshot().cursor(), CursorPosition::new(1, 0));
+        assert_eq!(whole_nel.snapshot().cursor(), CursorPosition::new(0, 0));
+        assert!(!whole_nel.snapshot().overlay_safe());
 
         let mut whole_osc = ScreenObserver::new(size(20, 5));
         let _ = whole_osc.observe(&[0xC2, 0x9D]);
@@ -1969,7 +1966,7 @@ mod tests {
         let mut modifier = ScreenObserver::new(size(20, 3));
         let _ = modifier.observe("👋🏽".as_bytes());
         assert!(!modifier.snapshot().overlay_safe());
-        let _ = modifier.observe(&[0x85]);
+        let _ = modifier.observe(b"\x1bE");
         assert_eq!(modifier.row_text(0).as_deref(), Some("👋🏽"));
         assert_eq!(modifier.snapshot().cursor(), CursorPosition::new(1, 0));
         assert!(modifier.snapshot().overlay_safe());
