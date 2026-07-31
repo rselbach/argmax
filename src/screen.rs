@@ -1541,6 +1541,13 @@ impl ScreenObserver {
         self.guard = GuardState::Ground;
         self.utf8_carry.clear();
         self.machine.active = ScreenBuffer::Primary;
+        // A trusted snapshot re-establishes placement, so state inherited from
+        // whatever ran before it is cleared along with the parser. A child that
+        // exited while a synchronized update was open would otherwise suppress
+        // the overlay until the terminal was reset, and a partially printed
+        // grapheme would keep suppressing it with nothing left to complete it.
+        self.machine.synchronized_output = false;
+        self.machine.primary.grapheme_pending = GraphemePending::None;
         let cursor_changed = self.machine.primary.cursor != cursor;
         self.machine.primary.cursor = cursor;
         if cursor_changed {
@@ -2175,6 +2182,22 @@ mod tests {
         assert!(screen.machine.surface().cell(0, 0).text.len() <= MAX_CELL_TEXT_BYTES);
         let _ = screen.observe(b"\x1bc");
         assert!(screen.snapshot().overlay_safe());
+    }
+
+    #[test]
+    fn synchronizing_clears_state_left_open_by_a_departed_child() {
+        let size = TerminalSize::new(80, 24).unwrap();
+        let mut screen = ScreenObserver::new(size);
+
+        let _ = screen.observe(b"\x1b[?2026h");
+        assert!(!screen.snapshot().overlay_safe());
+
+        screen.synchronize(CursorPosition::new(0, 0)).unwrap();
+
+        assert!(
+            screen.snapshot().overlay_safe(),
+            "a synchronized update left open by a child kept suppressing the overlay"
+        );
     }
 
     #[test]
