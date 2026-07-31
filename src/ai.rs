@@ -71,7 +71,7 @@ pub fn validate_candidate(input: &str, response: &str) -> Result<String, AiRejec
         return Err(AiRejection::ResponseTooLarge);
     }
 
-    let candidate = strip_recognized_wrapper(response)?;
+    let candidate = strip_recognized_wrapper(response, input)?;
     if candidate.is_empty() {
         return Err(AiRejection::Empty);
     }
@@ -156,7 +156,7 @@ pub(crate) fn is_invisible(character: char) -> bool {
     )
 }
 
-fn strip_recognized_wrapper(response: &str) -> Result<&str, AiRejection> {
+fn strip_recognized_wrapper<'a>(response: &'a str, input: &str) -> Result<&'a str, AiRejection> {
     if response.starts_with("```") {
         return strip_code_fence(response);
     }
@@ -167,14 +167,21 @@ fn strip_recognized_wrapper(response: &str) -> Result<&str, AiRejection> {
     let Some(first) = response.chars().next() else {
         return Ok(response);
     };
-    if matches!(first, '\'' | '"') {
-        if response.len() < first.len_utf8() * 2 || !response.ends_with(first) {
-            return Err(AiRejection::InvalidWrapper);
-        }
-        let start = first.len_utf8();
-        return Ok(&response[start..response.len() - start]);
+    if !matches!(first, '\'' | '"') {
+        return Ok(response);
     }
-    Ok(response)
+    // A quote the user has already typed is part of the command being written,
+    // not a wrapper the provider put around it. Removing it would leave a
+    // candidate that no longer continues the buffer, rejecting a completion
+    // that was correct.
+    if input.starts_with(first) {
+        return Ok(response);
+    }
+    if response.len() < first.len_utf8() * 2 || !response.ends_with(first) {
+        return Err(AiRejection::InvalidWrapper);
+    }
+    let start = first.len_utf8();
+    Ok(&response[start..response.len() - start])
 }
 
 fn strip_code_fence(response: &str) -> Result<&str, AiRejection> {
@@ -244,6 +251,28 @@ mod tests {
                 "git status --short"
             );
         }
+    }
+
+    #[test]
+    fn a_quote_the_user_typed_is_part_of_the_command() {
+        assert_eq!(
+            validate_candidate("'git", "'git status'").unwrap(),
+            "'git status'"
+        );
+        assert_eq!(
+            validate_candidate("\"gre", "\"greendale campus\"").unwrap(),
+            "\"greendale campus\""
+        );
+        assert_eq!(
+            validate_candidate("'git", "'git status").unwrap(),
+            "'git status"
+        );
+
+        // A wrapper the user did not start is still removed.
+        assert_eq!(
+            validate_candidate("git st", "'git status'").unwrap(),
+            "git status"
+        );
     }
 
     #[test]
