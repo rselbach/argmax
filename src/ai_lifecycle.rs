@@ -941,7 +941,20 @@ impl Lifecycle {
             return ResponseDisposition::Stale;
         }
         if now_ms >= request.deadline_at_ms {
+            let provider = request.provider.clone();
             self.in_flight = None;
+            // A rate limit is a fact about the provider, not about this
+            // request, so it still applies when the answer arrives past the
+            // deadline. Discarding it as merely late would keep requests going
+            // out at the minimum interval against a provider actively refusing
+            // them, which is the case the cooldown exists for.
+            if matches!(outcome, ProviderOutcome::RateLimited) {
+                self.cooldown = Some(Cooldown {
+                    provider,
+                    started_at_ms: now_ms,
+                    retry_at_ms: add_ms(now_ms, RATE_LIMIT_COOLDOWN_MS),
+                });
+            }
             return ResponseDisposition::TimedOut;
         }
 
@@ -1416,6 +1429,27 @@ mod tests {
         assert!(lifecycle.fresh_provider_context(42, 4_999).is_some());
         assert!(lifecycle.fresh_provider_context(42, 5_000).is_none());
         assert!(lifecycle.context_cache_metadata().is_none());
+    }
+
+    #[test]
+    fn a_rate_limit_arriving_after_the_deadline_still_applies_its_cooldown() {
+        let settings = LifecycleSettings::new(0, 1, 2_000).unwrap();
+        let mut lifecycle = ready_lifecycle(settings);
+        let request = start_request(&mut lifecycle, "git", 100);
+        let late = 100 + 2_000;
+
+        assert_eq!(
+            lifecycle.complete_request(request.token(), late, ProviderOutcome::RateLimited),
+            ResponseDisposition::TimedOut
+        );
+
+        lifecycle.observe_query("git s", 5, late + 1);
+        assert_eq!(
+            lifecycle.poll(late + 1),
+            LifecyclePoll::Cooldown {
+                retry_at_ms: late + 20_000
+            }
+        );
     }
 
     #[test]
