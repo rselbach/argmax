@@ -29,8 +29,8 @@ use crate::shell_events::{
 /// Input routing already caps decisions. Seven effects per decision leaves
 /// room for boundary release, invalidation, mode, replacement with its paired
 /// synchronization request, rendering, and forwarding, followed by one
-/// batch-final synchronization request.
-pub const MAX_SESSION_EFFECTS: usize = MAX_ROUTE_BATCH_EVENTS * 7 + 1;
+/// batch-final deferred query restart and one synchronization request.
+pub const MAX_SESSION_EFFECTS: usize = MAX_ROUTE_BATCH_EVENTS * 7 + 2;
 
 /// Completion mode selected for the current session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1091,27 +1091,30 @@ impl SessionReducer {
                 self.start_query_from_authority(effects);
             }
             SessionMode::History => {
-                self.mode = SessionMode::Spec;
-                self.recall_history_when_ready = false;
-                effects.push(SessionEffect::ModeChanged(self.mode));
-                let origin = self.history_origin.take();
                 let restore = self.history_preview_active
                     || self
                         .pending_replacement
                         .as_ref()
                         .is_some_and(|pending| pending.kind == ReplacementKind::HistoryPreview);
+                // A restore must pair with a fresh probe, and the preview's
+                // own probe may still be outstanding. Swallow the toggle with
+                // every mode and origin untouched so an immediate retry can
+                // succeed once the response lands.
+                if restore && !self.shell.probe_available() {
+                    return true;
+                }
+                self.mode = SessionMode::Spec;
+                self.recall_history_when_ready = false;
+                effects.push(SessionEffect::ModeChanged(self.mode));
+                let origin = self.history_origin.take();
                 self.history_preview_active = false;
                 if restore {
-                    let failed = match origin {
-                        Some(origin) => !self.begin_replacement(
+                    if let Some(origin) = origin {
+                        let _ = self.begin_replacement(
                             origin,
                             ReplacementKind::HistoryRestore,
                             effects,
-                        ),
-                        None => false,
-                    };
-                    if failed {
-                        return false;
+                        );
                     }
                 } else {
                     self.start_query_from_authority(effects);
@@ -1737,6 +1740,41 @@ mod tests {
             sync.is_some_and(|sync| enter.is_some_and(|enter| replacement < sync && sync < enter))
         }));
         assert_eq!(forwarded(reduction.effects()), b"\r");
+    }
+
+    #[test]
+    fn toggle_with_preview_sync_outstanding_keeps_history_state_for_retry() {
+        let (mut reducer, mut decoder) = ready();
+        let _ = synchronize(&mut reducer, &mut decoder, b"git", "git", 3);
+        let preview_nonce = request_history_preview(&mut reducer, "git", "git status");
+
+        // The preview's probe is still outstanding: the toggle must neither
+        // half-flip the mode nor drop the restore origin nor leak its bytes
+        // into the buffer.
+        let reduction = reducer.route_input(b"\x12");
+        let effects = reduction.effects().effects();
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, SessionEffect::ModeChanged(_)))
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, SessionEffect::ForwardInput(_)))
+        );
+        assert_eq!(reducer.mode(), SessionMode::History);
+
+        // Once the preview synchronizes, the same toggle restores the origin.
+        let frame = format!("probe-buffer:b:{preview_nonce}:10:git status\0");
+        let _ = apply_wire(&mut reducer, &mut decoder, frame.as_bytes());
+        let reduction = reducer.route_input(b"\x12");
+        let effects = reduction.effects().effects();
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            SessionEffect::ReplaceBuffer(replacement) if replacement.as_str() == "git"
+        )));
+        assert_eq!(reducer.mode(), SessionMode::Spec);
     }
 
     #[test]

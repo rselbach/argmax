@@ -1274,6 +1274,18 @@ impl ShellSessionState {
         Ok(self.input_generation)
     }
 
+    /// Returns whether [`Self::begin_sync_probe`] would issue a probe now.
+    ///
+    /// Callers about to pair a destructive state change with a probe use this
+    /// to keep their state intact instead of mutating first and failing.
+    #[must_use]
+    pub fn probe_available(&self) -> bool {
+        self.capability == BufferSyncCapability::Probe
+            && self.foreground == ForegroundCommandState::Idle
+            && self.prompt_ready
+            && self.pending_probe.is_none()
+    }
+
     /// Reserves the next nonce before the caller injects [`SYNC_PROBE_SEQUENCE`].
     ///
     /// Exactly one request may be outstanding. Its response is accepted only if
