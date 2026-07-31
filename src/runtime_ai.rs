@@ -926,7 +926,9 @@ impl Scheduler {
             }
         }
 
-        let (workspace, git) = gather_broader_context(level, query, &self.recent_commands);
+        let credential_environment = credential_environment_names(&self.settings.ai);
+        let (workspace, git) =
+            gather_broader_context(level, query, &self.recent_commands, &credential_environment);
         if query.cancellation().is_cancelled() {
             return (None, None);
         }
@@ -1085,10 +1087,28 @@ fn context_key(
     hasher.finish()
 }
 
+/// Names of every configured provider credential variable, deduplicated.
+///
+/// Context subprocesses never need the credential, and a hostile checkout
+/// influences what they read, so the variables are withheld from their
+/// environment.
+fn credential_environment_names(ai: &Ai) -> Vec<OsString> {
+    let mut names: Vec<OsString> = ai
+        .providers
+        .values()
+        .filter_map(|provider| provider.api_key_env.as_deref())
+        .map(OsString::from)
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
 fn gather_broader_context(
     level: AiContextLevel,
     query: &QueryWork,
     recent_commands: &VecDeque<String>,
+    credential_environment: &[OsString],
 ) -> (Option<WorkspacePromptData>, Option<GitPromptData>) {
     let cancellation = query.cancellation();
     if cancellation.is_cancelled() {
@@ -1157,7 +1177,9 @@ fn gather_broader_context(
             .signatures
             .iter()
             .find(|signature| signature.kind == WorkspaceKind::Git)
-            .map(|signature| gather_git_context(&signature.root, cancellation))
+            .map(|signature| {
+                gather_git_context(&signature.root, cancellation, credential_environment)
+            })
     } else {
         None
     };
@@ -1411,31 +1433,39 @@ fn read_bounded_utf8(path: &Path) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-fn gather_git_context(root: &Path, cancellation: &CancellationToken) -> GitPromptData {
+fn gather_git_context(
+    root: &Path,
+    cancellation: &CancellationToken,
+    credential_environment: &[OsString],
+) -> GitPromptData {
     GitPromptData {
         status: git_output(
             root,
             &["status", "--short", "--branch", "--untracked-files=normal"],
             MAX_GIT_STATUS_BYTES,
             cancellation,
+            credential_environment,
         ),
         staged_diff: git_output(
             root,
             &["diff", "--cached", "--no-ext-diff"],
             MAX_STAGED_DIFF_BYTES,
             cancellation,
+            credential_environment,
         ),
         branch_names: git_lines(
             root,
             &["branch", "--format=%(refname:short)"],
             MAX_BRANCH_NAMES,
             cancellation,
+            credential_environment,
         ),
         recent_commit_subjects: git_lines(
             root,
             &["log", "-6", "--pretty=format:%s"],
             MAX_COMMIT_SUBJECTS,
             cancellation,
+            credential_environment,
         ),
     }
 }
@@ -1445,11 +1475,18 @@ fn git_lines(
     arguments: &[&str],
     limit: usize,
     cancellation: &CancellationToken,
+    credential_environment: &[OsString],
 ) -> Vec<String> {
-    git_output(root, arguments, MAX_GIT_STATUS_BYTES, cancellation)
-        .map_or_else(Vec::new, |output| {
-            output.lines().take(limit).map(str::to_owned).collect()
-        })
+    git_output(
+        root,
+        arguments,
+        MAX_GIT_STATUS_BYTES,
+        cancellation,
+        credential_environment,
+    )
+    .map_or_else(Vec::new, |output| {
+        output.lines().take(limit).map(str::to_owned).collect()
+    })
 }
 
 /// Builds a git argument vector with the repository's own configuration
@@ -1470,6 +1507,7 @@ fn git_output(
     arguments: &[&str],
     limit: usize,
     cancellation: &CancellationToken,
+    credential_environment: &[OsString],
 ) -> Option<String> {
     if cancellation.is_cancelled() {
         return None;
@@ -1481,6 +1519,13 @@ fn git_output(
         LOCAL_CONTEXT_PROCESS_TIMEOUT,
         limit,
     )
+    .and_then(|request| {
+        request.with_environment_overrides(
+            credential_environment
+                .iter()
+                .map(|name| (name.clone(), None)),
+        )
+    })
     .ok()?;
     let output = run_local_process(&request).ok()?;
     if cancellation.is_cancelled() || !output.exit().success() {
@@ -1555,6 +1600,40 @@ mod tests {
             assert!(Instant::now() < deadline, "AI batch did not arrive");
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn credential_environment_names_cover_every_configured_provider() {
+        let mut settings = settings(true);
+        settings
+            .ai
+            .providers
+            .get_mut("community")
+            .unwrap()
+            .api_key_env = Some("GREENDALE_API_KEY".to_owned());
+        settings.ai.providers.insert(
+            "second".to_owned(),
+            AiProvider {
+                api_key_env: Some("GREENDALE_API_KEY".to_owned()),
+                ..AiProvider::default()
+            },
+        );
+        settings.ai.providers.insert(
+            "third".to_owned(),
+            AiProvider {
+                api_key_env: Some("ANNIE_TOKEN".to_owned()),
+                ..AiProvider::default()
+            },
+        );
+
+        let names = credential_environment_names(&settings.ai);
+        assert_eq!(
+            names,
+            vec![
+                OsString::from("ANNIE_TOKEN"),
+                OsString::from("GREENDALE_API_KEY")
+            ]
+        );
     }
 
     #[test]
@@ -1805,7 +1884,8 @@ mod tests {
         let recent = VecDeque::from(["git status".to_owned()]);
         let work = query("npm install ", &temporary.0);
 
-        let (workspace, git) = gather_broader_context(AiContextLevel::Workspace, &work, &recent);
+        let (workspace, git) =
+            gather_broader_context(AiContextLevel::Workspace, &work, &recent, &[]);
         let workspace = workspace.unwrap();
         assert!(git.is_none());
         assert_eq!(workspace.recent_commands, ["git status"]);
@@ -1858,7 +1938,7 @@ mod tests {
 
         assert!(cancelled.cancellation().is_cancelled());
         assert_eq!(
-            gather_broader_context(AiContextLevel::Workspace, &cancelled, &VecDeque::new()),
+            gather_broader_context(AiContextLevel::Workspace, &cancelled, &VecDeque::new(), &[]),
             (None, None)
         );
     }
