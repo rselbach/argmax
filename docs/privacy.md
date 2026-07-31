@@ -72,8 +72,8 @@ does not read arbitrary source-file contents for AI context. Workspace mode
 reads bounded structured project metadata; full mode additionally permits the
 bounded staged diff listed above.
 
-Requests require at least three non-whitespace characters and are debounced and
-rate-spaced. Buffer changes, cursor movement away from the end, mode changes,
+Requests require a buffer of at least three characters once leading and trailing
+whitespace is removed, and are debounced and rate-spaced. Buffer changes, cursor movement away from the end, mode changes,
 menu navigation, command execution, provider changes, disablement, and session
 exit invalidate earlier work. A response is accepted only when it is one inert line
 beginning with the current buffer exactly, carrying neither control
