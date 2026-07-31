@@ -1741,13 +1741,15 @@ impl SessionDriver {
                     // paste-end prefix from when interception was still on.
                     // Drain it ahead of the new bytes so the foreground
                     // program sees the stream in typed order instead of a
-                    // stranded prefix resurfacing at the next prompt.
+                    // stranded prefix resurfacing at the next prompt. The new
+                    // bytes are queued before the invalidation pass so a probe
+                    // issued there cannot split the forwarded key sequence.
                     self.escape_deadline = None;
                     let (_, effects) = reducer.finish_input().into_parts();
                     self.apply_effects(reducer, effects)?;
+                    self.pending.push(WriteDestination::Pty, &buffer[..read])?;
                     let effects = reducer.observe_shell_output();
                     self.apply_effects(reducer, effects)?;
-                    self.pending.push(WriteDestination::Pty, &buffer[..read])?;
                 }
                 Ok(true)
             }

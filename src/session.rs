@@ -946,6 +946,12 @@ impl SessionReducer {
                 false
             }
             InputAction::Desynchronize => {
+                // The router resets its own paste state when it drains
+                // mid-stream, and its drain emits this action rather than a
+                // paste end. Mirroring the reset here keeps the two paste
+                // views aligned; otherwise suggestions and probes stay
+                // disabled until an unrelated future paste ends.
+                self.paste_active = false;
                 self.clear_completion(effects);
                 self.clear_history_preview_authority();
                 false
@@ -1775,6 +1781,41 @@ mod tests {
             SessionEffect::ReplaceBuffer(replacement) if replacement.as_str() == "git"
         )));
         assert_eq!(reducer.mode(), SessionMode::Spec);
+    }
+
+    #[test]
+    fn draining_a_truncated_paste_reenables_local_actions() {
+        let (mut reducer, mut decoder) = ready();
+        let _ = synchronize(&mut reducer, &mut decoder, b"git", "git", 3);
+
+        let _ = reducer.route_input(b"\x1b[200~pasted");
+        let drained = reducer.finish_input();
+
+        // The truncated paste ended with the drain: the batch-final probe
+        // must fire again instead of staying disabled behind a stale paste
+        // flag, and after the response the mode toggle must work.
+        let nonce = drained
+            .effects()
+            .effects()
+            .iter()
+            .find_map(|effect| match effect {
+                SessionEffect::RequestBufferSync(nonce) => Some(nonce.get()),
+                _ => None,
+            })
+            .expect("drain did not re-enable synchronization");
+        let frame = format!("probe-buffer:b:{nonce}:3:git\0");
+        let _ = apply_wire(&mut reducer, &mut decoder, frame.as_bytes());
+
+        let reduction = reducer.route_input(b"\x12");
+        assert!(
+            reduction
+                .effects()
+                .effects()
+                .iter()
+                .any(|effect| matches!(effect, SessionEffect::ModeChanged(SessionMode::History))),
+            "{:?}",
+            reduction.effects()
+        );
     }
 
     #[test]
