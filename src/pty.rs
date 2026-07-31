@@ -1496,7 +1496,13 @@ impl PtySession {
         if !self.signal_authority {
             return Ok(SignalDelivery::NoForegroundProcessGroup);
         }
-        let Some(process_group) = self.current_foreground_group() else {
+        // A nonpositive group would make killpg address the caller's own group
+        // or every process it may signal. POSIX specifies a positive value on
+        // success, so this matches the guard the shutdown path already applies.
+        let Some(process_group) = self
+            .current_foreground_group()
+            .filter(|process_group| *process_group > 0)
+        else {
             return Ok(SignalDelivery::NoForegroundProcessGroup);
         };
         if process_group == getpgrp().as_raw() {
