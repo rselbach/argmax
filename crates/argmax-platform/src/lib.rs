@@ -234,12 +234,17 @@ pub mod unix {
             // is a finite nonnegative millisecond interval.
             let result = unsafe { libc::poll(&raw mut descriptor_event, 1, timeout) };
             if result > 0 {
+                // A readiness bit outranks a hangup. A peer that writes a
+                // complete response and then closes reports both at once, and
+                // the response is still buffered and readable; treating the
+                // hangup as fatal here would discard a delivered reply. End of
+                // input is recognized by a zero-length read instead.
+                if descriptor_event.revents & events != 0 {
+                    return Ok(());
+                }
                 if descriptor_event.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0
                 {
                     return Err(io::Error::from(io::ErrorKind::BrokenPipe));
-                }
-                if descriptor_event.revents & events != 0 {
-                    return Ok(());
                 }
                 continue;
             }
@@ -327,6 +332,30 @@ pub mod unix {
             .unwrap();
             assert_eq!(&response[..length], b"reload-ack:42:ok");
             responder.join().unwrap();
+        }
+
+        #[test]
+        fn a_response_buffered_before_the_peer_closed_is_still_read() {
+            let (client, server) = UnixStream::pair().unwrap();
+            client.set_nonblocking(true).unwrap();
+            thread::spawn(move || {
+                let mut server = server;
+                server.write_all(b"reload-ack:42:ok\0").unwrap();
+            })
+            .join()
+            .unwrap();
+
+            let descriptor = client.as_raw_fd();
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut response = [0_u8; 64];
+            let length = read_frame(descriptor, &mut response, deadline).unwrap();
+            assert_eq!(&response[..length], b"reload-ack:42:ok");
+            assert_eq!(
+                read_frame(descriptor, &mut response, deadline)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::UnexpectedEof
+            );
         }
 
         #[test]
