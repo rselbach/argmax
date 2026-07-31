@@ -298,6 +298,15 @@ path_entry_is_protected() {
   path_metadata "${install_entry_parent}" || return 1
   path_has_no_acl "${install_entry_parent}" || return 1
   install_parent_mode_value=${install_path_mode_value}
+  install_parent_owner=${install_path_owner}
+  install_current_uid=$(id -u) || return 1
+
+  # Clean write bits still leave the directory's own owner able to replace a
+  # component after this check, so only root and the current user are trusted.
+  [ "${install_parent_owner}" = 0 ] \
+    || [ "${install_parent_owner}" = "${install_current_uid}" ] \
+    || return 1
+
   [ $((install_parent_mode_value & 0022)) -ne 0 ] || return 0
   [ $((install_parent_mode_value & 01000)) -ne 0 ] || return 1
 
@@ -306,7 +315,6 @@ path_entry_is_protected() {
   # while the entry belongs to someone else would leave that other owner able
   # to replace the component after this check.
   path_metadata "${install_entry_child}" || return 1
-  install_current_uid=$(id -u) || return 1
   [ "${install_path_owner}" = "${install_current_uid}" ]
 }
 

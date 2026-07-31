@@ -1232,7 +1232,18 @@ fn ensure_safe_install_parent(
     if !metadata.is_dir() || has_group_or_other_write(metadata.mode()) {
         return Err(UpdateApplyError::UnsafeParentPermissions);
     }
+    // Clean write bits are not enough: the directory's own owner may rename
+    // entries between validation and publication regardless of mode. Only
+    // root and the invoking user are trusted, matching the ownership rule
+    // the shell installer applies to its own destination.
+    if !is_trusted_owner(metadata.uid()) {
+        return Err(UpdateApplyError::UnsafeParentPermissions);
+    }
     ensure_no_extended_acl(directory, operation)
+}
+
+fn is_trusted_owner(owner: u32) -> bool {
+    owner == 0 || owner == rustix::process::geteuid().as_raw()
 }
 
 const fn has_group_or_other_write(mode: u32) -> bool {
@@ -1655,6 +1666,20 @@ mod tests {
             assert_eq!(fs::read(&executable).unwrap(), OLD_BYTES);
             assert!(transaction_entries(&install).is_empty());
         }
+    }
+
+    #[test]
+    fn only_root_and_the_current_user_own_a_trusted_install_parent() {
+        let current = rustix::process::geteuid().as_raw();
+        assert!(is_trusted_owner(0));
+        assert!(is_trusted_owner(current));
+
+        // A directory owned by a third party may be rewritten by that owner
+        // between validation and publication regardless of its mode.
+        let foreign = (1..=u32::MAX)
+            .find(|uid| *uid != current && *uid != 0)
+            .unwrap();
+        assert!(!is_trusted_owner(foreign));
     }
 
     #[test]
