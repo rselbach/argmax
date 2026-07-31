@@ -1451,13 +1451,27 @@ impl ShellSessionState {
         match (self.capability, buffer.probe_nonce) {
             (BufferSyncCapability::Probe, None) => Err(SnapshotRejection::MissingProbeNonce),
             (BufferSyncCapability::Probe, Some(received)) => {
+                // A response ahead of the reservation means the adapter's
+                // counter advanced without a wrapper reservation, which a
+                // user-typed literal probe sequence causes with bracketed
+                // paste off. Adopting the received value keeps the next
+                // reservation correlated instead of rejecting every later
+                // probe until the adapter is re-sourced. The response itself
+                // stays rejected: no reservation vouches for it.
                 let Some((expected, requested_generation)) = self.pending_probe else {
+                    if self.last_probe_nonce.is_some_and(|nonce| received > nonce) {
+                        self.last_probe_nonce = Some(received);
+                    }
                     return Err(SnapshotRejection::ProbeNonceMismatch {
                         expected: None,
                         received,
                     });
                 };
                 if received != expected {
+                    if received > expected {
+                        self.last_probe_nonce = Some(received);
+                        self.pending_probe = None;
+                    }
                     return Err(SnapshotRejection::ProbeNonceMismatch {
                         expected: Some(expected),
                         received,
@@ -2148,7 +2162,7 @@ mod tests {
         let mut decoder = decoder();
         let frames = decode(
             &mut decoder,
-            b"capability:sync-probe:10\0prompt-ready\0probe-buffer:b:12:1:x\0",
+            b"capability:sync-probe:10\0prompt-ready\0probe-buffer:b:12:1:x\0probe-buffer:b:13:1:y\0",
         );
         let mut state = ShellSessionState::new(StreamEpoch::INITIAL);
         state.apply(frames[0].clone());
@@ -2162,8 +2176,19 @@ mod tests {
                 received: SnapshotNonce(12),
             })
         );
-        assert_eq!(state.pending_probe_nonce(), Some(SnapshotNonce(11)));
         assert!(state.buffer().is_none());
+
+        // The adapter counter ran ahead, which a user-typed literal probe
+        // sequence causes; correlation adopts the received value so the next
+        // reservation lines up again instead of failing until re-source.
+        assert_eq!(state.pending_probe_nonce(), None);
+        state.observe_local_input().expect("generation");
+        assert_eq!(state.begin_sync_probe(), Ok(SnapshotNonce(13)));
+        assert_eq!(
+            state.apply(frames[3].clone()),
+            StateUpdate::BufferSynchronized { recovered: true }
+        );
+        assert_eq!(state.buffer().unwrap().as_bytes(), b"y");
     }
 
     #[test]
