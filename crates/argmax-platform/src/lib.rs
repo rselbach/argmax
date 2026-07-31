@@ -22,6 +22,11 @@ pub mod unix {
     /// Returns the operating-system error from `waitid`, including
     /// [`io::ErrorKind::NotFound`] when the identifier is not a waitable child.
     pub fn peek_child_exit(pid: NonZeroI32) -> io::Result<bool> {
+        // A negative identifier names a process group elsewhere in the wait
+        // interfaces, and silently taking its magnitude would observe a
+        // different process than the caller named.
+        let observed = u32::try_from(pid.get())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
         // POSIX specifies that a zero `si_pid` distinguishes the WNOHANG case.
         // Starting from all-zero bytes also avoids observing uninitialized
         // padding when the kernel reports no state change.
@@ -34,7 +39,7 @@ pub mod unix {
         let result = unsafe {
             libc::waitid(
                 libc::P_PID,
-                pid.get().unsigned_abs(),
+                observed,
                 ptr::from_mut(&mut information),
                 libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
             )
@@ -296,6 +301,16 @@ pub mod unix {
             assert!(!peek_child_exit(pid).unwrap());
             child.kill().unwrap();
             child.wait().unwrap();
+        }
+
+        #[test]
+        fn rejects_a_negative_identifier_rather_than_observing_its_magnitude() {
+            let own_pid = i32::try_from(std::process::id()).unwrap();
+            let negative = NonZeroI32::new(-own_pid).unwrap();
+            assert_eq!(
+                peek_child_exit(negative).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
         }
 
         #[test]
