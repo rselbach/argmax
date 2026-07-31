@@ -129,7 +129,7 @@ pub fn ai_suggestion(query: &CompletionQuery, response: &str) -> Result<Suggesti
 /// stripped, because silently altering a command is its own hazard.
 ///
 /// The set is Unicode's format category, which `char::is_control` excludes.
-fn is_invisible(character: char) -> bool {
+pub(crate) fn is_invisible(character: char) -> bool {
     matches!(
         character,
         '\u{00AD}'

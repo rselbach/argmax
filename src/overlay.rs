@@ -1189,15 +1189,7 @@ fn sanitize_bounded(value: &str) -> (String, bool) {
 }
 
 fn is_unsafe_display_character(character: char) -> bool {
-    character.is_control()
-        || matches!(
-            character,
-            '\u{061C}'
-                | '\u{200E}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
-                | '\u{2066}'..='\u{206F}'
-                | '\u{FEFF}'
-        )
+    character.is_control() || crate::ai::is_invisible(character)
 }
 
 #[cfg(test)]
@@ -2429,5 +2421,32 @@ mod tests {
         let _ = screen.observe(&clear.transaction().bytes()[..1]);
         let recovery = renderer.on_failure(screen.snapshot()).unwrap();
         assert!(recovery.transaction().bytes().len() <= MAX_RENDER_BYTES);
+    }
+
+    #[test]
+    fn display_sanitizing_replaces_every_invisible_character() {
+        let hidden = [
+            '\u{00AD}',
+            '\u{200B}',
+            '\u{200D}',
+            '\u{200E}',
+            '\u{202E}',
+            '\u{2060}',
+            '\u{2066}',
+            '\u{FEFF}',
+            '\u{E0041}',
+            '\u{1D173}',
+        ];
+        for character in hidden {
+            let (sanitized, truncated) = sanitize_bounded(&format!("git{character}status"));
+            assert!(!truncated);
+            assert_eq!(
+                sanitized, "git\u{FFFD}status",
+                "kept U+{:04X} in displayed text",
+                character as u32
+            );
+        }
+
+        assert_eq!(sanitize_bounded("git commit café").0, "git commit café");
     }
 }
