@@ -221,13 +221,20 @@ sha256_file() {
 expected_sha256() {
   install_checksum_path=$1
   install_asset_name=$2
+  # Exactly one matching line is accepted, matching the Rust updater's
+  # parser; printing nothing makes the caller fail closed.
   awk -v asset="${install_asset_name}" '
     {
       name = $2
       sub(/^\*/, "", name)
       if (name == asset && length($1) == 64 && $1 !~ /[^0-9a-f]/) {
-        print $1
-        exit
+        matches += 1
+        digest = $1
+      }
+    }
+    END {
+      if (matches == 1) {
+        print digest
       }
     }
   ' "${install_checksum_path}"
