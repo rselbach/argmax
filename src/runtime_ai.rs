@@ -407,13 +407,21 @@ impl AiCompletionDispatcher {
     }
 
     fn send_event(&self, event: RuntimeEvent) -> SendDisposition {
+        // The count rises before the send: the scheduler may dequeue and
+        // decrement between a successful send and a late increment, and the
+        // saturating decrement would then leave a permanent phantom entry
+        // in the reported backlog.
+        self.queued_events.fetch_add(1, Ordering::AcqRel);
         match self.sender.try_send(event) {
-            Ok(()) => {
-                self.queued_events.fetch_add(1, Ordering::AcqRel);
-                SendDisposition::Queued
+            Ok(()) => SendDisposition::Queued,
+            Err(TrySendError::Full(_)) => {
+                decrement_saturating(&self.queued_events);
+                SendDisposition::Full
             }
-            Err(TrySendError::Full(_)) => SendDisposition::Full,
-            Err(TrySendError::Disconnected(_)) => SendDisposition::Closed,
+            Err(TrySendError::Disconnected(_)) => {
+                decrement_saturating(&self.queued_events);
+                SendDisposition::Closed
+            }
         }
     }
 }
