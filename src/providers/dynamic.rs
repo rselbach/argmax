@@ -401,19 +401,23 @@ pub fn parse_just_recipes(output: &[u8]) -> Result<Vec<DynamicItem>, DynamicPars
 ///
 /// # Errors
 ///
-/// Returns an error when the combined input exceeds
-/// [`MAX_DYNAMIC_OUTPUT_BYTES`] or either body is not valid UTF-8. Unsafe rows
-/// are ignored independently.
+/// Returns an error when either body exceeds [`MAX_DYNAMIC_OUTPUT_BYTES`] or is
+/// not valid UTF-8. The bodies are bounded separately, matching how each file is
+/// read. Unsafe rows are ignored independently.
 pub fn parse_ssh_hosts(
     known_hosts: &[u8],
     config: &[u8],
 ) -> Result<Vec<DynamicItem>, DynamicParseError> {
-    let size = known_hosts.len().saturating_add(config.len());
-    if size > MAX_DYNAMIC_OUTPUT_BYTES {
-        return Err(DynamicParseError::OutputTooLarge {
-            size,
-            limit: MAX_DYNAMIC_OUTPUT_BYTES,
-        });
+    // Each file is read under this limit individually, so bounding their sum
+    // here rejected two files that were both separately acceptable, silently
+    // removing every SSH host candidate.
+    for body in [known_hosts, config] {
+        if body.len() > MAX_DYNAMIC_OUTPUT_BYTES {
+            return Err(DynamicParseError::OutputTooLarge {
+                size: body.len(),
+                limit: MAX_DYNAMIC_OUTPUT_BYTES,
+            });
+        }
     }
     let known_hosts = decode_utf8(known_hosts)?;
     let config = decode_utf8(config)?;
