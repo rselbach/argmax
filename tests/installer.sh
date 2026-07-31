@@ -67,7 +67,8 @@ write_fake_curl() {
     printf '%s\n' 'while [ "$#" -gt 0 ]; do'
     printf '%s\n' "  case \"\$1\" in"
     printf '%s\n' "    --output) destination=\$2; shift 2 ;;"
-    printf '%s\n' '    --connect-timeout | --max-time | --proto) shift 2 ;;'
+    printf '%s\n' \
+      '    --connect-timeout | --max-time | --proto | --proto-redir) shift 2 ;;'
     printf '%s\n' '    --fail | --location | --silent | --show-error | --tlsv1.2) shift ;;'
     printf '%s\n' "    https://*) url=\$1; shift ;;"
     printf '%s\n' '    *) exit 64 ;;'

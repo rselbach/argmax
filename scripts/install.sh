@@ -165,7 +165,7 @@ download_file() {
   install_download_name=${install_url##*/}
   if command_exists curl; then
     curl --fail --location --silent --show-error \
-      --proto '=https' --tlsv1.2 \
+      --proto '=https' --proto-redir '=https' --tlsv1.2 \
       --connect-timeout "${DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" \
       --max-time "${DOWNLOAD_TIMEOUT_SECONDS}" \
       --output "${install_destination}" "${install_url}" \
@@ -173,8 +173,9 @@ download_file() {
     return
   fi
   if command_exists wget; then
-    wget --quiet --https-only \
+    wget --quiet --https-only --secure-protocol=TLSv1_2 \
       --timeout="${DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" --tries=2 \
+      --read-timeout="${DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" \
       --output-document="${install_destination}" "${install_url}" \
       || fail "download failed for ${install_download_name}"
     return
