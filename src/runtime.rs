@@ -35,7 +35,8 @@ use crate::providers::{ShellKind as ProviderShellKind, alias_config_paths};
 use crate::pty::{
     ChildExit, ForegroundState, ForwardSignal, IntegrationRead, PrivateSessionId, PtyClose,
     PtyIntegration, PtyRead, PtyReadError, PtyReader, PtySession, PtySpawnRequest, PtyStartup,
-    SelectedShell, ShellKind, ShellSelectionRequest, SignalEvent, SignalEvents, select_shell,
+    PtyWriteError, SelectedShell, ShellKind, ShellSelectionRequest, SignalEvent, SignalEvents,
+    select_shell,
 };
 use crate::reload::{ConfigReloader, RELOAD_ACK_PREFIX, ReloadChange, ReloadPoll};
 use crate::runtime_ai::{
@@ -845,6 +846,18 @@ impl PendingWrites {
         }
         Ok(())
     }
+
+    fn discard_control(&mut self) {
+        let discarded: usize = self
+            .writes
+            .iter()
+            .filter(|write| write.destination == WriteDestination::Control)
+            .map(|write| write.bytes.len() - write.written)
+            .sum();
+        self.writes
+            .retain(|write| write.destination != WriteDestination::Control);
+        self.bytes -= discarded;
+    }
 }
 
 struct SessionDriver {
@@ -1348,7 +1361,24 @@ impl SessionDriver {
             let remaining = &front.bytes[front.written..];
             let write = match front.destination {
                 WriteDestination::Pty => session.write_input(remaining),
-                WriteDestination::Control => self.integration.write_control(remaining),
+                WriteDestination::Control => match self.integration.write_control(remaining) {
+                    // The shell closed its integration descriptor, usually by
+                    // exiting; queued frames are undeliverable forever. Drop
+                    // them so a clean exit reports the child's real status
+                    // instead of a wrapper write failure.
+                    Err(
+                        PtyWriteError::Closed
+                        | PtyWriteError::Io {
+                            kind: io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset,
+                            ..
+                        },
+                    ) => {
+                        self.pending.discard_control();
+                        progress = true;
+                        continue;
+                    }
+                    write => write,
+                },
             };
             let written = write
                 .map_err(|error| RuntimeError::Write(error.to_string()))?
@@ -2030,6 +2060,35 @@ mod tests {
             crate::completion::InsertionBehavior::Exact,
             identity,
         )
+    }
+
+    #[test]
+    fn discarding_control_writes_keeps_pty_entries_and_byte_accounting() {
+        let mut pending = PendingWrites::default();
+        pending.push(WriteDestination::Pty, *b"abc").unwrap();
+        pending.push(WriteDestination::Control, *b"frame").unwrap();
+        pending.push(WriteDestination::Pty, *b"de").unwrap();
+        let before = pending.available();
+
+        pending.discard_control();
+
+        assert_eq!(pending.available(), before + b"frame".len());
+        assert_eq!(pending.writes.len(), 2);
+        assert!(
+            pending
+                .writes
+                .iter()
+                .all(|write| write.destination == WriteDestination::Pty)
+        );
+
+        let mut partially_written = PendingWrites::default();
+        partially_written
+            .push(WriteDestination::Control, *b"frame")
+            .unwrap();
+        partially_written.advance_front(2).unwrap();
+        partially_written.discard_control();
+        assert!(partially_written.is_empty());
+        assert_eq!(partially_written.available(), MAX_PENDING_WRITE_BYTES);
     }
 
     #[test]
