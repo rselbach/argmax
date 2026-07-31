@@ -54,7 +54,7 @@ const MAX_IDENTITY_BYTES: usize = 8 * 1024;
 /// `core.fsmonitor` is cleared rather than set to `false`: git releases before
 /// 2.36 read the value as a hook path, where `false` resolves to an executable
 /// on `PATH`, while an empty value is inert for every version.
-const GIT_READ_ONLY_CONFIG: [&str; 6] = [
+pub(crate) const GIT_READ_ONLY_CONFIG: [&str; 6] = [
     "-c",
     "color.ui=false",
     "-c",

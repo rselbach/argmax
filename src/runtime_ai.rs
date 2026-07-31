@@ -1452,6 +1452,19 @@ fn git_lines(
         })
 }
 
+/// Builds a git argument vector with the repository's own configuration
+/// neutralized, matching the discipline every completion generator applies:
+/// a hostile checkout must not execute `core.fsmonitor` or hook programs
+/// during read-only context queries.
+fn git_argv(arguments: &[&str]) -> Vec<OsString> {
+    crate::providers::execution::GIT_READ_ONLY_CONFIG
+        .iter()
+        .chain(arguments)
+        .copied()
+        .map(OsString::from)
+        .collect()
+}
+
 fn git_output(
     root: &Path,
     arguments: &[&str],
@@ -1463,7 +1476,7 @@ fn git_output(
     }
     let request = LocalProcessRequest::new(
         "git",
-        arguments.iter().map(OsString::from),
+        git_argv(arguments),
         root,
         LOCAL_CONTEXT_PROCESS_TIMEOUT,
         limit,
@@ -1542,6 +1555,21 @@ mod tests {
             assert!(Instant::now() < deadline, "AI batch did not arrive");
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn git_context_argv_neutralizes_repository_configuration() {
+        let argv = git_argv(&["status", "--short"]);
+        let prefix: Vec<OsString> = crate::providers::execution::GIT_READ_ONLY_CONFIG
+            .iter()
+            .copied()
+            .map(OsString::from)
+            .collect();
+        assert!(argv.starts_with(&prefix));
+        assert_eq!(
+            &argv[prefix.len()..],
+            &[OsString::from("status"), OsString::from("--short")]
+        );
     }
 
     #[test]
