@@ -277,13 +277,26 @@ impl AiCompletionDispatcher {
         if !self.alive.load(Ordering::Acquire) {
             return AiQueryAdmission::Closed;
         }
-        let Some(authority) = advance_authority(&self.authority) else {
+        let current = self.authority.load(Ordering::Acquire);
+        let Some(authority) = current.checked_add(1) else {
             return AiQueryAdmission::Closed;
         };
         self.latest_generation
             .store(work.query().generation, Ordering::Release);
         match self.send_event(RuntimeEvent::Query { work, authority }) {
-            SendDisposition::Queued => AiQueryAdmission::Queued,
+            SendDisposition::Queued => {
+                // Authority advances only once the query is queued. Advancing
+                // first would revoke the in-flight request while the query
+                // meant to replace it was rejected, leaving the session with no
+                // AI output until the buffer changed again.
+                let _ = self.authority.compare_exchange(
+                    current,
+                    authority,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+                AiQueryAdmission::Queued
+            }
             SendDisposition::Full => AiQueryAdmission::Full,
             SendDisposition::Closed => AiQueryAdmission::Closed,
         }
