@@ -173,7 +173,8 @@ download_file() {
     return
   fi
   if command_exists wget; then
-    wget --quiet --https-only --secure-protocol=TLSv1_2 \
+    run_with_deadline "${DOWNLOAD_TIMEOUT_SECONDS}" \
+      wget --quiet --https-only --secure-protocol=TLSv1_2 \
       --timeout="${DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" --tries=2 \
       --read-timeout="${DOWNLOAD_CONNECT_TIMEOUT_SECONDS}" \
       --output-document="${install_destination}" "${install_url}" \
@@ -181,6 +182,27 @@ download_file() {
     return
   fi
   fail "curl or wget is required to download a release"
+}
+
+# Bounds a command's total run time. wget has no equivalent of curl's
+# --max-time, so its per-read timeout alone lets a server drip-feed bytes
+# and stall the installer for an unbounded total time.
+run_with_deadline() {
+  install_deadline_seconds=$1
+  shift
+  "$@" &
+  install_deadline_pid=$!
+  install_deadline_waited=0
+  while kill -0 "${install_deadline_pid}" 2>/dev/null; do
+    if [ "${install_deadline_waited}" -ge "${install_deadline_seconds}" ]; then
+      kill "${install_deadline_pid}" 2>/dev/null || :
+      wait "${install_deadline_pid}" 2>/dev/null || :
+      return 1
+    fi
+    sleep 1
+    install_deadline_waited=$((install_deadline_waited + 1))
+  done
+  wait "${install_deadline_pid}"
 }
 
 sha256_file() {
