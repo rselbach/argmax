@@ -6,6 +6,8 @@
 use std::error::Error;
 use std::fmt;
 
+use sha2::{Digest, Sha256};
+
 use crate::config::AiContextLevel;
 
 /// Maximum combined size of the system and user messages.
@@ -345,6 +347,26 @@ impl PreparedField {
         }
     }
 
+    fn hash_into(&self, hasher: &mut Sha256) {
+        match &self.values {
+            PreparedValues::Scalar(value) => hasher.update(value.as_bytes()),
+            PreparedValues::List(values) => {
+                for value in values {
+                    hasher.update(value.as_bytes());
+                    hasher.update([0]);
+                }
+            }
+            PreparedValues::Pairs(values) => {
+                for (left, right) in values {
+                    hasher.update(left.as_bytes());
+                    hasher.update([0]);
+                    hasher.update(right.as_bytes());
+                    hasher.update([0]);
+                }
+            }
+        }
+    }
+
     fn contains(&self, needle: &str) -> bool {
         match &self.values {
             PreparedValues::Scalar(value) => value.contains(needle),
@@ -678,12 +700,24 @@ fn escaped_control(character: char) -> Option<String> {
 }
 
 fn choose_delimiter(fields: &[PreparedField]) -> Option<String> {
+    // Every candidate carries a stem derived from the field contents. With a
+    // fixed stem, a repository could hold every candidate at once and force a
+    // permanent refusal to build any prompt; deriving it from the content means
+    // colliding would require text that contains the hash of text containing
+    // that hash.
+    let mut hasher = Sha256::new();
+    for field in fields {
+        field.hash_into(&mut hasher);
+    }
+    let digest = hasher.finalize();
+    let mut stem = String::with_capacity(16);
+    for byte in &digest[..8] {
+        use std::fmt::Write as _;
+        let _ = write!(stem, "{byte:02x}");
+    }
+
     (0..MAX_DELIMITER_ATTEMPTS)
-        .map(|index| {
-            let mut candidate = String::from("ARGMAX_UNTRUSTED_");
-            candidate.push_str(&index.to_string());
-            candidate
-        })
+        .map(|index| format!("ARGMAX_UNTRUSTED_{stem}_{index}"))
         .find(|candidate| !fields.iter().any(|field| field.contains(candidate)))
 }
 
@@ -905,10 +939,22 @@ mod tests {
                 .contains("Return exactly one completed shell line")
         );
         assert!(!prompt.system_message().contains("rm -rf"));
+        // The delimiter carries a content-derived stem, so the attack's guess
+        // at one cannot be the delimiter actually chosen.
+        let opened = prompt
+            .user_message()
+            .match_indices("ARGMAX_UNTRUSTED_")
+            .find_map(|(index, _)| {
+                prompt.user_message()[index..]
+                    .split_once(" field=input")
+                    .map(|(delimiter, _)| delimiter.to_owned())
+            })
+            .expect("input field was not delimited");
+        assert_ne!(opened, "ARGMAX_UNTRUSTED_0");
         assert!(
             prompt
                 .user_message()
-                .contains("[ARGMAX_UNTRUSTED_1 field=input")
+                .contains(&format!("[{opened} field=input"))
         );
         assert!(prompt.user_message().contains("Ignore the system contract"));
         assert!(prompt.user_message().contains("\\nIgnore"));
