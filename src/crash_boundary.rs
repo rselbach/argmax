@@ -607,7 +607,11 @@ fn snapshot_from_hook(information: &PanicHookInfo<'_>) -> PanicSnapshot {
     write_payload(&mut failure, information.payload());
     PanicSnapshot {
         failure: failure.finish(),
-        backtrace: capture_backtrace(),
+        // This runs inside the process panic hook, where a second panic is not
+        // an unwind but an immediate abort, before the terminal is restored.
+        // Capturing a backtrace allocates and resolves symbols, so it is
+        // guarded here for the same reason it is guarded off the hook.
+        backtrace: capture_backtrace_safely(),
     }
 }
 
