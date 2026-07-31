@@ -292,6 +292,10 @@ impl SpecIndex {
                 parsed
                     .committed_tokens()
                     .first()
+                    // An unresolved token containing an equals sign is most
+                    // likely an assignment shape the strict predicate did not
+                    // recognize; its value must not become a ranking key.
+                    .filter(|token| !token.cooked.contains('='))
                     .map(|token| token.cooked.clone())
             })
     }
@@ -755,8 +759,17 @@ fn split_option_value(value: &str) -> (&str, bool) {
 }
 
 fn is_shell_assignment(value: &str) -> bool {
-    let Some((name, _)) = value.split_once('=') else {
+    let Some((target, _)) = value.split_once('=') else {
         return false;
+    };
+    // Appending (name+=value) and element (name[index]=value) forms carry
+    // their value exactly like the plain form and must be skipped the same
+    // way; treating one as a command root would leak the value into the
+    // ranking keyspace.
+    let target = target.strip_suffix('+').unwrap_or(target);
+    let name = match target.split_once('[') {
+        Some((name, index)) if index.ends_with(']') => name,
+        _ => target,
     };
     let mut characters = name.chars();
     characters

@@ -344,7 +344,13 @@ impl AiCompletionDispatcher {
     /// request authorized before command execution.
     pub fn record_completed_command(&self, command: impl Into<String>) -> AiCommandAdmission {
         let command = command.into();
-        if command.trim().is_empty() || command.len() > MAX_RECENT_COMMAND_BYTES {
+        // A leading blank is the shells' hide-from-history convention; such
+        // a command must not enter the recent-command context transmitted to
+        // the provider either.
+        if command.trim().is_empty()
+            || command.len() > MAX_RECENT_COMMAND_BYTES
+            || command.starts_with([' ', '\t'])
+        {
             self.cancel(CancellationReason::CommandExecution);
             return AiCommandAdmission::Ignored;
         }
@@ -1700,6 +1706,27 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn blank_prefixed_commands_never_enter_provider_context() {
+        let dispatcher = AiCompletionDispatcher::spawn_with_transport(
+            AiCompletionOptions::new("bash", settings(true)),
+            Arc::new(|_| Ok("git status".to_owned())),
+        )
+        .unwrap();
+        assert_eq!(
+            dispatcher.record_completed_command(" export TOKEN=greendale"),
+            AiCommandAdmission::Ignored
+        );
+        assert_eq!(
+            dispatcher.record_completed_command("\texport TOKEN=greendale"),
+            AiCommandAdmission::Ignored
+        );
+        assert_eq!(
+            dispatcher.record_completed_command("git status"),
+            AiCommandAdmission::Queued
+        );
     }
 
     #[test]

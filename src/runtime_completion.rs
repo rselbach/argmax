@@ -1074,10 +1074,7 @@ impl Worker {
         // A leading blank is the shells' established "keep this out of
         // history" convention. This store outlives shell history and has no
         // expiry, so honoring it matters more here than there.
-        if completed
-            .command
-            .starts_with(|character: char| character.is_whitespace())
-        {
+        if completed.command.starts_with([' ', '\t']) {
             self.prior_skeleton = None;
             return;
         }
@@ -1276,24 +1273,13 @@ fn fallback_skeleton(command: &str) -> Option<String> {
     }
     let parsed = tokenize(&line, line.len()).ok()?;
     let first = parsed.committed_tokens().first()?;
-    // A leading NAME=value assignment carries the value itself, which the
-    // spec-aware skeleton deliberately skips. Reaching here means the line
-    // was only assignments, so there is no command to key ranking on.
-    if is_environment_assignment(&first.cooked) {
+    // Any equals sign in a leading token marks a probable assignment whose
+    // value must not become a ranking key; assignment shapes vary too much
+    // for name validation to enumerate safely.
+    if first.cooked.contains('=') {
         return None;
     }
     Some(first.cooked.clone())
-}
-
-fn is_environment_assignment(token: &str) -> bool {
-    let Some((name, _)) = token.split_once('=') else {
-        return false;
-    };
-    !name.is_empty()
-        && !name.starts_with(|character: char| character.is_ascii_digit())
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 fn valid_skeleton(skeleton: &str) -> bool {
@@ -1836,11 +1822,11 @@ mod tests {
             fallback_skeleton("git status"),
             Some("git status".split(' ').next().unwrap().to_owned())
         );
-        // A leading digit is not a valid variable name, so this stays a command.
-        assert_eq!(
-            fallback_skeleton("7zip=archive"),
-            Some("7zip=archive".to_owned())
-        );
+        // Even an invalid variable name stays out of the keyspace: the
+        // token could still carry a value.
+        assert_eq!(fallback_skeleton("7zip=archive"), None);
+        assert_eq!(fallback_skeleton("LD_PRELOAD+=/secret"), None);
+        assert_eq!(fallback_skeleton("TOKEN[0]=secret"), None);
     }
 
     #[test]
