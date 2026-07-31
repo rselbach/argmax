@@ -723,6 +723,17 @@ fi
 "#;
 
 const ZSH_INIT: &str = r#"# argmax shell integration
+# Aliases expand when the block below is parsed, so a user alias for print,
+# bindkey, or any other command it uses would be baked into the hook bodies.
+# This must precede the block: zsh parses a whole compound command before
+# running any of it, so suppressing expansion from inside would be too late.
+if [[ -o aliases ]]; then
+  __argmax_zsh_restore_aliases=1
+else
+  __argmax_zsh_restore_aliases=0
+fi
+setopt no_aliases
+
 if [[ -o interactive && -t 0 && -t 1 ]]; then
   if [[ -n ${ARGMAX_PRIVATE_SESSION-} ]]; then
     if [[ -z ${ARGMAX_SESSION_OWNER_PID-} ]]; then
@@ -781,6 +792,7 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
 
       __argmax_emit() {
         : argmax-owned-zsh-v1
+        emulate -L zsh
         local argmax_event=$1
         [[ ${ARGMAX_EVENT_FD-} == <-> ]] || return 0
         (( 10#$ARGMAX_EVENT_FD >= 3 )) || return 0
@@ -793,6 +805,7 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
 
       __argmax_preexec() {
         : argmax-owned-zsh-v1
+        emulate -L zsh
         __ARGMAX_ZSH_COMMAND_ACTIVE=1
         if [[ -n $1 ]]; then
           __argmax_emit "command-start:$1"
@@ -804,6 +817,7 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
       __argmax_precmd() {
         local argmax_status=$?
         : argmax-owned-zsh-v1
+        emulate -L zsh
         if (( ${__ARGMAX_ZSH_COMMAND_ACTIVE:-0} )); then
           __argmax_emit "command-stop:$argmax_status"
           __ARGMAX_ZSH_COMMAND_ACTIVE=0
@@ -815,6 +829,7 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
 
       __argmax_control_apply() {
         : argmax-owned-zsh-v1
+        emulate -L zsh
         local argmax_frame=$1
         local argmax_native_unit=$2
         local LC_ALL=C
@@ -948,6 +963,7 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
 
       __argmax_control_drain() {
         : argmax-owned-zsh-v1
+        emulate -L zsh
         local argmax_native_unit=$1
         local LC_ALL=C
         local argmax_chunk
@@ -1004,13 +1020,19 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
         local argmax_status=$?
         : argmax-owned-zsh-v1
         local argmax_unit=b
+        if [[ -o multibyte ]]; then
+          argmax_unit=c
+        fi
+        emulate -L zsh
+        # The editor reports CURSOR and BUFFER in the caller's own multibyte
+        # mode, so the emulated default must not redefine those units.
+        if [[ $argmax_unit == b ]]; then
+          unsetopt multibyte
+        fi
         local argmax_control_buffer=
         local -i argmax_control_cursor=0
         local -i argmax_control_request=0
         local -i argmax_control_ready=0
-        if [[ -o multibyte ]]; then
-          argmax_unit=c
-        fi
         __argmax_control_drain "$argmax_unit"
         if (( argmax_control_ready )); then
           BUFFER=$argmax_control_buffer
@@ -1145,6 +1167,11 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
     fi
   fi
 fi
+
+if (( __argmax_zsh_restore_aliases )); then
+  setopt aliases
+fi
+unset __argmax_zsh_restore_aliases
 "#;
 
 const FISH_INIT: &str = r#"# argmax shell integration
@@ -2584,6 +2611,105 @@ mod tests {
                 .map(<[u8]>::to_vec)
                 .collect(),
         )
+    }
+
+    fn hostile_zsh_events() -> Option<Vec<Vec<u8>>> {
+        if !expect_is_available() || !shell_is_available("zsh") {
+            return None;
+        }
+
+        let directory = HarnessDirectory::create(Shell::Zsh);
+        let init_path = directory.0.join("init");
+        let events_path = directory.0.join("events");
+        fs::write(&init_path, init_script(Shell::Zsh)).expect("write Zsh init");
+        let expect_program = r#"
+          set timeout 10
+          log_user 0
+          spawn sh -c {exec 3>"$ARGMAX_TEST_EVENTS"; exec zsh -df -i}
+          send -- "PS1='ARGMAX''> '\r"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 2 }
+            eof { exit 3 }
+          }
+          send -- "setopt ksh_arrays sh_word_split glob_subst\r"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 4 }
+            eof { exit 5 }
+          }
+          send -- "alias print='echo BROKEN'; alias bindkey=':'; alias read=':'\r"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 6 }
+            eof { exit 7 }
+          }
+          send -- "source \"$env(ARGMAX_TEST_INIT)\"\r"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 8 }
+            eof { exit 9 }
+          }
+          send -- "echo hi"
+          send -- "\033\[argmax-sync~"
+          after 100
+          send -- "\r"
+          expect {
+            "ARGMAX> " {}
+            timeout { exit 10 }
+            eof { exit 11 }
+          }
+          send -- "exit\r"
+          expect eof
+        "#;
+        let output = Command::new("expect")
+            .args(["-c", expect_program])
+            .env("ARGMAX_PRIVATE_SESSION", "1")
+            .env("ARGMAX_EVENT_FD", "3")
+            .env("ARGMAX_TEST_EVENTS", &events_path)
+            .env("ARGMAX_TEST_INIT", &init_path)
+            .output()
+            .expect("run hostile Zsh harness");
+        let events = fs::read(&events_path).unwrap_or_default();
+        assert!(
+            output.status.success(),
+            "hostile Zsh PTY harness failed with {}:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Some(
+            events
+                .split(|byte| *byte == 0)
+                .filter(|frame| !frame.is_empty())
+                .map(<[u8]>::to_vec)
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn zsh_hooks_survive_user_options_and_aliases() {
+        let Some(events) = hostile_zsh_events() else {
+            return;
+        };
+        assert!(
+            events
+                .iter()
+                .any(|frame| frame == b"capability:sync-probe:0"),
+            "hooks did not install under hostile options: {events:?}"
+        );
+        assert!(
+            events.iter().any(|frame| {
+                frame.starts_with(b"probe-buffer:") && frame.ends_with(b":echo hi")
+            }),
+            "buffer probe was not correlated under hostile options: {events:?}"
+        );
+        assert!(events.iter().any(|frame| frame == b"command-start:echo hi"));
+        assert!(
+            !events
+                .iter()
+                .any(|frame| frame.windows(6).any(|window| window == b"BROKEN")),
+            "an alias intercepted the emit path: {events:?}"
+        );
     }
 
     fn bash_command_text_events() -> Option<Vec<Vec<u8>>> {
