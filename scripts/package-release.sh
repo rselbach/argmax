@@ -108,15 +108,17 @@ path_entry_is_protected() {
   release_entry_child=$2
   path_metadata "${release_entry_parent}" || return 1
   path_has_no_acl "${release_entry_parent}" || return 1
-  release_parent_owner=${release_path_owner}
   release_parent_mode_value=${release_path_mode_value}
   [ $((release_parent_mode_value & 0022)) -ne 0 ] || return 0
   [ $((release_parent_mode_value & 01000)) -ne 0 ] || return 1
 
+  # Under a sticky bit only the entry's own owner, the directory's owner, or
+  # root may rename or remove it. Accepting a parent owned by the current user
+  # while the entry belongs to someone else would leave that other owner able
+  # to replace the component after this check.
   path_metadata "${release_entry_child}" || return 1
   release_current_uid=$(id -u) || return 1
-  [ "${release_parent_owner}" = "${release_current_uid}" ] \
-    || [ "${release_path_owner}" = "${release_current_uid}" ]
+  [ "${release_path_owner}" = "${release_current_uid}" ]
 }
 
 path_chain_is_secure() {
