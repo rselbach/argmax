@@ -910,20 +910,40 @@ fn spec_edit(
     let suffix = full_active.cooked.strip_prefix(&active.cooked)?;
     let candidate_chars: Vec<_> = candidate.chars().collect();
     let prefix_len = active.cooked.chars().count();
-    let suffix_len = suffix.chars().count();
-    if candidate_chars.len() < prefix_len + suffix_len
-        || !candidate.to_lowercase().ends_with(&suffix.to_lowercase())
-    {
+    // The matched tail is counted in candidate characters: case folding can
+    // change a character's length (one dotted capital I folds to two
+    // characters), so counting typed suffix characters would misalign the
+    // slice below.
+    let matched_tail = case_folded_tail_length(&candidate_chars, suffix)?;
+    if candidate_chars.len() < prefix_len + matched_tail {
         return None;
     }
-    let replacement: String = candidate_chars
-        [prefix_len..candidate_chars.len().saturating_sub(suffix_len)]
+    let replacement: String = candidate_chars[prefix_len..candidate_chars.len() - matched_tail]
         .iter()
         .collect();
     Some(TextEdit {
         range: cursor..cursor,
         replacement,
     })
+}
+
+/// Counts trailing `candidate` characters whose case-folded form equals the
+/// case-folded `suffix`, or none when the tail does not match.
+fn case_folded_tail_length(candidate: &[char], suffix: &str) -> Option<usize> {
+    if suffix.is_empty() {
+        return Some(0);
+    }
+    let folded_suffix = suffix.to_lowercase();
+    let mut folded_tail = String::new();
+    for (consumed, character) in candidate.iter().rev().enumerate() {
+        let mut folded: String = character.to_lowercase().collect();
+        folded.push_str(&folded_tail);
+        folded_tail = folded;
+        if folded_tail.len() >= folded_suffix.len() {
+            return (folded_tail == folded_suffix).then_some(consumed + 1);
+        }
+    }
+    None
 }
 
 fn prefix_matches(candidate: &str, partial: &str) -> bool {
@@ -1349,6 +1369,21 @@ mod tests {
                 GeneratorTarget::PositionalsFrom(1),
             ));
         assert!(capped_range.validate().is_err());
+    }
+
+    #[test]
+    fn case_folded_tail_alignment_counts_candidate_characters() {
+        let chars: Vec<char> = "İstanbul".chars().collect();
+        assert_eq!(case_folded_tail_length(&chars, "BUL"), Some(3));
+        assert_eq!(case_folded_tail_length(&chars, ""), Some(0));
+        assert_eq!(case_folded_tail_length(&chars, "xyz"), None);
+
+        // One dotted capital I folds to two characters; the matched tail is
+        // one candidate character, not two.
+        let dotted: Vec<char> = "xİ".chars().collect();
+        assert_eq!(case_folded_tail_length(&dotted, "i\u{307}"), Some(1));
+        // A fold that crosses the suffix boundary is not a match.
+        assert_eq!(case_folded_tail_length(&dotted, "\u{307}"), None);
     }
 
     #[test]
