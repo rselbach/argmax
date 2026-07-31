@@ -63,6 +63,11 @@ const MAX_PENDING_WRITE_BYTES: usize = 512 * 1024;
 const IDLE_POLL: Duration = Duration::from_millis(1);
 const STANDALONE_ESCAPE_TIMEOUT: Duration = Duration::from_millis(25);
 const CURSOR_POSITION_TIMEOUT: Duration = Duration::from_millis(100);
+/// How long trailing output may keep the session alive after the child is
+/// reaped. A background job inheriting the slave keeps the master from ever
+/// reaching end of file; without a bound the wrapper would hold the terminal
+/// captive until that job exits.
+const EXIT_OUTPUT_DRAIN: Duration = Duration::from_millis(500);
 const CURSOR_POSITION_QUERY: &[u8] = b"\x1b[6n";
 const MAX_WAITING_RELOAD_ACKNOWLEDGMENTS: usize = 8;
 const MAX_DRAIN_PER_TICK: usize = 64;
@@ -853,6 +858,7 @@ struct SessionDriver {
     integration_state: ReadState,
     input_state: InputState,
     child_exit: Option<ChildExit>,
+    exit_drain_deadline: Option<Instant>,
     escape_deadline: Option<Instant>,
     reload_request: Option<ReloadRequest>,
     output: SerializedOutput<io::Stdout>,
@@ -1210,6 +1216,7 @@ impl SessionDriver {
             integration_state: ReadState::Open,
             input_state: InputState::Open,
             child_exit: None,
+            exit_drain_deadline: None,
             escape_deadline: None,
             reload_request: None,
             output: transport.output,
@@ -1250,6 +1257,21 @@ impl SessionDriver {
                 }
                 SignalEvent::Continue => ForwardSignal::Continue,
             };
+            // Once the child is reaped there is no foreground group left to
+            // receive the signal; a termination request then applies to the
+            // wrapper itself and ends the trailing-output drain immediately.
+            if self.child_exit.is_some() {
+                if matches!(
+                    signal,
+                    ForwardSignal::Interrupt
+                        | ForwardSignal::Quit
+                        | ForwardSignal::Terminate
+                        | ForwardSignal::Hangup
+                ) {
+                    self.exit_drain_deadline = Some(Instant::now());
+                }
+                continue;
+            }
             session
                 .forward_signal(signal)
                 .map_err(|error| RuntimeError::Write(error.to_string()))?;
@@ -1914,6 +1936,9 @@ impl SessionDriver {
             .try_wait()
             .map_err(|error| RuntimeError::Read(error.to_string()))?;
         self.child_exit = exit;
+        if exit.is_some() {
+            self.exit_drain_deadline = Some(Instant::now() + EXIT_OUTPUT_DRAIN);
+        }
         Ok(exit.is_some())
     }
 
@@ -1943,9 +1968,35 @@ impl SessionDriver {
     }
 
     fn completed_exit(&self) -> Option<ChildExit> {
-        self.child_exit
-            .filter(|_| self.reader_state == ReadState::Eof && self.pending.is_empty())
+        completed_exit_after_drain(
+            self.child_exit,
+            self.reader_state,
+            self.pending.is_empty(),
+            self.exit_drain_deadline,
+            Instant::now(),
+        )
     }
+}
+
+/// Decides whether the session is over once the child has been reaped.
+///
+/// The clean path still requires the reader to observe end of file and the
+/// pending queues to drain. Past the drain deadline the exit completes
+/// anyway: the remaining reader traffic belongs to orphans holding the
+/// slave, and queued writes have no shell left to read them.
+fn completed_exit_after_drain(
+    child_exit: Option<ChildExit>,
+    reader_state: ReadState,
+    pending_empty: bool,
+    drain_deadline: Option<Instant>,
+    now: Instant,
+) -> Option<ChildExit> {
+    let exit = child_exit?;
+    if reader_state == ReadState::Eof && pending_empty {
+        return Some(exit);
+    }
+    let deadline = drain_deadline?;
+    (now >= deadline).then_some(exit)
 }
 
 #[cfg(test)]
@@ -1971,6 +2022,39 @@ mod tests {
             crate::completion::InsertionBehavior::Exact,
             identity,
         )
+    }
+
+    #[test]
+    fn exit_completes_on_reader_eof_or_past_the_drain_deadline() {
+        let exit = Some(ChildExit::Exited(0));
+        let now = Instant::now();
+        let deadline = Some(now + EXIT_OUTPUT_DRAIN);
+        let elapsed = now + EXIT_OUTPUT_DRAIN;
+
+        assert_eq!(
+            completed_exit_after_drain(None, ReadState::Open, true, None, now),
+            None
+        );
+        assert_eq!(
+            completed_exit_after_drain(exit, ReadState::Eof, true, deadline, now),
+            exit
+        );
+        assert_eq!(
+            completed_exit_after_drain(exit, ReadState::Open, true, deadline, now),
+            None
+        );
+        assert_eq!(
+            completed_exit_after_drain(exit, ReadState::Open, true, deadline, elapsed),
+            exit
+        );
+        assert_eq!(
+            completed_exit_after_drain(exit, ReadState::Eof, false, deadline, now),
+            None
+        );
+        assert_eq!(
+            completed_exit_after_drain(exit, ReadState::Eof, false, deadline, elapsed),
+            exit
+        );
     }
 
     #[test]
