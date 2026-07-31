@@ -1357,9 +1357,26 @@ impl PtySession {
                 }
             };
             let eof = terminal.control_chars[SpecialCharacterIndices::VEOF as usize];
-            let length = usize::from(eof != 0) * 2;
+            // The newline exists to flush a partial line so the end-of-file
+            // character lands at the start of one, which only means anything
+            // while the shell owns the terminal and reads lines. A foreground
+            // program owning the terminal receives it as a keystroke instead,
+            // where it can trigger whatever that program binds to Enter, so it
+            // is sent only when the shell is the one reading.
+            let flush_partial_line = matches!(
+                self.foreground_state(),
+                ForegroundState::Available {
+                    shell_owns_terminal: true,
+                    ..
+                }
+            );
+            let (bytes, length) = match (eof, flush_partial_line) {
+                (0, _) => ([0, 0], 0),
+                (eof, true) => ([b'\n', eof], 2),
+                (eof, false) => ([eof, 0], 1),
+            };
             self.eof_progress = Some(EofProgress {
-                bytes: [b'\n', eof],
+                bytes,
                 length,
                 written: 0,
             });
