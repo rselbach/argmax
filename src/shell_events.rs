@@ -226,6 +226,11 @@ impl ReloadRequest {
     pub const fn nonce(self) -> u32 {
         self.0
     }
+
+    #[cfg(test)]
+    pub(crate) const fn from_nonce(nonce: u32) -> Self {
+        Self(nonce)
+    }
 }
 
 /// Runtime shell-adapter support for authoritative editing snapshots.

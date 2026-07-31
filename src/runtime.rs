@@ -64,6 +64,7 @@ const IDLE_POLL: Duration = Duration::from_millis(1);
 const STANDALONE_ESCAPE_TIMEOUT: Duration = Duration::from_millis(25);
 const CURSOR_POSITION_TIMEOUT: Duration = Duration::from_millis(100);
 const CURSOR_POSITION_QUERY: &[u8] = b"\x1b[6n";
+const MAX_WAITING_RELOAD_ACKNOWLEDGMENTS: usize = 8;
 const MAX_DRAIN_PER_TICK: usize = 64;
 const COMPLETION_PROVIDERS: [&str; 2] = [LOCAL_COMPLETION_PROVIDER, AI_COMPLETION_PROVIDER];
 
@@ -953,7 +954,14 @@ enum InputState {
 
 struct PendingConfiguration {
     settings: Settings,
-    acknowledgment: Option<ReloadRequest>,
+    /// Requests answered only once this configuration takes effect.
+    ///
+    /// A deferred configuration can be superseded by a newer one before the
+    /// reducer accepts it. The requests that were waiting on the superseded
+    /// configuration carry over, because each shell-side reload command blocks
+    /// on its acknowledgment; dropping one leaves that command hanging until
+    /// its timeout.
+    acknowledgments: Vec<ReloadRequest>,
 }
 
 struct LiveConfiguration {
@@ -1022,20 +1030,31 @@ impl LiveConfiguration {
                         &format!("AI completion is unavailable after reload: {error}"),
                     );
                 }
+                let mut acknowledgments =
+                    Self::carried_acknowledgments(self.pending.take(), request);
+                Self::bound_acknowledgments(driver, &mut acknowledgments)?;
                 self.pending = Some(PendingConfiguration {
                     settings,
-                    acknowledgment: request,
+                    acknowledgments,
                 });
                 self.apply_pending(driver, reducer)
             }
             ReloadPoll::Unchanged => {
                 self.reported_failure = None;
-                if let Some(request) = request {
-                    driver.enqueue_reload_ack(request, true)?;
-                    Ok(true)
-                } else {
-                    Ok(false)
+                let Some(request) = request else {
+                    return Ok(false);
+                };
+                // An unchanged file with a replacement still deferred means the
+                // requested configuration is not yet in effect; the answer
+                // waits with the deferred replacement instead of claiming
+                // completion early.
+                if let Some(pending) = self.pending.as_mut() {
+                    pending.acknowledgments.push(request);
+                    Self::bound_acknowledgments(driver, &mut pending.acknowledgments)?;
+                    return Ok(false);
                 }
+                driver.enqueue_reload_ack(request, true)?;
+                Ok(true)
             }
             ReloadPoll::Rejected => {
                 if let Some(failure) = reloader.last_failure() {
@@ -1085,10 +1104,43 @@ impl LiveConfiguration {
         driver.configure_runtime(&pending.settings, &keybindings);
         driver.apply_effects(reducer, effects)?;
         self.settings = pending.settings;
-        if let Some(request) = pending.acknowledgment {
+        for request in pending.acknowledgments {
             driver.enqueue_reload_ack(request, true)?;
         }
         Ok(true)
+    }
+
+    /// Carries requests waiting on a superseded configuration to its successor.
+    fn carried_acknowledgments(
+        superseded: Option<PendingConfiguration>,
+        request: Option<ReloadRequest>,
+    ) -> Vec<ReloadRequest> {
+        let mut acknowledgments =
+            superseded.map_or_else(Vec::new, |pending| pending.acknowledgments);
+        acknowledgments.extend(request);
+        acknowledgments
+    }
+
+    /// Answers the oldest waiting requests beyond the retained bound.
+    ///
+    /// A client issuing reloads faster than the reducer can accept them would
+    /// otherwise grow the waiting list without limit. The oldest requests are
+    /// acknowledged immediately: their replacement was accepted and only its
+    /// session activation is still pending behind newer configurations.
+    fn bound_acknowledgments(
+        driver: &mut SessionDriver,
+        acknowledgments: &mut Vec<ReloadRequest>,
+    ) -> Result<(), RuntimeError> {
+        let Some(excess) = acknowledgments
+            .len()
+            .checked_sub(MAX_WAITING_RELOAD_ACKNOWLEDGMENTS)
+        else {
+            return Ok(());
+        };
+        for request in acknowledgments.drain(..excess) {
+            driver.enqueue_reload_ack(request, true)?;
+        }
+        Ok(())
     }
 }
 
@@ -1912,6 +1964,25 @@ mod tests {
             crate::completion::InsertionBehavior::Exact,
             identity,
         )
+    }
+
+    #[test]
+    fn a_superseded_configuration_keeps_the_requests_waiting_on_it() {
+        let first = ReloadRequest::from_nonce(41);
+        let second = ReloadRequest::from_nonce(42);
+        let deferred = PendingConfiguration {
+            settings: Settings::default(),
+            acknowledgments: vec![first],
+        };
+
+        let carried = LiveConfiguration::carried_acknowledgments(Some(deferred), Some(second));
+
+        assert_eq!(carried, vec![first, second]);
+        assert!(LiveConfiguration::carried_acknowledgments(None, None).is_empty());
+        assert_eq!(
+            LiveConfiguration::carried_acknowledgments(None, Some(second)),
+            vec![second]
+        );
     }
 
     #[test]
