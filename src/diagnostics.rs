@@ -14,7 +14,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
 use nix::errno::Errno;
@@ -43,6 +43,9 @@ pub const MAX_CRASH_BACKTRACE_BYTES: usize = 512 * 1024;
 pub const MAX_CRASH_DIRECTORY_ENTRIES: usize = 4_096;
 /// Maximum crash reports retained after writing a new one.
 pub const MAX_RETAINED_CRASH_REPORTS: usize = 32;
+/// Maximum wait for the cross-process debug-log lock before dropping a record.
+pub const DEBUG_LOG_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+const DEBUG_LOG_LOCK_POLL: Duration = Duration::from_millis(2);
 
 const DEBUG_LOG_NAME: &str = "debug.log";
 const PREVIOUS_DEBUG_LOG_NAME: &str = "debug.previous.log";
@@ -1105,6 +1108,8 @@ pub enum DiagnosticError {
     ReportNameExhausted,
     /// Another logging operation panicked while holding the process-local lock.
     LockPoisoned,
+    /// Another process held the cross-process log lock past the bounded wait.
+    LockUnavailable,
     /// A private diagnostic temporary could not be removed after failure.
     TemporaryCleanupFailed {
         /// Failure category from the write or publication operation.
@@ -1154,6 +1159,7 @@ impl fmt::Debug for DiagnosticError {
                 .finish(),
             Self::ReportNameExhausted => formatter.write_str("ReportNameExhausted"),
             Self::LockPoisoned => formatter.write_str("LockPoisoned"),
+            Self::LockUnavailable => formatter.write_str("LockUnavailable"),
             Self::TemporaryCleanupFailed { operation, cleanup } => formatter
                 .debug_struct("TemporaryCleanupFailed")
                 .field("operation", operation)
@@ -1205,6 +1211,9 @@ impl fmt::Display for DiagnosticError {
                 formatter.write_str("could not allocate a unique crash-report name")
             }
             Self::LockPoisoned => formatter.write_str("diagnostic writer lock is unavailable"),
+            Self::LockUnavailable => {
+                formatter.write_str("another process held the diagnostic log lock")
+            }
             Self::TemporaryCleanupFailed { operation, cleanup } => write!(
                 formatter,
                 "diagnostic file operation failed ({operation:?}); temporary cleanup also failed ({cleanup:?})"
@@ -1401,11 +1410,22 @@ fn lock_debug_log(directory_fd: RawFd) -> Result<OwnedDescriptor, DiagnosticErro
     }
     fchmod(descriptor.raw(), Mode::from_bits_truncate(0o600)).map_err(errno_error)?;
     ensure_entry_unchanged(directory_fd, OsStr::new(DEBUG_LOG_LOCK_NAME), &stat)?;
+    // Debug logging is best-effort and runs synchronously on the interactive
+    // path. Waiting without a bound would let one stopped or wedged argmax
+    // process holding this lock freeze every other session, so the wait is
+    // bounded and a record is dropped rather than blocking the shell.
+    let deadline = Instant::now() + DEBUG_LOG_LOCK_TIMEOUT;
     loop {
         #[allow(deprecated)]
-        match nix::fcntl::flock(descriptor.raw(), FlockArg::LockExclusive) {
+        match nix::fcntl::flock(descriptor.raw(), FlockArg::LockExclusiveNonblock) {
             Ok(()) => break,
             Err(Errno::EINTR) => {}
+            Err(Errno::EWOULDBLOCK) => {
+                if Instant::now() >= deadline {
+                    return Err(DiagnosticError::LockUnavailable);
+                }
+                std::thread::sleep(DEBUG_LOG_LOCK_POLL);
+            }
             Err(error) => return Err(errno_error(error)),
         }
     }
@@ -3120,6 +3140,43 @@ mod tests {
         assert!(outcome.failures.is_empty());
         assert!(unrelated.exists());
         assert!(other.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_held_by_another_process_drops_a_record_instead_of_blocking() {
+        use std::os::fd::AsRawFd as _;
+
+        let directory = TestDirectory::new();
+        let log = DebugLog::open(directory.0.clone(), session()).unwrap();
+        log.write(DiagnosticLevel::Info, "greendale", "first")
+            .unwrap();
+
+        let holder = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(log.directory.join(DEBUG_LOG_LOCK_NAME))
+            .unwrap();
+        #[allow(deprecated)]
+        nix::fcntl::flock(holder.as_raw_fd(), FlockArg::LockExclusiveNonblock).unwrap();
+
+        let started = Instant::now();
+        let outcome = log.write(DiagnosticLevel::Info, "greendale", "second");
+        let waited = started.elapsed();
+
+        assert!(
+            matches!(outcome, Err(DiagnosticError::LockUnavailable)),
+            "{outcome:?}"
+        );
+        assert!(
+            waited < DEBUG_LOG_LOCK_TIMEOUT * 4,
+            "waited {waited:?} for a held lock"
+        );
+
+        #[allow(deprecated)]
+        nix::fcntl::flock(holder.as_raw_fd(), FlockArg::Unlock).unwrap();
+        log.write(DiagnosticLevel::Info, "greendale", "third")
+            .unwrap();
     }
 
     #[cfg(unix)]
