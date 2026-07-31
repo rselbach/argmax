@@ -60,6 +60,12 @@ impl ReleaseSource {
             || !repository.bytes().all(|byte| {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/')
             })
+            // A relative component would be resolved away by the request URL,
+            // making the value name an endpoint other than the repository it
+            // appears to name.
+            || repository
+                .split('/')
+                .any(|component| matches!(component, "." | ".."))
         {
             return Err(ReleaseError::InvalidSource);
         }
@@ -782,7 +788,9 @@ mod tests {
             source.download_url("v1.2.3", ASSET),
             "https://github.com/greendale/argmax/releases/download/v1.2.3/argmax-linux-amd64"
         );
-        for invalid in ["", "argmax", "/argmax", "a/b/c", "a//b", "a/b?x"] {
+        for invalid in [
+            "", "argmax", "/argmax", "a/b/c", "a//b", "a/b?x", "a/..", "../b", "./b", "a/.",
+        ] {
             assert_eq!(
                 ReleaseSource::new(invalid).unwrap_err(),
                 ReleaseError::InvalidSource

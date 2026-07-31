@@ -130,6 +130,9 @@ release_base_url() {
       *[!A-Za-z0-9._/-]* | /* | */ | *//* | */*/*)
         fail "ARGMAX_REPOSITORY must be one safe owner/repository pair"
         ;;
+      . | .. | ./* | ../* | */. | */..)
+        fail "ARGMAX_REPOSITORY must not contain a relative path component"
+        ;;
       */*) ;;
       *) fail "ARGMAX_REPOSITORY must be an owner/repository pair" ;;
     esac
