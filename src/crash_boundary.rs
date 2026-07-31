@@ -460,10 +460,19 @@ where
             hook.restore();
             return CrashBoundaryOutcome::Completed(value);
         }
-        Ok(Err(failure)) => take_capture(&capture).unwrap_or_else(|| PanicSnapshot {
-            failure: failure.description.into(),
-            backtrace: capture_backtrace_safely(),
-        }),
+        Ok(Err(failure)) => {
+            // The wrapper returned and said why, so its description is
+            // authoritative. A captured panic may be one it already recovered
+            // from, or one from an unrelated worker, and letting that replace
+            // the description reported a failure the wrapper did not return.
+            // Its backtrace is still the more informative one, so it is kept.
+            let captured = take_capture(&capture);
+            PanicSnapshot {
+                failure: failure.description.into(),
+                backtrace: captured
+                    .map_or_else(capture_backtrace_safely, |snapshot| snapshot.backtrace),
+            }
+        }
         Err(payload) => {
             let incident =
                 take_capture(&capture).unwrap_or_else(|| snapshot_from_payload(payload.as_ref()));
