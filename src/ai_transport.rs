@@ -86,7 +86,10 @@ pub fn execute_openai_request(
         response_body_limit: request.response_body_limit(),
         error_body_limit: request.error_body_limit(),
     };
-    let permit = TransportWorkerPermit::acquire().ok_or(SanitizedProviderError::Timeout)?;
+    // Exhausting the local worker pool is a setup failure, like the thread
+    // spawn below it. Reporting a timeout would tell diagnostics that a
+    // deadline elapsed when no request was ever attempted.
+    let permit = TransportWorkerPermit::acquire().ok_or(SanitizedProviderError::Connection)?;
     let (sender, receiver) = mpsc::sync_channel(1);
     thread::Builder::new()
         .name("argmax-ai-transport".to_owned())
