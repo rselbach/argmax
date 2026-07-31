@@ -929,19 +929,21 @@ fn cobra_filesystem_suggestions(
     replacement: Range<usize>,
 ) -> Vec<Suggestion> {
     let partial = &line.active_token().cooked;
-    let logical = within.map_or_else(
-        || partial.clone(),
-        |directory| {
-            let directory = directory.trim_end_matches('/');
-            if directory.is_empty() {
-                partial.clone()
-            } else {
-                format!("{directory}/{partial}")
-            }
-        },
+    // A base directory scopes the search without becoming part of the inserted
+    // text: Cobra's own shell integrations change into that directory before
+    // completing, so the tool receives a name relative to it. Prefixing the
+    // directory onto the candidate would insert a path the tool cannot accept.
+    let base = within
+        .map(|directory| directory.trim_end_matches('/'))
+        .filter(|directory| !directory.is_empty());
+    let search_cwd = base.map_or_else(|| query.cwd.clone(), |directory| query.cwd.join(directory));
+    let logical = partial.clone();
+    let synthetic = CompletionQuery::new(
+        logical.clone(),
+        logical.len(),
+        &search_cwd,
+        query.generation,
     );
-    let synthetic =
-        CompletionQuery::new(logical.clone(), logical.len(), &query.cwd, query.generation);
     let Ok(synthetic) = synthetic else {
         return Vec::new();
     };
@@ -2410,6 +2412,43 @@ mod tests {
             runner.plans.is_empty(),
             "ran {:?} from the working directory",
             runner.plans
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_filtered_directory_completes_relative_to_that_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        temp_executable(temporary.path(), "communityctl");
+        fs::create_dir_all(temporary.path().join("themes/classic")).unwrap();
+        fs::create_dir_all(temporary.path().join("themes/modern")).unwrap();
+        let index = SpecIndex::new([]).unwrap();
+        let line = "communityctl --theme cla";
+        let query = CompletionQuery::new(line, line.len(), temporary.path(), 1).unwrap();
+        let mut executor = DynamicExecutor::new();
+        let mut runner = FakeRunner::one(Ok(b"themes\n:16\n".to_vec()));
+
+        let completion = executor
+            .complete_cobra_with(
+                &index,
+                &query,
+                context(temporary.path().as_os_str(), None),
+                &cancellation(false),
+                &mut runner,
+            )
+            .unwrap();
+
+        assert_eq!(
+            completion
+                .suggestions
+                .iter()
+                .map(Suggestion::display)
+                .collect::<Vec<_>>(),
+            ["classic"]
+        );
+        assert_eq!(
+            completion.suggestions[0].resulting_line(&query).unwrap(),
+            "communityctl --theme classic/"
         );
     }
 
