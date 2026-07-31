@@ -1562,6 +1562,24 @@ impl PtySession {
         ]
     }
 
+    /// Drops a captured foreground group the terminal no longer reports.
+    ///
+    /// The foreground identifier was captured before the hangup grace period.
+    /// A group that exited during that period may have had its identifier
+    /// recycled, so escalating to SIGKILL on the captured value could signal an
+    /// unrelated process group. The shell's own identifier stays eligible
+    /// because an unreaped child pins it.
+    fn revalidated_shutdown_groups(&self, captured: &[Option<Pid>; 2]) -> [Option<Pid>; 2] {
+        let current = self
+            .current_foreground_group()
+            .filter(|process_group| *process_group > 0)
+            .map(Pid::from_raw);
+        [
+            captured[0].filter(|group| current == Some(*group)),
+            captured[1],
+        ]
+    }
+
     fn signal_shutdown_targets(&self, process_groups: &[Option<Pid>; 2], signal: Signal) {
         for process_group in process_groups.iter().flatten() {
             let _ = killpg(*process_group, signal);
@@ -1617,8 +1635,9 @@ impl PtySession {
 
         self.signal_shutdown_targets(&process_groups, Signal::SIGHUP);
         if !self.wait_until(Instant::now() + CHILD_HANGUP_GRACE, &process_groups) {
-            self.signal_shutdown_targets(&process_groups, Signal::SIGKILL);
-            let _ = self.wait_until(Instant::now() + CHILD_KILL_GRACE, &process_groups);
+            let escalation = self.revalidated_shutdown_groups(&process_groups);
+            self.signal_shutdown_targets(&escalation, Signal::SIGKILL);
+            let _ = self.wait_until(Instant::now() + CHILD_KILL_GRACE, &escalation);
         }
 
         // Never call blocking wait or emit EOF from Drop. Owned descriptors
