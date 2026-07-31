@@ -255,7 +255,6 @@ impl fmt::Debug for ManualUpdateCheck {
 pub struct ManualUpdatePlan {
     source: ReleaseSource,
     release: ReleaseDescriptor,
-    deadline: Instant,
 }
 
 impl ManualUpdatePlan {
@@ -274,12 +273,19 @@ impl ManualUpdatePlan {
         self,
         current_executable: &Path,
     ) -> Result<ManualUpdateOutcome, ManualUpdateError> {
+        // The transfer gets its own full budget rather than whatever remains
+        // of the discovery deadline: metadata latency, or a caller holding
+        // the plan across a confirmation prompt, must not make a link that
+        // installs fine via the shell installer unable to update.
+        let deadline = Instant::now()
+            .checked_add(MANUAL_UPDATE_TIMEOUT)
+            .ok_or(ReleaseError::Timeout)?;
         let checksum_response = get(
             &self.release.checksum_url(&self.source),
-            self.deadline,
+            deadline,
             RedirectPolicy::Downloads,
         )?;
-        let checksum_bytes = read_bounded(checksum_response, MAX_CHECKSUM_BYTES, self.deadline)?;
+        let checksum_bytes = read_bounded(checksum_response, MAX_CHECKSUM_BYTES, deadline)?;
         let checksum = parse_checksum(&checksum_bytes, self.release.asset)?;
         let (operating_system, architecture) = host_identity()?;
         let trusted = TrustedReleaseArtifact::new(
@@ -292,10 +298,10 @@ impl ManualUpdatePlan {
 
         let response = get(
             &self.release.artifact_url(&self.source),
-            self.deadline,
+            deadline,
             RedirectPolicy::Downloads,
         )?;
-        let mut reader = DeadlineReader::new(response.into_body().into_reader(), self.deadline);
+        let mut reader = DeadlineReader::new(response.into_body().into_reader(), deadline);
         let apply = apply_update_from_reader(&trusted, &mut reader, current_executable)?;
         Ok(ManualUpdateOutcome::Updated {
             version: self.release.version().into(),
@@ -423,9 +429,10 @@ pub fn apply_manual_update(
 
 /// Checks for an explicit update without downloading or modifying an artifact.
 ///
-/// The returned plan is bound to the exact validated release and the original
-/// two-minute deadline, so callers can report availability before installation
-/// without repeating discovery or racing to a different release.
+/// The returned plan is bound to the exact validated release, so callers can
+/// report availability before installation without repeating discovery or
+/// racing to a different release. Applying the plan starts a fresh transfer
+/// deadline of its own.
 ///
 /// # Errors
 ///
@@ -450,7 +457,6 @@ pub fn check_manual_update(
     Ok(ManualUpdateCheck::Available(ManualUpdatePlan {
         source: source.clone(),
         release,
-        deadline,
     }))
 }
 
