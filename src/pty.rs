@@ -2446,7 +2446,7 @@ mod tests {
                 ShellKind::Zsh => IntegrationShell::Zsh,
                 ShellKind::Fish => unreachable!(),
             };
-            fs::write(&init_path, init_script(integration_shell)).unwrap();
+            fs::write(&init_path, init_script(integration_shell).as_bytes()).unwrap();
 
             let arguments = match kind {
                 ShellKind::Bash => ["--noprofile", "--norc", "-i"].as_slice(),

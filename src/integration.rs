@@ -3,6 +3,7 @@
 //! This module performs no filesystem access. Callers remain responsible for
 //! backups, atomic writes, and preserving file ownership and permissions.
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
 use std::ops::Range;
@@ -722,19 +723,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
 fi
 "#;
 
-const ZSH_INIT: &str = r#"# argmax shell integration
-# Aliases expand when the block below is parsed, so a user alias for print,
-# bindkey, or any other command it uses would be baked into the hook bodies.
-# This must precede the block: zsh parses a whole compound command before
-# running any of it, so suppressing expansion from inside would be too late.
-if [[ -o aliases ]]; then
-  __argmax_zsh_restore_aliases=1
-else
-  __argmax_zsh_restore_aliases=0
-fi
-setopt no_aliases
-
-if [[ -o interactive && -t 0 && -t 1 ]]; then
+const ZSH_INIT_BODY: &str = r#"if [[ -o interactive && -t 0 && -t 1 ]]; then
   if [[ -n ${ARGMAX_PRIVATE_SESSION-} ]]; then
     if [[ -z ${ARGMAX_SESSION_OWNER_PID-} ]]; then
       export ARGMAX_SESSION_OWNER_PID=$$
@@ -1167,11 +1156,6 @@ if [[ -o interactive && -t 0 && -t 1 ]]; then
     fi
   fi
 fi
-
-if (( __argmax_zsh_restore_aliases )); then
-  setopt aliases
-fi
-unset __argmax_zsh_restore_aliases
 "#;
 
 const FISH_INIT: &str = r#"# argmax shell integration
@@ -1588,12 +1572,33 @@ end
 
 /// Returns sourceable integration code and no human-oriented explanation.
 #[must_use]
-pub const fn init_script(shell: Shell) -> &'static str {
+pub fn init_script(shell: Shell) -> Cow<'static, str> {
     match shell {
-        Shell::Bash => BASH_INIT,
-        Shell::Zsh => ZSH_INIT,
-        Shell::Fish => FISH_INIT,
+        Shell::Bash => Cow::Borrowed(BASH_INIT),
+        Shell::Zsh => Cow::Owned(eval_safe_zsh_init()),
+        Shell::Fish => Cow::Borrowed(FISH_INIT),
     }
+}
+
+/// Wraps the zsh body so alias suppression precedes its parse.
+///
+/// The documented activation is `eval "$(argmax init zsh)"`, and eval parses
+/// its whole argument before running any of it, so a plain leading `setopt
+/// no_aliases` would land after every hook body had already been parsed with
+/// the user's aliases active. Delivering the body as a quoted literal defers
+/// its parse to the inner eval, which executes after suppression. The
+/// wrapper's own command words carry a leading backslash, which exempts a
+/// word from alias expansion.
+fn eval_safe_zsh_init() -> String {
+    let body = ZSH_INIT_BODY.replace('\'', "'\\''");
+    format!(
+        "# argmax shell integration\n\
+         [[ -o aliases ]] && __argmax_zsh_restore_aliases=1 || __argmax_zsh_restore_aliases=0\n\
+         \\setopt no_aliases\n\
+         \\builtin eval '{body}'\n\
+         if (( __argmax_zsh_restore_aliases )); then\n  \\setopt aliases\nfi\n\
+         \\builtin unset __argmax_zsh_restore_aliases\n"
+    )
 }
 
 /// Returns the command setup places between the stable markers.
@@ -2552,7 +2557,7 @@ mod tests {
         let directory = HarnessDirectory::create(shell);
         let init_path = directory.0.join("init");
         let events_path = directory.0.join("events");
-        fs::write(&init_path, init_script(shell)).expect("write shell init");
+        fs::write(&init_path, init_script(shell).as_bytes()).expect("write shell init");
 
         let shell_arguments = match shell {
             Shell::Bash => "--noprofile --norc -i",
@@ -2613,7 +2618,7 @@ mod tests {
         )
     }
 
-    fn hostile_zsh_events() -> Option<Vec<Vec<u8>>> {
+    fn hostile_zsh_events(activation: &str) -> Option<Vec<Vec<u8>>> {
         if !expect_is_available() || !shell_is_available("zsh") {
             return None;
         }
@@ -2621,7 +2626,7 @@ mod tests {
         let directory = HarnessDirectory::create(Shell::Zsh);
         let init_path = directory.0.join("init");
         let events_path = directory.0.join("events");
-        fs::write(&init_path, init_script(Shell::Zsh)).expect("write Zsh init");
+        fs::write(&init_path, init_script(Shell::Zsh).as_bytes()).expect("write Zsh init");
         let expect_program = r#"
           set timeout 10
           log_user 0
@@ -2644,7 +2649,7 @@ mod tests {
             timeout { exit 6 }
             eof { exit 7 }
           }
-          send -- "source \"$env(ARGMAX_TEST_INIT)\"\r"
+          send -- "$env(ARGMAX_TEST_ACTIVATE)\r"
           expect {
             "ARGMAX> " {}
             timeout { exit 8 }
@@ -2668,6 +2673,7 @@ mod tests {
             .env("ARGMAX_EVENT_FD", "3")
             .env("ARGMAX_TEST_EVENTS", &events_path)
             .env("ARGMAX_TEST_INIT", &init_path)
+            .env("ARGMAX_TEST_ACTIVATE", activation)
             .output()
             .expect("run hostile Zsh harness");
         let events = fs::read(&events_path).unwrap_or_default();
@@ -2688,7 +2694,21 @@ mod tests {
 
     #[test]
     fn zsh_hooks_survive_user_options_and_aliases() {
-        let Some(events) = hostile_zsh_events() else {
+        assert_hostile_zsh_events_are_clean(hostile_zsh_events("source \"$ARGMAX_TEST_INIT\""));
+    }
+
+    #[test]
+    fn zsh_hooks_survive_user_aliases_under_eval_activation() {
+        // The documented loader is eval "$(argmax init zsh)", and eval parses
+        // its whole argument before executing any of it, so this path is the
+        // one a plain leading setopt cannot protect.
+        assert_hostile_zsh_events_are_clean(hostile_zsh_events(
+            "eval \"$(cat \"$ARGMAX_TEST_INIT\")\"",
+        ));
+    }
+
+    fn assert_hostile_zsh_events_are_clean(events: Option<Vec<Vec<u8>>>) {
+        let Some(events) = events else {
             return;
         };
         assert!(
@@ -2731,7 +2751,7 @@ mod tests {
         let directory = HarnessDirectory::create(Shell::Bash);
         let init_path = directory.0.join("init");
         let events_path = directory.0.join("events");
-        fs::write(&init_path, init_script(Shell::Bash)).expect("write Bash init");
+        fs::write(&init_path, init_script(Shell::Bash).as_bytes()).expect("write Bash init");
         let expect_program = r#"
           set timeout 10
           log_user 0
@@ -2849,7 +2869,7 @@ mod tests {
         let init_path = directory.0.join("init");
         let events_path = directory.0.join("events");
         let control_path = directory.0.join("control");
-        fs::write(&init_path, init_script(shell)).expect("write shell init");
+        fs::write(&init_path, init_script(shell).as_bytes()).expect("write shell init");
         fs::write(&control_path, control).expect("write shell controls");
         let shell_arguments = match shell {
             Shell::Bash => "--noprofile --norc -i",
@@ -2949,7 +2969,7 @@ mod tests {
         let events_path = directory.0.join("events");
         let control_path = directory.0.join("control");
         let append_path = directory.0.join("append-control");
-        fs::write(&init_path, init_script(shell)).expect("write shell init");
+        fs::write(&init_path, init_script(shell).as_bytes()).expect("write shell init");
         fs::write(&control_path, []).expect("write empty shell controls");
         fs::write(&append_path, replacement_control(1, 8, "attacker"))
             .expect("write stale shell control");
@@ -3050,7 +3070,7 @@ mod tests {
         let init_path = directory.0.join("init");
         let events_path = directory.0.join("events");
         let sentinel_path = directory.0.join("preserved");
-        fs::write(&init_path, init_script(shell)).expect("write shell init");
+        fs::write(&init_path, init_script(shell).as_bytes()).expect("write shell init");
         let shell_arguments = match shell {
             Shell::Bash => "--noprofile --norc -i",
             Shell::Zsh => "-df",
@@ -3114,7 +3134,7 @@ mod tests {
         let init_path = directory.0.join("init");
         let events_path = directory.0.join("events");
         let sentinel_path = directory.0.join("cleared");
-        fs::write(&init_path, init_script(shell)).expect("write shell init");
+        fs::write(&init_path, init_script(shell).as_bytes()).expect("write shell init");
         let shell_arguments = match shell {
             Shell::Bash => "--noprofile --norc -i",
             Shell::Zsh => "-df",
@@ -3193,7 +3213,7 @@ mod tests {
         let check_path = directory.0.join("check");
         let events_path = directory.0.join("events");
         let sentinel_path = directory.0.join("preserved");
-        fs::write(&init_path, init_script(Shell::Bash)).expect("write Bash init");
+        fs::write(&init_path, init_script(Shell::Bash).as_bytes()).expect("write Bash init");
         fs::write(
             &check_path,
             r#"PS0=user-ps0
@@ -3285,7 +3305,7 @@ fi
         let init_path = directory.0.join("init");
         let events_path = directory.0.join("events");
         let statuses_path = directory.0.join("statuses");
-        fs::write(&init_path, init_script(Shell::Bash)).expect("write Bash init");
+        fs::write(&init_path, init_script(Shell::Bash).as_bytes()).expect("write Bash init");
         let expect_program = format!(
             "{WAIT_FOR_PROBE_COUNT}\n{}",
             r#"
