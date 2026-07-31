@@ -265,6 +265,11 @@ fn parse_zsh(contents: &str) -> Vec<HistoryEntry> {
             let Some(continuation) = lines.next() else {
                 break;
             };
+            // zsh stores a newline inside a command as a backslash followed by
+            // a real newline, and drops the backslash when reading the file
+            // back. Keeping it would change the command's meaning, since a
+            // backslash inside single quotes is literal.
+            line.pop();
             line.push('\n');
             line.push_str(continuation.trim_end_matches('\r'));
         }
@@ -1054,7 +1059,7 @@ mod tests {
         );
 
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].command, "printf 'one\\\ntwo'");
+        assert_eq!(entries[0].command, "printf 'one\ntwo'");
         assert_eq!(entries[1].command, "echo valid");
     }
 
