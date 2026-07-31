@@ -213,7 +213,7 @@ impl ConfigStore {
                 .map(Some)
                 .map_err(ConfigStoreError::Config);
         }
-        Err(ConfigStoreError::MigrationRecoveryRequired)
+        Err(ConfigStoreError::SourceChangedConcurrently)
     }
 
     /// Creates the commented default without replacing an existing path.
@@ -409,6 +409,8 @@ pub enum ConfigStoreError {
     MigrationSourceChanged,
     /// An interrupted or conflicting migration claim requires recovery.
     MigrationRecoveryRequired,
+    /// The effective source kept changing under concurrent processes.
+    SourceChangedConcurrently,
     /// Another process held the configuration lock past the bounded wait.
     LockUnavailable,
 }
@@ -448,8 +450,12 @@ impl fmt::Display for ConfigStoreError {
             Self::MigrationRecoveryRequired => {
                 formatter.write_str("an interrupted configuration migration requires recovery")
             }
-            Self::LockUnavailable => formatter
-                .write_str("another process is holding the configuration lock; retrying later"),
+            Self::SourceChangedConcurrently => {
+                formatter.write_str("configuration changed concurrently; try again")
+            }
+            Self::LockUnavailable => {
+                formatter.write_str("another process is holding the configuration lock; try again")
+            }
         }
     }
 }
