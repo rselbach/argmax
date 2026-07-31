@@ -1230,7 +1230,17 @@ impl PtySession {
         })?;
         if let Err(kind) = restore_result {
             let _ = child.kill();
-            let _ = child.try_wait();
+            // Signal delivery is asynchronous, so one poll normally observes a
+            // child that has not exited yet. No session is constructed on this
+            // path, so nothing would reap it later and it would stay a zombie
+            // for as long as the wrapper runs.
+            let deadline = Instant::now() + CHILD_KILL_GRACE;
+            while !matches!(child.try_wait(), Ok(Some(_))) {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                thread::sleep(CHILD_WAIT_POLL);
+            }
             return Err(PtyError::Backend {
                 stage: PtyStage::Integration,
                 io_kind: Some(kind),
