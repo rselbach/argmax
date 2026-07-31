@@ -685,9 +685,16 @@ fn cursor_position_report(
         let Some(column) = parse_cursor_coordinate(bytes, &mut index, b'R') else {
             continue;
         };
-        if row <= size.rows() && column <= size.columns() {
-            return Some((start, index, CursorPosition::new(row - 1, column - 1)));
+        // A terminal never reports a position outside its own dimensions, so a
+        // well-formed report that does not fit means the buffer holds input
+        // that merely resembles one. Continuing to search would consume a later
+        // lookalike out of the user's typed-ahead bytes and anchor the overlay
+        // to a position the terminal never reported, so detection stops here
+        // and the caller falls back to no anchor.
+        if row > size.rows() || column > size.columns() {
+            return None;
         }
+        return Some((start, index, CursorPosition::new(row - 1, column - 1)));
     }
     None
 }
@@ -2018,14 +2025,17 @@ mod tests {
     }
 
     #[test]
-    fn cursor_report_uses_terminal_coordinates_and_skips_invalid_candidates() {
+    fn cursor_report_uses_terminal_coordinates_and_stops_at_an_impossible_one() {
         let size = TerminalSize::new(80, 24).unwrap();
-        let bytes = b"user\x1b[999;1Rdata\x1b[7;33Rtail";
+        let bytes = b"user\x1b[7;33Rtail";
         let (start, end, cursor) = cursor_position_report(bytes, size).unwrap();
 
         assert_eq!(cursor, CursorPosition::new(6, 32));
         assert_eq!(&bytes[start..end], b"\x1b[7;33R");
         assert!(cursor_position_report(b"\x1b[0;1R\x1b[1;81R", size).is_none());
+        // An impossible report means the stream carries lookalike input, so a
+        // later well-formed one is not treated as the terminal's answer.
+        assert!(cursor_position_report(b"\x1b[999;1Rdata\x1b[7;33R", size).is_none());
 
         let mut screen = ScreenObserver::new(size);
         screen.synchronize(cursor).unwrap();
