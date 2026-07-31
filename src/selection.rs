@@ -212,7 +212,13 @@ impl SelectionState {
         let Some(selected) = self.selected else {
             return;
         };
-        self.selected = Some((selected + 1).min(self.candidates.len() - 1));
+        // A selection currently implies a nonempty candidate list, but relying
+        // on that here would turn any future change to that invariant into a
+        // panic on an arrow key.
+        let Some(last) = self.candidates.len().checked_sub(1) else {
+            return;
+        };
+        self.selected = Some((selected + 1).min(last));
         self.navigated = true;
         self.freeze_visible_order();
     }
