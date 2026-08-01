@@ -503,16 +503,16 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
             __ARGMAX_BASH_CONTROL_LAST_ID=$argmax_control_request
           fi
           argmax_buffer=$READLINE_LINE
-          if (( ${#argmax_buffer} > 16384 )); then
-            __argmax_emit protocol-frame-oversized
-            return "$argmax_status"
-          fi
           if (( __ARGMAX_BASH_PROBE_NONCE == 9223372036854775807 )); then
             __ARGMAX_BASH_CAPABILITY=unavailable
             __argmax_emit capability:unavailable
             return "$argmax_status"
           fi
           ((__ARGMAX_BASH_PROBE_NONCE += 1))
+          if (( ${#argmax_buffer} > 16384 )); then
+            __argmax_emit protocol-frame-oversized
+            return "$argmax_status"
+          fi
           __argmax_emit \
             "probe-buffer:$argmax_unit:$__ARGMAX_BASH_PROBE_NONCE:$READLINE_POINT:$argmax_buffer"
           return "$argmax_status"
@@ -1033,16 +1033,16 @@ const ZSH_INIT_BODY: &str = r#"if [[ -o interactive && -t 0 && -t 1 ]]; then
           CURSOR=$argmax_control_cursor
           __ARGMAX_ZSH_CONTROL_LAST_ID=$argmax_control_request
         fi
-        if (( ${#BUFFER} > 16384 )); then
-          __argmax_emit protocol-frame-oversized
-          return $argmax_status
-        fi
         if (( __ARGMAX_ZSH_PROBE_NONCE == 9223372036854775807 )); then
           __ARGMAX_ZSH_CAPABILITY=unavailable
           __argmax_emit capability:unavailable
           return $argmax_status
         fi
         ((__ARGMAX_ZSH_PROBE_NONCE += 1))
+        if (( ${#BUFFER} > 16384 )); then
+          __argmax_emit protocol-frame-oversized
+          return $argmax_status
+        fi
         __argmax_emit \
           "probe-buffer:$argmax_unit:$__ARGMAX_ZSH_PROBE_NONCE:$CURSOR:$BUFFER"
         return $argmax_status
@@ -1493,10 +1493,6 @@ if status is-interactive; and test -t 0; and test -t 1
       # commandline prints one newline; the decoder removes only that terminator.
       set -l argmax_buffer (commandline -b | string collect -N)
       set -l argmax_cursor (commandline -C)
-      if test (string length -- "$argmax_buffer") -gt 16385
-        __argmax_emit protocol-frame-oversized
-        return $argmax_status
-      end
       if test $__ARGMAX_FISH_PROBE_NONCE -ge 2147483647
         set -g __ARGMAX_FISH_CAPABILITY unavailable
         __argmax_emit capability:unavailable
@@ -1504,6 +1500,10 @@ if status is-interactive; and test -t 0; and test -t 1
       end
       set -g __ARGMAX_FISH_PROBE_NONCE \
         (math $__ARGMAX_FISH_PROBE_NONCE + 1)
+      if test (string length -- "$argmax_buffer") -gt 16385
+        __argmax_emit protocol-frame-oversized
+        return $argmax_status
+      end
       __argmax_emit \
         "probe-buffer:f:$__ARGMAX_FISH_PROBE_NONCE:$argmax_cursor:$argmax_buffer"
       return $argmax_status
@@ -2541,6 +2541,14 @@ mod tests {
         }
     }
 
+    const fn test_shell_arguments(shell: Shell) -> &'static str {
+        match shell {
+            Shell::Bash => "--noprofile --norc -i",
+            Shell::Zsh => "-df",
+            Shell::Fish => "--no-config --interactive",
+        }
+    }
+
     fn live_shell_events(shell: Shell) -> Option<Vec<Vec<u8>>> {
         let program = shell.as_str();
         if !expect_is_available() || !shell_is_available(program) {
@@ -2972,6 +2980,22 @@ mod tests {
         control: &[u8],
         initial_line: &str,
     ) -> Option<Vec<Vec<u8>>> {
+        control_shell_events_with_setup(
+            shell,
+            control,
+            initial_line,
+            "",
+            test_probe_sequence(shell),
+        )
+    }
+
+    fn control_shell_events_with_setup(
+        shell: Shell,
+        control: &[u8],
+        initial_line: &str,
+        setup: &str,
+        probe: &str,
+    ) -> Option<Vec<Vec<u8>>> {
         let program = shell.as_str();
         if !expect_is_available() || !shell_is_available(program) {
             return None;
@@ -2995,12 +3019,7 @@ mod tests {
         let control_path = directory.0.join("control");
         fs::write(&init_path, init_script(shell).as_bytes()).expect("write shell init");
         fs::write(&control_path, control).expect("write shell controls");
-        let shell_arguments = match shell {
-            Shell::Bash => "--noprofile --norc -i",
-            Shell::Zsh => "-df",
-            Shell::Fish => "--no-config --interactive",
-        };
-        let probe = test_probe_sequence(shell);
+        let shell_arguments = test_shell_arguments(shell);
         let expect_program = r#"
           set timeout 30
           log_user 1
@@ -3037,6 +3056,14 @@ mod tests {
               eof { exit 5 }
             }
           }
+          if {$env(ARGMAX_TEST_SETUP) ne ""} {
+            send -- "$env(ARGMAX_TEST_SETUP)\r"
+            expect {
+              -re {ARGMAX[0-9]*> } {}
+              timeout { exit 6 }
+              eof { exit 7 }
+            }
+          }
           send -- "$env(ARGMAX_TEST_INITIAL)"
           send -- "$env(ARGMAX_TEST_PROBE)"
           after 1000
@@ -3054,6 +3081,7 @@ mod tests {
             .env("ARGMAX_TEST_CONTROLS", &control_path)
             .env("ARGMAX_TEST_INIT", &init_path)
             .env("ARGMAX_TEST_INITIAL", initial_line)
+            .env("ARGMAX_TEST_SETUP", setup)
             .env("ARGMAX_TEST_PROBE", probe)
             .env("ARGMAX_TEST_SHELL", program)
             .env("ARGMAX_TEST_ARGS", shell_arguments)
@@ -3068,6 +3096,24 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         Some(read_harness_events(&events_path))
+    }
+
+    const fn oversized_probe_widget(shell: Shell) -> &'static str {
+        match shell {
+            Shell::Bash => {
+                "__argmax_test_oversized() { builtin printf -v READLINE_LINE '%*s' 16385 ''; READLINE_LINE=${READLINE_LINE// /x}; READLINE_POINT=16385; __argmax_sync; __argmax_emit \"test-probe-nonce:$__ARGMAX_BASH_PROBE_NONCE\"; READLINE_LINE=; READLINE_POINT=0; }; builtin bind -x '\"\\C-x\":__argmax_test_oversized'"
+            }
+            Shell::Zsh => {
+                "function __argmax_test_oversized { BUFFER=${(l:16385::x:)}; CURSOR=16385; __argmax_sync; __argmax_emit \"test-probe-nonce:$__ARGMAX_ZSH_PROBE_NONCE\"; BUFFER=; CURSOR=0 }; zle -N __argmax_test_oversized; bindkey '^X' __argmax_test_oversized"
+            }
+            Shell::Fish => {
+                "function __argmax_test_oversized; commandline -r (string repeat -n 16385 x); commandline -C 16385; __argmax_sync; __argmax_emit \"test-probe-nonce:$__ARGMAX_FISH_PROBE_NONCE\"; commandline -r ''; commandline -C 0; end; bind \\cx __argmax_test_oversized"
+            }
+        }
+    }
+
+    fn oversized_probe_shell_events(shell: Shell) -> Option<Vec<Vec<u8>>> {
+        control_shell_events_with_setup(shell, &[], "", oversized_probe_widget(shell), "\x18")
     }
 
     fn stale_control_shell_events(shell: Shell) -> Option<Vec<Vec<u8>>> {
@@ -3616,6 +3662,35 @@ fi
         );
         assert!(events.iter().any(|frame| frame == b"command-start:echo hi"));
         assert!(events.iter().any(|frame| frame == b"command-stop:0"));
+    }
+
+    #[test]
+    fn oversized_probe_consumes_one_nonce_in_every_adapter() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let Some(events) = oversized_probe_shell_events(shell) else {
+                continue;
+            };
+            assert!(
+                events
+                    .iter()
+                    .any(|frame| frame == b"protocol-frame-oversized"),
+                "{} did not report the oversized probe: {events:?}",
+                shell.as_str()
+            );
+            assert!(
+                events.iter().any(|frame| frame == b"test-probe-nonce:1"),
+                "{} did not consume the rejected probe nonce: {events:?}",
+                shell.as_str()
+            );
+            assert!(
+                !events.iter().any(|frame| {
+                    frame.starts_with(b"probe-buffer:")
+                        && frame.windows(3).any(|window| window == b":1:")
+                }),
+                "{} emitted a snapshot for the oversized probe: {events:?}",
+                shell.as_str()
+            );
+        }
     }
 
     #[test]
