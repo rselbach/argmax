@@ -4,12 +4,16 @@
 //! payloads remain raw bytes, while authoritative editing snapshots are accepted
 //! only when their UTF-8 cursor is valid. The reducer consumes every decoded
 //! frame so a rejected frame cannot leave stale suggestions authoritative.
+//! Correlation recovers adapter-counter drift; the private event descriptor
+//! remains a same-user capability rather than partial cryptographic authentication.
 
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
+
+use crate::shell_control::{MAX_PROBE_RESYNC_REQUEST_ID, ProbeResyncRequestId};
 
 /// Hard maximum size of one frame, excluding its NUL terminator.
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
@@ -26,6 +30,7 @@ const BUFFER_CHARACTER_PREFIX: &[u8] = b"buffer:c:";
 const PROBE_BUFFER_BYTE_PREFIX: &[u8] = b"probe-buffer:b:";
 const PROBE_BUFFER_CHARACTER_PREFIX: &[u8] = b"probe-buffer:c:";
 const PROBE_BUFFER_FISH_PREFIX: &[u8] = b"probe-buffer:f:";
+const PROBE_RESYNC_PREFIX: &[u8] = b"probe-resync:";
 const CAPABILITY_NATIVE: &[u8] = b"capability:native-buffer";
 const CAPABILITY_PROBE_PREFIX: &[u8] = b"capability:sync-probe:";
 const CAPABILITY_UNAVAILABLE: &[u8] = b"capability:unavailable";
@@ -91,6 +96,27 @@ impl SnapshotNonce {
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
+    }
+}
+
+/// Correlated report of a shell adapter's current ordinary probe counter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProbeResyncResponse {
+    request_id: ProbeResyncRequestId,
+    last_probe_nonce: SnapshotNonce,
+}
+
+impl ProbeResyncResponse {
+    /// Returns the independent request identifier echoed by the adapter.
+    #[must_use]
+    pub const fn request_id(self) -> ProbeResyncRequestId {
+        self.request_id
+    }
+
+    /// Returns the adapter's current ordinary probe counter.
+    #[must_use]
+    pub const fn last_probe_nonce(self) -> SnapshotNonce {
+        self.last_probe_nonce
     }
 }
 
@@ -299,6 +325,8 @@ pub enum ShellEvent {
     CommandStop(ShellExitStatus),
     /// The shell adapter announced its live synchronization capability.
     Capability(CapabilityAnnouncement),
+    /// The adapter reported its current counter for one correlated recovery request.
+    ProbeResync(ProbeResyncResponse),
     /// The shell reported its current absolute working directory.
     WorkingDirectory(ShellWorkingDirectory),
     /// An inherited child requested a correlated live configuration reload.
@@ -415,6 +443,12 @@ pub enum FrameError {
     NonDecimalProbeNonce,
     /// A probe nonce exceeded the supported numeric range.
     ProbeNonceOutOfRange,
+    /// A probe-resynchronization response did not contain exactly two fields.
+    InvalidProbeResyncGrammar,
+    /// A probe-resynchronization request identifier was not canonical decimal.
+    InvalidProbeResyncRequestId,
+    /// A probe-resynchronization identifier was zero or exceeded the shared bound.
+    ProbeResyncRequestIdOutOfRange,
     /// A Fish snapshot omitted the one print terminator required by its frame.
     MissingFishPrintTerminator,
     /// `command-stop:` had no status value.
@@ -463,6 +497,14 @@ impl fmt::Display for FrameError {
             }
             Self::ProbeNonceOutOfRange => {
                 formatter.write_str("shell snapshot probe nonce is out of range")
+            }
+            Self::InvalidProbeResyncGrammar => {
+                formatter.write_str("shell probe resync response has invalid grammar")
+            }
+            Self::InvalidProbeResyncRequestId => formatter
+                .write_str("shell probe resync request identifier is not canonical decimal"),
+            Self::ProbeResyncRequestIdOutOfRange => {
+                formatter.write_str("shell probe resync request identifier is out of range")
             }
             Self::MissingFishPrintTerminator => {
                 formatter.write_str("Fish shell snapshot print terminator is missing")
@@ -583,6 +625,10 @@ pub enum ProbeRequestError {
     NotAtEditablePrompt,
     /// A prior probe response is still outstanding.
     AlreadyPending,
+    /// Adapter-counter recovery must complete before another ordinary probe.
+    ResyncRequired,
+    /// An adapter-counter recovery request is still outstanding.
+    ResyncPending,
     /// The adapter's probe nonce space was exhausted.
     NonceExhausted,
 }
@@ -593,12 +639,45 @@ impl fmt::Display for ProbeRequestError {
             Self::CapabilityUnavailable => "shell snapshot probe capability is unavailable",
             Self::NotAtEditablePrompt => "shell is not at an editable prompt",
             Self::AlreadyPending => "a shell snapshot probe is already pending",
+            Self::ResyncRequired => "shell snapshot probe counter resync is required",
+            Self::ResyncPending => "shell snapshot probe counter resync is pending",
             Self::NonceExhausted => "shell snapshot probe nonce is exhausted",
         })
     }
 }
 
 impl Error for ProbeRequestError {}
+
+/// An adapter-counter resynchronization request could not be issued safely.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbeResyncRequestError {
+    /// The active adapter did not complete a probe-capability handshake.
+    CapabilityUnavailable,
+    /// The shell is not at an idle editable prompt.
+    NotAtEditablePrompt,
+    /// No counter mismatch currently requires recovery.
+    NotRequired,
+    /// A prior adapter-counter recovery request is still outstanding.
+    AlreadyPending,
+    /// Every shared shell-safe recovery request identifier was issued.
+    RequestIdExhausted,
+}
+
+impl fmt::Display for ProbeResyncRequestError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::CapabilityUnavailable => "shell snapshot probe capability is unavailable",
+            Self::NotAtEditablePrompt => "shell is not at an editable prompt",
+            Self::NotRequired => "shell snapshot probe counter resync is not required",
+            Self::AlreadyPending => "a shell snapshot probe counter resync is already pending",
+            Self::RequestIdExhausted => {
+                "shell snapshot probe counter resync identifiers are exhausted"
+            }
+        })
+    }
+}
+
+impl Error for ProbeResyncRequestError {}
 
 /// Incrementally decodes NUL-framed shell events with bounded retained storage.
 pub struct ShellEventDecoder {
@@ -763,6 +842,10 @@ fn parse_frame(mut frame: Vec<u8>) -> Result<ShellEvent, FrameError> {
     if frame.is_empty() {
         return Err(FrameError::EmptyFrame);
     }
+    if frame.starts_with(PROBE_RESYNC_PREFIX) {
+        frame.drain(..PROBE_RESYNC_PREFIX.len());
+        return parse_probe_resync(&frame).map(ShellEvent::ProbeResync);
+    }
     if frame.starts_with(PROBE_BUFFER_BYTE_PREFIX) {
         frame.drain(..PROBE_BUFFER_BYTE_PREFIX.len());
         return parse_probe_buffer(frame, CursorUnit::Bytes).map(ShellEvent::Buffer);
@@ -852,6 +935,23 @@ enum CursorUnit {
     FishCharacters,
 }
 
+fn parse_probe_resync(frame: &[u8]) -> Result<ProbeResyncResponse, FrameError> {
+    let mut fields = frame.split(|byte| *byte == b':');
+    let request = fields.next().ok_or(FrameError::InvalidProbeResyncGrammar)?;
+    let last_nonce = fields.next().ok_or(FrameError::InvalidProbeResyncGrammar)?;
+    if fields.next().is_some() {
+        return Err(FrameError::InvalidProbeResyncGrammar);
+    }
+    let request =
+        parse_canonical_decimal(request).ok_or(FrameError::InvalidProbeResyncRequestId)?;
+    let request_id = ProbeResyncRequestId::new(request)
+        .map_err(|_| FrameError::ProbeResyncRequestIdOutOfRange)?;
+    Ok(ProbeResyncResponse {
+        request_id,
+        last_probe_nonce: parse_probe_nonce(last_nonce)?,
+    })
+}
+
 fn parse_probe_buffer(mut frame: Vec<u8>, unit: CursorUnit) -> Result<BufferSnapshot, FrameError> {
     let Some(separator) = frame.iter().position(|byte| *byte == b':') else {
         return Err(FrameError::MissingProbeNonce);
@@ -897,6 +997,18 @@ fn parse_buffer(
         bytes,
         cursor,
         probe_nonce,
+    })
+}
+
+fn parse_canonical_decimal(bytes: &[u8]) -> Option<u64> {
+    if bytes.is_empty()
+        || !bytes.iter().all(u8::is_ascii_digit)
+        || bytes.len() > 1 && bytes[0] == b'0'
+    {
+        return None;
+    }
+    bytes.iter().try_fold(0_u64, |value, byte| {
+        value.checked_mul(10)?.checked_add(u64::from(*byte - b'0'))
     })
 }
 
@@ -1049,6 +1161,18 @@ pub enum SnapshotRejection {
     },
 }
 
+/// Why a syntactically valid adapter-counter response was not authoritative.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbeResyncRejection {
+    /// No request was pending, or the response echoed a different request.
+    RequestIdMismatch {
+        /// Identifier required by the reducer, if a request was outstanding.
+        expected: Option<ProbeResyncRequestId>,
+        /// Identifier carried by the response.
+        received: ProbeResyncRequestId,
+    },
+}
+
 /// Result of consuming one [`DecodedFrame`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StateUpdate {
@@ -1075,6 +1199,10 @@ pub enum StateUpdate {
     CommandStoppedWithoutAttribution(ShellExitStatus),
     /// Adapter live-buffer capability changed.
     CapabilityChanged(BufferSyncCapability),
+    /// A matching recovery response established the adapter's counter baseline.
+    ProbeResynchronized(ProbeResyncResponse),
+    /// A wrong or unsolicited recovery response left all recovery state unchanged.
+    ProbeResyncRejected(ProbeResyncRejection),
     /// The shell reported an authoritative prompt working directory.
     WorkingDirectoryChanged(ShellWorkingDirectory),
     /// An active-session child requested a correlated configuration reload.
@@ -1108,8 +1236,11 @@ pub struct ShellSessionState {
     foreground: ForegroundCommandState,
     prompt_ready: bool,
     capability: BufferSyncCapability,
-    last_probe_nonce: Option<SnapshotNonce>,
+    confirmed_probe_nonce: Option<SnapshotNonce>,
     pending_probe: Option<(SnapshotNonce, InputGeneration)>,
+    probe_resync_required: bool,
+    pending_probe_resync: Option<ProbeResyncRequestId>,
+    last_probe_resync_request_id: Option<ProbeResyncRequestId>,
     buffer: Option<BufferSnapshot>,
     input_generation: InputGeneration,
     input_unacknowledged: bool,
@@ -1131,10 +1262,16 @@ impl fmt::Debug for ShellSessionState {
             .field("foreground", &self.foreground)
             .field("prompt_ready", &self.prompt_ready)
             .field("capability", &self.capability)
-            .field("last_probe_nonce", &self.last_probe_nonce)
+            .field("confirmed_probe_nonce", &self.confirmed_probe_nonce)
             .field(
                 "pending_probe_nonce",
                 &self.pending_probe.map(|(nonce, _)| nonce),
+            )
+            .field("probe_resync_required", &self.probe_resync_required)
+            .field("pending_probe_resync", &self.pending_probe_resync)
+            .field(
+                "last_probe_resync_request_id",
+                &self.last_probe_resync_request_id,
             )
             .field("buffer", &self.buffer)
             .field("input_generation", &self.input_generation)
@@ -1162,8 +1299,11 @@ impl ShellSessionState {
             foreground: ForegroundCommandState::Unknown,
             prompt_ready: false,
             capability: BufferSyncCapability::Unknown,
-            last_probe_nonce: None,
+            confirmed_probe_nonce: None,
             pending_probe: None,
+            probe_resync_required: false,
+            pending_probe_resync: None,
+            last_probe_resync_request_id: None,
             buffer: None,
             input_generation: InputGeneration { epoch, sequence: 0 },
             input_unacknowledged: false,
@@ -1225,6 +1365,24 @@ impl ShellSessionState {
         }
     }
 
+    /// Returns the last ordinary probe nonce confirmed by the adapter.
+    #[must_use]
+    pub const fn confirmed_probe_nonce(&self) -> Option<SnapshotNonce> {
+        self.confirmed_probe_nonce
+    }
+
+    /// Returns whether an explicit adapter-counter recovery is required.
+    #[must_use]
+    pub const fn probe_resync_required(&self) -> bool {
+        self.probe_resync_required
+    }
+
+    /// Returns the one outstanding recovery request identifier, if any.
+    #[must_use]
+    pub const fn pending_probe_resync_request_id(&self) -> Option<ProbeResyncRequestId> {
+        self.pending_probe_resync
+    }
+
     /// Returns the most recent safely applied frame position.
     #[must_use]
     pub const fn last_position(&self) -> Option<FramePosition> {
@@ -1244,6 +1402,8 @@ impl ShellSessionState {
             && self.foreground == ForegroundCommandState::Idle
             && self.prompt_ready
             && self.capability.supports_live_snapshots()
+            && !self.probe_resync_required
+            && self.pending_probe_resync.is_none()
     }
 
     /// Invalidates the current snapshot before locally forwarded editing input.
@@ -1284,12 +1444,15 @@ impl ShellSessionState {
             && self.foreground == ForegroundCommandState::Idle
             && self.prompt_ready
             && self.pending_probe.is_none()
+            && !self.probe_resync_required
+            && self.pending_probe_resync.is_none()
     }
 
     /// Reserves the next nonce before the caller injects [`SYNC_PROBE_SEQUENCE`].
     ///
-    /// Exactly one request may be outstanding. Its response is accepted only if
-    /// it echoes this nonce and no newer local-input generation has been issued.
+    /// Exactly one request may be outstanding. A matching echo confirms the
+    /// adapter counter; its buffer becomes authoritative only when no newer
+    /// local-input generation has been issued.
     ///
     /// # Errors
     ///
@@ -1302,10 +1465,16 @@ impl ShellSessionState {
         if self.foreground != ForegroundCommandState::Idle || !self.prompt_ready {
             return Err(ProbeRequestError::NotAtEditablePrompt);
         }
+        if self.pending_probe_resync.is_some() {
+            return Err(ProbeRequestError::ResyncPending);
+        }
+        if self.probe_resync_required {
+            return Err(ProbeRequestError::ResyncRequired);
+        }
         if self.pending_probe.is_some() {
             return Err(ProbeRequestError::AlreadyPending);
         }
-        let Some(last_nonce) = self.last_probe_nonce else {
+        let Some(last_nonce) = self.confirmed_probe_nonce else {
             self.invalidate_editing_authority();
             return Err(ProbeRequestError::CapabilityUnavailable);
         };
@@ -1314,9 +1483,43 @@ impl ShellSessionState {
             return Err(ProbeRequestError::NonceExhausted);
         };
         let nonce = SnapshotNonce(value);
-        self.last_probe_nonce = Some(nonce);
         self.pending_probe = Some((nonce, self.input_generation));
         Ok(nonce)
+    }
+
+    /// Reserves a distinct request for explicit adapter-counter recovery.
+    ///
+    /// A matching [`ShellEvent::ProbeResync`] may move the confirmed ordinary
+    /// counter baseline either up or down. Wrong responses cannot change the
+    /// baseline or consume the pending request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when recovery is unsupported, not currently required,
+    /// unsafe in the shell lifecycle, already pending, or numerically exhausted.
+    pub fn begin_probe_resync(&mut self) -> Result<ProbeResyncRequestId, ProbeResyncRequestError> {
+        if self.capability != BufferSyncCapability::Probe {
+            return Err(ProbeResyncRequestError::CapabilityUnavailable);
+        }
+        if self.foreground != ForegroundCommandState::Idle || !self.prompt_ready {
+            return Err(ProbeResyncRequestError::NotAtEditablePrompt);
+        }
+        if self.pending_probe_resync.is_some() {
+            return Err(ProbeResyncRequestError::AlreadyPending);
+        }
+        if !self.probe_resync_required {
+            return Err(ProbeResyncRequestError::NotRequired);
+        }
+        let value = self
+            .last_probe_resync_request_id
+            .map_or(Some(1), |request| request.get().checked_add(1))
+            .filter(|value| *value <= MAX_PROBE_RESYNC_REQUEST_ID)
+            .ok_or(ProbeResyncRequestError::RequestIdExhausted)?;
+        let request = ProbeResyncRequestId::new(value)
+            .map_err(|_| ProbeResyncRequestError::RequestIdExhausted)?;
+        self.last_probe_resync_request_id = Some(request);
+        self.pending_probe_resync = Some(request);
+        Ok(request)
     }
 
     /// Resets state for a newer decoder epoch and requires new authority.
@@ -1333,8 +1536,10 @@ impl ShellSessionState {
         self.last_position = None;
         self.order_faulted = false;
         self.capability = BufferSyncCapability::Unknown;
-        self.last_probe_nonce = None;
+        self.confirmed_probe_nonce = None;
         self.pending_probe = None;
+        self.probe_resync_required = false;
+        self.pending_probe_resync = None;
         self.input_generation = InputGeneration { epoch, sequence: 0 };
         self.input_unacknowledged = false;
         self.buffer_generation = None;
@@ -1376,6 +1581,7 @@ impl ShellSessionState {
             ShellEvent::Buffer(buffer) => self.synchronize_buffer(buffer),
             ShellEvent::PromptReady => self.synchronize_prompt(),
             ShellEvent::Capability(announcement) => self.announce_capability(announcement),
+            ShellEvent::ProbeResync(response) => self.apply_probe_resync(response),
             ShellEvent::CommandStart(command) => self.start_command(Some(command)),
             ShellEvent::CommandStartUnknown => self.start_command(None),
             ShellEvent::CommandStop(status) => self.stop_command(status),
@@ -1425,6 +1631,19 @@ impl ShellSessionState {
         if self.input_unacknowledged {
             return StateUpdate::LifecycleSuppressed;
         }
+        if self.probe_resync_required || self.pending_probe_resync.is_some() {
+            self.synchronization = SynchronizationState::Desynchronized;
+            self.foreground = ForegroundCommandState::Idle;
+            self.prompt_ready = true;
+            self.buffer = None;
+            self.buffer_generation = None;
+            self.buffer_observed_since_prompt = false;
+            self.pending_probe = None;
+            self.input_unacknowledged = false;
+            self.abandon_pending_probe_resync();
+            self.attribution = None;
+            return StateUpdate::LifecycleSuppressed;
+        }
 
         let recovered = self.synchronization == SynchronizationState::Desynchronized;
         self.synchronization = SynchronizationState::Synchronized;
@@ -1442,25 +1661,45 @@ impl ShellSessionState {
     fn announce_capability(&mut self, announcement: CapabilityAnnouncement) -> StateUpdate {
         self.invalidate_editing_authority();
         self.pending_probe = None;
+        self.probe_resync_required = false;
+        self.pending_probe_resync = None;
         self.capability = announcement.capability;
-        self.last_probe_nonce = announcement.last_probe_nonce;
+        self.confirmed_probe_nonce = announcement.last_probe_nonce;
         StateUpdate::CapabilityChanged(announcement.capability)
+    }
+
+    fn apply_probe_resync(&mut self, response: ProbeResyncResponse) -> StateUpdate {
+        let Some(expected) = self.pending_probe_resync else {
+            return StateUpdate::ProbeResyncRejected(ProbeResyncRejection::RequestIdMismatch {
+                expected: None,
+                received: response.request_id,
+            });
+        };
+        if response.request_id != expected {
+            return StateUpdate::ProbeResyncRejected(ProbeResyncRejection::RequestIdMismatch {
+                expected: Some(expected),
+                received: response.request_id,
+            });
+        }
+
+        self.confirmed_probe_nonce = Some(response.last_probe_nonce);
+        self.pending_probe = None;
+        self.probe_resync_required = false;
+        self.pending_probe_resync = None;
+        self.invalidate_editing_authority();
+        StateUpdate::ProbeResynchronized(response)
     }
 
     fn correlate_snapshot(&mut self, buffer: &BufferSnapshot) -> Result<(), SnapshotRejection> {
         match (self.capability, buffer.probe_nonce) {
             (BufferSyncCapability::Probe, None) => Err(SnapshotRejection::MissingProbeNonce),
             (BufferSyncCapability::Probe, Some(received)) => {
-                // A response ahead of the reservation means the adapter's
-                // counter advanced without a wrapper reservation, which a
-                // user-typed literal probe sequence causes with bracketed
-                // paste off. Adopting the received value keeps the next
-                // reservation correlated instead of rejecting every later
-                // probe until the adapter is re-sourced. The response itself
-                // stays rejected: no reservation vouches for it.
                 let Some((expected, requested_generation)) = self.pending_probe else {
-                    if self.last_probe_nonce.is_some_and(|nonce| received > nonce) {
-                        self.last_probe_nonce = Some(received);
+                    if self
+                        .confirmed_probe_nonce
+                        .is_some_and(|baseline| received > baseline)
+                    {
+                        self.probe_resync_required = true;
                     }
                     return Err(SnapshotRejection::ProbeNonceMismatch {
                         expected: None,
@@ -1469,8 +1708,8 @@ impl ShellSessionState {
                 };
                 if received != expected {
                     if received > expected {
-                        self.last_probe_nonce = Some(received);
                         self.pending_probe = None;
+                        self.probe_resync_required = true;
                     }
                     return Err(SnapshotRejection::ProbeNonceMismatch {
                         expected: Some(expected),
@@ -1478,6 +1717,7 @@ impl ShellSessionState {
                     });
                 }
                 self.pending_probe = None;
+                self.confirmed_probe_nonce = Some(received);
                 if requested_generation != self.input_generation {
                     return Err(SnapshotRejection::StaleProbeGeneration {
                         requested: requested_generation,
@@ -1500,6 +1740,7 @@ impl ShellSessionState {
     }
 
     fn start_command(&mut self, preexec: Option<SubmittedCommand>) -> StateUpdate {
+        self.abandon_pending_probe_resync();
         if self.foreground == ForegroundCommandState::Running {
             self.invalidate_authority();
             return StateUpdate::LifecycleRejected(LifecycleError::DuplicateCommandStart);
@@ -1568,6 +1809,12 @@ impl ShellSessionState {
         })
     }
 
+    fn abandon_pending_probe_resync(&mut self) {
+        if self.pending_probe_resync.take().is_some() {
+            self.probe_resync_required = true;
+        }
+    }
+
     fn invalidate_authority(&mut self) {
         self.synchronization = SynchronizationState::Desynchronized;
         self.foreground = ForegroundCommandState::Unknown;
@@ -1576,6 +1823,7 @@ impl ShellSessionState {
         self.buffer_generation = None;
         self.buffer_observed_since_prompt = false;
         self.pending_probe = None;
+        self.abandon_pending_probe_resync();
         self.attribution = None;
     }
 
@@ -1737,6 +1985,34 @@ mod tests {
         assert_eq!(error(&frames[0]), &FrameError::MissingProbeNonce);
         assert_eq!(error(&frames[1]), &FrameError::NonDecimalProbeNonce);
         assert_eq!(error(&frames[2]), &FrameError::ProbeNonceOutOfRange);
+    }
+
+    #[test]
+    fn decodes_typed_probe_resync_and_rejects_invalid_grammar() {
+        let mut decoder = decoder();
+        let frames = decode(
+            &mut decoder,
+            b"probe-resync:7:42\0probe-resync::1\0probe-resync:01:1\0\
+              probe-resync:0:1\0probe-resync:2147483648:1\0probe-resync:1:2:3\0",
+        );
+        assert_eq!(
+            event(&frames[0]),
+            &ShellEvent::ProbeResync(ProbeResyncResponse {
+                request_id: ProbeResyncRequestId::new(7).unwrap(),
+                last_probe_nonce: SnapshotNonce(42),
+            })
+        );
+        assert_eq!(error(&frames[1]), &FrameError::InvalidProbeResyncRequestId);
+        assert_eq!(error(&frames[2]), &FrameError::InvalidProbeResyncRequestId);
+        assert_eq!(
+            error(&frames[3]),
+            &FrameError::ProbeResyncRequestIdOutOfRange
+        );
+        assert_eq!(
+            error(&frames[4]),
+            &FrameError::ProbeResyncRequestIdOutOfRange
+        );
+        assert_eq!(error(&frames[5]), &FrameError::InvalidProbeResyncGrammar);
     }
 
     #[test]
@@ -2158,11 +2434,14 @@ mod tests {
     }
 
     #[test]
-    fn unmatched_probe_nonce_cannot_resurrect_a_snapshot() {
+    fn higher_pending_nonce_requires_correlated_resync_before_a_fresh_probe() {
         let mut decoder = decoder();
         let frames = decode(
             &mut decoder,
-            b"capability:sync-probe:10\0prompt-ready\0probe-buffer:b:12:1:x\0probe-buffer:b:13:1:y\0",
+            b"capability:sync-probe:10\0prompt-ready\0\
+              probe-buffer:b:18446744073709551615:1:x\0\
+              probe-resync:2:999\0probe-resync:1:3\0probe-buffer:b:4:1:y\0\
+              probe-resync:1:777\0",
         );
         let mut state = ShellSessionState::new(StreamEpoch::INITIAL);
         state.apply(frames[0].clone());
@@ -2173,22 +2452,257 @@ mod tests {
             state.apply(frames[2].clone()),
             StateUpdate::SnapshotRejected(SnapshotRejection::ProbeNonceMismatch {
                 expected: Some(SnapshotNonce(11)),
-                received: SnapshotNonce(12),
+                received: SnapshotNonce(u64::MAX),
             })
         );
+        assert_eq!(state.confirmed_probe_nonce(), Some(SnapshotNonce(10)));
+        assert_eq!(state.pending_probe_nonce(), None);
+        assert!(state.probe_resync_required());
+        assert_eq!(
+            state.begin_sync_probe(),
+            Err(ProbeRequestError::ResyncRequired)
+        );
+
+        let request = state.begin_probe_resync().expect("resync request");
+        assert_eq!(request, ProbeResyncRequestId::new(1).unwrap());
+        assert_eq!(
+            state.apply(frames[3].clone()),
+            StateUpdate::ProbeResyncRejected(ProbeResyncRejection::RequestIdMismatch {
+                expected: Some(request),
+                received: ProbeResyncRequestId::new(2).unwrap(),
+            })
+        );
+        assert_eq!(state.confirmed_probe_nonce(), Some(SnapshotNonce(10)));
+        assert_eq!(state.pending_probe_resync_request_id(), Some(request));
+
+        assert_eq!(
+            state.apply(frames[4].clone()),
+            StateUpdate::ProbeResynchronized(ProbeResyncResponse {
+                request_id: request,
+                last_probe_nonce: SnapshotNonce(3),
+            })
+        );
+        assert_eq!(state.confirmed_probe_nonce(), Some(SnapshotNonce(3)));
+        assert!(!state.probe_resync_required());
+        assert_eq!(state.pending_probe_resync_request_id(), None);
         assert!(state.buffer().is_none());
 
-        // The adapter counter ran ahead, which a user-typed literal probe
-        // sequence causes; correlation adopts the received value so the next
-        // reservation lines up again instead of failing until re-source.
-        assert_eq!(state.pending_probe_nonce(), None);
+        assert_eq!(state.begin_sync_probe(), Ok(SnapshotNonce(4)));
+        assert_eq!(
+            state.apply(frames[5].clone()),
+            StateUpdate::BufferSynchronized { recovered: true }
+        );
+        assert_eq!(state.buffer().unwrap().as_bytes(), b"y");
+        assert_eq!(state.confirmed_probe_nonce(), Some(SnapshotNonce(4)));
+
+        assert_eq!(
+            state.apply(frames[6].clone()),
+            StateUpdate::ProbeResyncRejected(ProbeResyncRejection::RequestIdMismatch {
+                expected: None,
+                received: request,
+            })
+        );
+        assert_eq!(state.confirmed_probe_nonce(), Some(SnapshotNonce(4)));
+        assert_eq!(state.buffer().unwrap().as_bytes(), b"y");
+    }
+
+    #[test]
+    fn unsolicited_higher_nonce_never_poisoned_the_confirmed_baseline() {
+        let mut decoder = decoder();
+        let frames = decode(
+            &mut decoder,
+            b"capability:sync-probe:5\0prompt-ready\0\
+              probe-buffer:b:18446744073709551615:1:x\0",
+        );
+        let mut state = ShellSessionState::new(StreamEpoch::INITIAL);
+        state.apply(frames[0].clone());
+        state.apply(frames[1].clone());
+
+        assert_eq!(
+            state.apply(frames[2].clone()),
+            StateUpdate::SnapshotRejected(SnapshotRejection::ProbeNonceMismatch {
+                expected: None,
+                received: SnapshotNonce(u64::MAX),
+            })
+        );
+        assert_eq!(state.confirmed_probe_nonce(), Some(SnapshotNonce(5)));
+        assert!(state.probe_resync_required());
+        assert_eq!(
+            state.begin_sync_probe(),
+            Err(ProbeRequestError::ResyncRequired)
+        );
+    }
+
+    #[test]
+    fn unsolicited_nonce_at_or_below_baseline_rejects_without_resync() {
+        let mut decoder = decoder();
+        let frames = decode(
+            &mut decoder,
+            b"capability:sync-probe:5\0prompt-ready\0probe-buffer:b:5:1:x\0",
+        );
+        let mut state = ShellSessionState::new(StreamEpoch::INITIAL);
+        state.apply(frames[0].clone());
+        state.apply(frames[1].clone());
+        assert!(matches!(
+            state.apply(frames[2].clone()),
+            StateUpdate::SnapshotRejected(SnapshotRejection::ProbeNonceMismatch {
+                expected: None,
+                received: SnapshotNonce(5),
+            })
+        ));
+        assert!(!state.probe_resync_required());
+        assert_eq!(state.confirmed_probe_nonce(), Some(SnapshotNonce(5)));
+    }
+
+    #[test]
+    fn lower_mismatch_retains_the_valid_pending_request() {
+        let mut decoder = decoder();
+        let frames = decode(
+            &mut decoder,
+            b"capability:sync-probe:10\0prompt-ready\0probe-buffer:b:9:1:x\0\
+              probe-buffer:b:11:1:y\0",
+        );
+        let mut state = ShellSessionState::new(StreamEpoch::INITIAL);
+        state.apply(frames[0].clone());
+        state.apply(frames[1].clone());
         state.observe_local_input().expect("generation");
-        assert_eq!(state.begin_sync_probe(), Ok(SnapshotNonce(13)));
+        assert_eq!(state.begin_sync_probe(), Ok(SnapshotNonce(11)));
+        assert!(matches!(
+            state.apply(frames[2].clone()),
+            StateUpdate::SnapshotRejected(SnapshotRejection::ProbeNonceMismatch {
+                expected: Some(SnapshotNonce(11)),
+                received: SnapshotNonce(9),
+            })
+        ));
+        assert_eq!(state.pending_probe_nonce(), Some(SnapshotNonce(11)));
+        assert_eq!(state.confirmed_probe_nonce(), Some(SnapshotNonce(10)));
+        assert!(!state.probe_resync_required());
         assert_eq!(
             state.apply(frames[3].clone()),
             StateUpdate::BufferSynchronized { recovered: true }
         );
-        assert_eq!(state.buffer().unwrap().as_bytes(), b"y");
+        assert_eq!(state.confirmed_probe_nonce(), Some(SnapshotNonce(11)));
+    }
+
+    #[test]
+    fn matching_stale_generation_response_still_confirms_the_adapter_baseline() {
+        let mut decoder = decoder();
+        let frames = decode(
+            &mut decoder,
+            b"capability:sync-probe:4\0prompt-ready\0probe-buffer:b:5:1:x\0",
+        );
+        let mut state = ShellSessionState::new(StreamEpoch::INITIAL);
+        state.apply(frames[0].clone());
+        state.apply(frames[1].clone());
+        let requested = state.observe_local_input().expect("generation");
+        assert_eq!(state.begin_sync_probe(), Ok(SnapshotNonce(5)));
+        let current = state.observe_local_input().expect("newer generation");
+        assert_eq!(
+            state.apply(frames[2].clone()),
+            StateUpdate::SnapshotRejected(SnapshotRejection::StaleProbeGeneration {
+                requested,
+                current,
+            })
+        );
+        assert_eq!(state.confirmed_probe_nonce(), Some(SnapshotNonce(5)));
+        assert_eq!(state.begin_sync_probe(), Ok(SnapshotNonce(6)));
+    }
+
+    #[test]
+    fn capability_and_stream_reset_clear_probe_recovery_state() {
+        let mut decoder = decoder();
+        let frames = decode(
+            &mut decoder,
+            b"capability:sync-probe:1\0prompt-ready\0probe-buffer:b:3:1:x\0\
+              capability:sync-probe:7\0prompt-ready\0probe-buffer:b:9:1:y\0",
+        );
+        let mut state = ShellSessionState::new(StreamEpoch::INITIAL);
+        state.apply(frames[0].clone());
+        state.apply(frames[1].clone());
+        state.observe_local_input().expect("generation");
+        assert_eq!(state.begin_sync_probe(), Ok(SnapshotNonce(2)));
+        state.apply(frames[2].clone());
+        let first = state.begin_probe_resync().expect("first resync");
+        assert_eq!(first.get(), 1);
+
+        state.apply(frames[3].clone());
+        assert_eq!(state.confirmed_probe_nonce(), Some(SnapshotNonce(7)));
+        assert!(!state.probe_resync_required());
+        assert_eq!(state.pending_probe_resync_request_id(), None);
+
+        state.apply(frames[4].clone());
+        state.observe_local_input().expect("generation");
+        assert_eq!(state.begin_sync_probe(), Ok(SnapshotNonce(8)));
+        state.apply(frames[5].clone());
+        let second = state.begin_probe_resync().expect("second resync");
+        assert_eq!(second.get(), 2);
+
+        let epoch = decoder.reset_stream().expect("epoch advances");
+        state.reset_stream(epoch).expect("state resets");
+        assert_eq!(state.confirmed_probe_nonce(), None);
+        assert!(!state.probe_resync_required());
+        assert_eq!(state.pending_probe_resync_request_id(), None);
+        assert_eq!(
+            state.begin_probe_resync(),
+            Err(ProbeResyncRequestError::CapabilityUnavailable)
+        );
+    }
+
+    #[test]
+    fn command_lifecycle_abandons_pending_recovery_and_prompt_requests_a_new_one() {
+        let mut decoder = decoder();
+        let frames = decode(
+            &mut decoder,
+            b"capability:sync-probe:0\0prompt-ready\0probe-buffer:b:2:1:x\0\
+              command-start:x\0command-stop:0\0prompt-ready\0",
+        );
+        let mut state = ShellSessionState::new(StreamEpoch::INITIAL);
+        state.apply(frames[0].clone());
+        state.apply(frames[1].clone());
+        state.observe_local_input().expect("generation");
+        assert_eq!(state.begin_sync_probe(), Ok(SnapshotNonce(1)));
+        state.apply(frames[2].clone());
+        let abandoned = state.begin_probe_resync().expect("first recovery");
+        assert_eq!(abandoned.get(), 1);
+
+        assert!(matches!(
+            state.apply(frames[3].clone()),
+            StateUpdate::CommandStarted { .. }
+        ));
+        assert_eq!(state.pending_probe_resync_request_id(), None);
+        assert!(state.probe_resync_required());
+        state.apply(frames[4].clone());
+        assert_eq!(
+            state.apply(frames[5].clone()),
+            StateUpdate::LifecycleSuppressed
+        );
+        assert_eq!(state.foreground(), ForegroundCommandState::Idle);
+        assert!(state.probe_resync_required());
+        assert!(!state.suggestions_allowed());
+        assert!(state.buffer().is_none());
+        assert_eq!(state.begin_probe_resync().unwrap().get(), 2);
+    }
+
+    #[test]
+    fn probe_resync_request_ids_exhaust_without_wrapping() {
+        let mut decoder = decoder();
+        let frames = decode(
+            &mut decoder,
+            b"capability:sync-probe:0\0prompt-ready\0probe-buffer:b:2:1:x\0",
+        );
+        let mut state = ShellSessionState::new(StreamEpoch::INITIAL);
+        state.apply(frames[0].clone());
+        state.apply(frames[1].clone());
+        state.observe_local_input().expect("generation");
+        state.begin_sync_probe().expect("ordinary probe");
+        state.apply(frames[2].clone());
+        state.last_probe_resync_request_id =
+            Some(ProbeResyncRequestId::new(MAX_PROBE_RESYNC_REQUEST_ID).unwrap());
+        assert_eq!(
+            state.begin_probe_resync(),
+            Err(ProbeResyncRequestError::RequestIdExhausted)
+        );
+        assert!(state.probe_resync_required());
     }
 
     #[test]

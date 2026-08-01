@@ -142,6 +142,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
            -n ${__ARGMAX_BASH_MULTILINE+x} ||
            -n ${__ARGMAX_BASH_PROBE+x} ||
            -n ${__ARGMAX_BASH_PROBE_NONCE+x} ||
+           -n ${__ARGMAX_BASH_PROBE_RESYNC_LAST_ID+x} ||
            -n ${__ARGMAX_BASH_CONTROL_PENDING+x} ||
            -n ${__ARGMAX_BASH_CONTROL_DISCARDING+x} ||
            -n ${__ARGMAX_BASH_CONTROL_LAST_ID+x} ||
@@ -224,6 +225,7 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
             ! __ARGMAX_BASH_MULTILINE=0 ||
             ! __ARGMAX_BASH_PROBE=$'\e[argmax-sync~' ||
             ! __ARGMAX_BASH_PROBE_NONCE=0 ||
+            ! __ARGMAX_BASH_PROBE_RESYNC_LAST_ID=0 ||
             ! __ARGMAX_BASH_CONTROL_PENDING= ||
             ! __ARGMAX_BASH_CONTROL_DISCARDING=0 ||
             ! __ARGMAX_BASH_CONTROL_LAST_ID=0; then
@@ -330,6 +332,18 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           local argmax_decoded
 
           case $argmax_frame in
+            argmax-control-v1:resync:*)
+              argmax_request=${argmax_frame#argmax-control-v1:resync:}
+              [[ $argmax_request =~ ^[1-9][0-9]{0,9}$ ]] || return 0
+              argmax_request_value=$((10#$argmax_request))
+              (( argmax_request_value <= 2147483647 )) || return 0
+              (( argmax_request_value >
+                 __ARGMAX_BASH_PROBE_RESYNC_LAST_ID )) || return 0
+              argmax_probe_resync_request=$argmax_request_value
+              argmax_probe_resync_ready=1
+              __ARGMAX_BASH_PROBE_RESYNC_LAST_ID=$argmax_request_value
+              return 0
+              ;;
             argmax-control-v1:replace:*)
               argmax_rest=${argmax_frame#argmax-control-v1:replace:}
               ;;
@@ -486,6 +500,8 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           local argmax_control_cursor=0
           local argmax_control_request=0
           local argmax_control_ready=0
+          local argmax_probe_resync_request=0
+          local argmax_probe_resync_ready=0
           local argmax_buffer
           if [[ -z $argmax_locale ]]; then
             argmax_locale=${LC_CTYPE-}
@@ -501,6 +517,11 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
             READLINE_LINE=$argmax_control_buffer
             READLINE_POINT=$argmax_control_cursor
             __ARGMAX_BASH_CONTROL_LAST_ID=$argmax_control_request
+          fi
+          if (( argmax_probe_resync_ready )); then
+            __argmax_emit \
+              "probe-resync:$argmax_probe_resync_request:$__ARGMAX_BASH_PROBE_NONCE"
+            return "$argmax_status"
           fi
           argmax_buffer=$READLINE_LINE
           if (( __ARGMAX_BASH_PROBE_NONCE == 9223372036854775807 )); then
@@ -666,8 +687,9 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
         builtin unset __ARGMAX_BASH_HOOKS __ARGMAX_BASH_CAPABILITY \
           __ARGMAX_BASH_COMMAND_ACTIVE __ARGMAX_BASH_HISTORY_INDEX \
           __ARGMAX_BASH_MULTILINE __ARGMAX_BASH_PROBE \
-          __ARGMAX_BASH_PROBE_NONCE __ARGMAX_BASH_CONTROL_PENDING \
-          __ARGMAX_BASH_CONTROL_DISCARDING __ARGMAX_BASH_CONTROL_LAST_ID
+          __ARGMAX_BASH_PROBE_NONCE __ARGMAX_BASH_PROBE_RESYNC_LAST_ID \
+          __ARGMAX_BASH_CONTROL_PENDING __ARGMAX_BASH_CONTROL_DISCARDING \
+          __ARGMAX_BASH_CONTROL_LAST_ID
         return 1
       }
 
@@ -701,7 +723,10 @@ if [[ $- == *i* && -t 0 && -t 1 ]]; then
           ${__ARGMAX_BASH_COMMAND_ACTIVE-} == '' &&
           ${__ARGMAX_BASH_HISTORY_INDEX-} =~ ^[0-9]+$ &&
           ${__ARGMAX_BASH_MULTILINE-} == 0 &&
-          ${__ARGMAX_BASH_CONTROL_DISCARDING-} =~ ^[01]$ &&
+          ${__ARGMAX_BASH_PROBE_RESYNC_LAST_ID-} =~ \
+            ^(0|[1-9][0-9]{0,9})$ ]] &&
+      (( 10#$__ARGMAX_BASH_PROBE_RESYNC_LAST_ID <= 2147483647 )) &&
+      [[ ${__ARGMAX_BASH_CONTROL_DISCARDING-} =~ ^[01]$ &&
           ${__ARGMAX_BASH_CONTROL_LAST_ID-} =~ ^[0-9]+$ &&
           ${PS0-} == *'__argmax_preexec'* &&
           ${PS2-} == *'__ARGMAX_BASH_MULTILINE'* &&
@@ -757,6 +782,7 @@ const ZSH_INIT_BODY: &str = r#"if [[ -o interactive && -t 0 && -t 1 ]]; then
           $+parameters[__ARGMAX_ZSH_COMMAND_ACTIVE] ||
           $+parameters[__ARGMAX_ZSH_PROBE] ||
           $+parameters[__ARGMAX_ZSH_PROBE_NONCE] ||
+          $+parameters[__ARGMAX_ZSH_PROBE_RESYNC_LAST_ID] ||
           $+parameters[__ARGMAX_ZSH_CONTROL_PENDING] ||
           $+parameters[__ARGMAX_ZSH_CONTROL_DISCARDING] ||
           $+parameters[__ARGMAX_ZSH_CONTROL_LAST_ID] ||
@@ -780,6 +806,7 @@ const ZSH_INIT_BODY: &str = r#"if [[ -o interactive && -t 0 && -t 1 ]]; then
       __ARGMAX_ZSH_COMMAND_ACTIVE=0
       __ARGMAX_ZSH_PROBE=$'\e[argmax-sync~'
       __ARGMAX_ZSH_PROBE_NONCE=0
+      __ARGMAX_ZSH_PROBE_RESYNC_LAST_ID=0
       __ARGMAX_ZSH_CONTROL_PENDING=
       __ARGMAX_ZSH_CONTROL_DISCARDING=0
       __ARGMAX_ZSH_CONTROL_LAST_ID=0
@@ -849,6 +876,21 @@ const ZSH_INIT_BODY: &str = r#"if [[ -o interactive && -t 0 && -t 1 ]]; then
         local argmax_decoded
 
         case $argmax_frame in
+          argmax-control-v1:resync:*)
+            argmax_request=${argmax_frame#argmax-control-v1:resync:}
+            [[ $argmax_request == <-> && ${#argmax_request} -le 10 ]] ||
+              return 0
+            [[ $argmax_request[1] != 0 ]] || return 0
+            argmax_request_value=$((10#$argmax_request))
+            (( argmax_request_value >= 1 &&
+               argmax_request_value <= 2147483647 )) || return 0
+            (( argmax_request_value >
+               __ARGMAX_ZSH_PROBE_RESYNC_LAST_ID )) || return 0
+            argmax_probe_resync_request=$argmax_request_value
+            argmax_probe_resync_ready=1
+            __ARGMAX_ZSH_PROBE_RESYNC_LAST_ID=$argmax_request_value
+            return 0
+            ;;
           argmax-control-v1:replace:*)
             argmax_rest=${argmax_frame#argmax-control-v1:replace:}
             ;;
@@ -1027,11 +1069,18 @@ const ZSH_INIT_BODY: &str = r#"if [[ -o interactive && -t 0 && -t 1 ]]; then
         local -i argmax_control_cursor=0
         local -i argmax_control_request=0
         local -i argmax_control_ready=0
+        local -i argmax_probe_resync_request=0
+        local -i argmax_probe_resync_ready=0
         __argmax_control_drain "$argmax_unit"
         if (( argmax_control_ready )); then
           BUFFER=$argmax_control_buffer
           CURSOR=$argmax_control_cursor
           __ARGMAX_ZSH_CONTROL_LAST_ID=$argmax_control_request
+        fi
+        if (( argmax_probe_resync_ready )); then
+          __argmax_emit \
+            "probe-resync:$argmax_probe_resync_request:$__ARGMAX_ZSH_PROBE_NONCE"
+          return $argmax_status
         fi
         if (( __ARGMAX_ZSH_PROBE_NONCE == 9223372036854775807 )); then
           __ARGMAX_ZSH_CAPABILITY=unavailable
@@ -1117,8 +1166,9 @@ const ZSH_INIT_BODY: &str = r#"if [[ -o interactive && -t 0 && -t 1 ]]; then
           2>/dev/null || :
         unset __ARGMAX_ZSH_HOOKS __ARGMAX_ZSH_COMMAND_ACTIVE \
           __ARGMAX_ZSH_CAPABILITY __ARGMAX_ZSH_PROBE \
-          __ARGMAX_ZSH_PROBE_NONCE __ARGMAX_ZSH_CONTROL_PENDING \
-          __ARGMAX_ZSH_CONTROL_DISCARDING __ARGMAX_ZSH_CONTROL_LAST_ID
+          __ARGMAX_ZSH_PROBE_NONCE __ARGMAX_ZSH_PROBE_RESYNC_LAST_ID \
+          __ARGMAX_ZSH_CONTROL_PENDING __ARGMAX_ZSH_CONTROL_DISCARDING \
+          __ARGMAX_ZSH_CONTROL_LAST_ID
       fi
       unset __argmax_zsh_preexec_added __argmax_zsh_precmd_added \
         __argmax_zsh_widget_added __argmax_zsh_install_ok \
@@ -1136,7 +1186,10 @@ const ZSH_INIT_BODY: &str = r#"if [[ -o interactive && -t 0 && -t 1 ]]; then
            *argmax-owned-zsh-v1* &&
          $(functions __argmax_control_drain 2>/dev/null) == \
            *argmax-owned-zsh-v1* &&
-         ${__ARGMAX_ZSH_CONTROL_DISCARDING-} == <0-1> &&
+         ${__ARGMAX_ZSH_PROBE_RESYNC_LAST_ID-} == <-> &&
+         ${#__ARGMAX_ZSH_PROBE_RESYNC_LAST_ID} -le 10 ]] &&
+      (( 10#$__ARGMAX_ZSH_PROBE_RESYNC_LAST_ID <= 2147483647 )) &&
+      [[ ${__ARGMAX_ZSH_CONTROL_DISCARDING-} == <0-1> &&
          ${__ARGMAX_ZSH_CONTROL_LAST_ID-} == <-> &&
          ${+widgets[__argmax_sync]} == 1 &&
          ${preexec_functions[(r)__argmax_preexec]-} == __argmax_preexec &&
@@ -1191,6 +1244,12 @@ if status is-interactive; and test -t 0; and test -t 1
           not set -q __ARGMAX_FISH_COMMAND_ACTIVE; or \
           not set -q __ARGMAX_FISH_PROBE_NONCE; or not \
           string match -qr '^[0-9]+$' -- $__ARGMAX_FISH_PROBE_NONCE; or \
+          not set -q __ARGMAX_FISH_PROBE_RESYNC_PENDING; or \
+          test -n "$__ARGMAX_FISH_PROBE_RESYNC_PENDING"; or \
+          not set -q __ARGMAX_FISH_PROBE_RESYNC_LAST_ID; or not \
+          string match -qr '^(0|[1-9][0-9]{0,9})$' -- \
+            $__ARGMAX_FISH_PROBE_RESYNC_LAST_ID; or \
+          test $__ARGMAX_FISH_PROBE_RESYNC_LAST_ID -gt 2147483647; or \
           not set -q __ARGMAX_FISH_CONTROL_PENDING; or \
           not set -q __ARGMAX_FISH_CONTROL_DISCARDING; or not \
           string match -qr '^[01]$' -- $__ARGMAX_FISH_CONTROL_DISCARDING; or \
@@ -1211,6 +1270,8 @@ if status is-interactive; and test -t 0; and test -t 1
       if set -q __ARGMAX_FISH_COMMAND_ACTIVE; or \
           set -q __ARGMAX_FISH_PROBE_NONCE; or \
           set -q __ARGMAX_FISH_CAPABILITY; or \
+          set -q __ARGMAX_FISH_PROBE_RESYNC_PENDING; or \
+          set -q __ARGMAX_FISH_PROBE_RESYNC_LAST_ID; or \
           set -q __ARGMAX_FISH_CONTROL_PENDING; or \
           set -q __ARGMAX_FISH_CONTROL_DISCARDING; or \
           set -q __ARGMAX_FISH_CONTROL_LAST_ID
@@ -1285,6 +1346,18 @@ if status is-interactive; and test -t 0; and test -t 1
       set -l argmax_status $status
       set -l __argmax_fish_owner argmax-owned-fish-v1
       set -l argmax_frame "$argv[1]"
+      if string match -qr \
+          '^argmax-control-v1:resync:[1-9][0-9]{0,9}$' -- \
+          "$argmax_frame"
+        set -l argmax_request \
+          (string replace 'argmax-control-v1:resync:' '' -- "$argmax_frame")
+        test $argmax_request -le 2147483647; or return $argmax_status
+        test $argmax_request -gt $__ARGMAX_FISH_PROBE_RESYNC_LAST_ID; or \
+          return $argmax_status
+        set -g __ARGMAX_FISH_PROBE_RESYNC_PENDING $argmax_request
+        set -g __ARGMAX_FISH_PROBE_RESYNC_LAST_ID $argmax_request
+        return $argmax_status
+      end
       # The sentinel preserves a valid empty final hex field through command
       # substitution without giving control data any evaluation semantics.
       set -l argmax_fields (string split ':' -- "$argmax_frame"x)
@@ -1490,6 +1563,12 @@ if status is-interactive; and test -t 0; and test -t 1
       set -l argmax_status $status
       set -l __argmax_fish_owner argmax-owned-fish-v1
       __argmax_control_drain
+      if test -n "$__ARGMAX_FISH_PROBE_RESYNC_PENDING"
+        __argmax_emit \
+          "probe-resync:$__ARGMAX_FISH_PROBE_RESYNC_PENDING:$__ARGMAX_FISH_PROBE_NONCE"
+        set -g __ARGMAX_FISH_PROBE_RESYNC_PENDING ''
+        return $argmax_status
+      end
       # commandline prints one newline; the decoder removes only that terminator.
       set -l argmax_buffer (commandline -b | string collect -N)
       set -l argmax_cursor (commandline -C)
@@ -1512,6 +1591,12 @@ if status is-interactive; and test -t 0; and test -t 1
     set -g __ARGMAX_FISH_COMMAND_ACTIVE 0
     if not set -q __ARGMAX_FISH_PROBE_NONCE
       set -g __ARGMAX_FISH_PROBE_NONCE 0
+    end
+    if not set -q __ARGMAX_FISH_PROBE_RESYNC_PENDING
+      set -g __ARGMAX_FISH_PROBE_RESYNC_PENDING ''
+    end
+    if not set -q __ARGMAX_FISH_PROBE_RESYNC_LAST_ID
+      set -g __ARGMAX_FISH_PROBE_RESYNC_LAST_ID 0
     end
     if not set -q __ARGMAX_FISH_CONTROL_PENDING
       set -g __ARGMAX_FISH_CONTROL_PENDING ''
@@ -1567,8 +1652,9 @@ if status is-interactive; and test -t 0; and test -t 1
       functions -e $argmax_functions 2>/dev/null
       set -e __ARGMAX_FISH_INSTALLED __ARGMAX_FISH_CAPABILITY \
         __ARGMAX_FISH_COMMAND_ACTIVE __ARGMAX_FISH_PROBE_NONCE \
-        __ARGMAX_FISH_CONTROL_PENDING __ARGMAX_FISH_CONTROL_DISCARDING \
-        __ARGMAX_FISH_CONTROL_LAST_ID
+        __ARGMAX_FISH_PROBE_RESYNC_PENDING \
+        __ARGMAX_FISH_PROBE_RESYNC_LAST_ID __ARGMAX_FISH_CONTROL_PENDING \
+        __ARGMAX_FISH_CONTROL_DISCARDING __ARGMAX_FISH_CONTROL_LAST_ID
     end
     end
   end
@@ -2302,6 +2388,8 @@ mod tests {
             assert!(script.contains("ARGMAX_CONTROL_FD"));
             assert!(script.contains("argmax-control-v1"));
             assert!(script.contains("replace"));
+            assert!(script.contains("resync"));
+            assert!(script.contains("probe-resync:"));
             assert!(script.contains("__argmax_control_drain"));
             assert!(script.contains("command-start"));
             assert!(script.contains("command-stop:"));
@@ -2325,6 +2413,7 @@ mod tests {
         assert!(init_script(Shell::Bash).contains("command-start-unknown"));
         assert!(init_script(Shell::Bash).contains("BASH_VERSINFO[1] < 4"));
         assert!(init_script(Shell::Bash).contains("probe-buffer:$argmax_unit:"));
+        assert!(init_script(Shell::Bash).contains("__ARGMAX_BASH_PROBE_RESYNC_LAST_ID"));
         assert!(
             init_script(Shell::Bash)
                 .contains("PS0=${PS0-}'${__ARGMAX_BASH_COMMAND_ACTIVE:=}$(__argmax_preexec)'")
@@ -2333,9 +2422,12 @@ mod tests {
         assert!(init_script(Shell::Zsh).contains("__ARGMAX_ZSH_COMMAND_ACTIVE"));
         assert!(init_script(Shell::Zsh).contains("[[ -o multibyte ]]"));
         assert!(init_script(Shell::Zsh).contains("probe-buffer:$argmax_unit:"));
+        assert!(init_script(Shell::Zsh).contains("__ARGMAX_ZSH_PROBE_RESYNC_LAST_ID"));
         assert!(init_script(Shell::Fish).contains("fish_posterror"));
         assert!(init_script(Shell::Fish).contains("string collect -N"));
         assert!(init_script(Shell::Fish).contains("probe-buffer:f:"));
+        assert!(init_script(Shell::Fish).contains("__ARGMAX_FISH_PROBE_RESYNC_PENDING"));
+        assert!(init_script(Shell::Fish).contains("__ARGMAX_FISH_PROBE_RESYNC_LAST_ID"));
         assert_eq!(MAX_SYNC_EVENT_CHARACTERS, 16_384);
         assert_eq!(MAX_SYNC_EVENT_FRAME_CHARACTERS, 16_417);
         assert_eq!(MAX_SYNC_EVENT_WIRE_BYTES, 65_669);
@@ -2482,6 +2574,25 @@ mod tests {
           }
           if {[clock milliseconds] >= $deadline} {
             exit 6
+          }
+          after 10
+        }
+      }
+    ";
+
+    const WAIT_FOR_PROBE_RESYNC_COUNT: &str = r"
+      proc wait_for_probe_resync_count {path wanted} {
+        set deadline [expr {[clock milliseconds] + 5000}]
+        while {1} {
+          set events [open $path rb]
+          fconfigure $events -translation binary
+          set contents [read $events]
+          close $events
+          if {[regexp -all -- {probe-resync:} $contents] >= $wanted} {
+            return
+          }
+          if {[clock milliseconds] >= $deadline} {
+            exit 12
           }
           after 10
         }
@@ -2963,6 +3074,10 @@ mod tests {
         wire
     }
 
+    fn probe_resync_control(request: u64) -> Vec<u8> {
+        format!("argmax-control-v1:resync:{request}\0").into_bytes()
+    }
+
     fn probe_buffer_wire(shell: Shell, nonce: u64, cursor: usize, buffer: &str) -> Vec<u8> {
         let unit = match shell {
             Shell::Bash | Shell::Zsh => 'c',
@@ -3218,6 +3333,97 @@ mod tests {
         Some(read_harness_events(&events_path))
     }
 
+    fn probe_resync_shell_events(shell: Shell) -> Option<Vec<Vec<u8>>> {
+        let program = shell.as_str();
+        if !expect_is_available() || !shell_is_available(program) {
+            return None;
+        }
+        if shell == Shell::Bash
+            && !Command::new(program)
+                .args([
+                    "-c",
+                    "(( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) ))",
+                ])
+                .status()
+                .expect("inspect Bash version")
+                .success()
+        {
+            return None;
+        }
+
+        let directory = HarnessDirectory::create(shell);
+        let init_path = directory.0.join("init");
+        let events_path = directory.0.join("events");
+        let control_path = directory.0.join("control");
+        let append_path = directory.0.join("append-control");
+        fs::write(&init_path, init_script(shell).as_bytes()).expect("write shell init");
+        fs::write(&control_path, []).expect("write empty shell controls");
+        let mut controls = probe_resync_control(1);
+        controls.extend_from_slice(&probe_resync_control(1));
+        fs::write(&append_path, controls).expect("write probe resync controls");
+        let probe = test_probe_sequence(shell);
+        let expect_program = format!(
+            "{WAIT_FOR_PROBE_COUNT}\n{WAIT_FOR_PROBE_RESYNC_COUNT}\n{}",
+            r#"
+          set timeout 30
+          log_user 0
+          spawn sh -c {exec 3>>"$ARGMAX_TEST_EVENTS"; exec 4<"$ARGMAX_TEST_CONTROLS"; exec $ARGMAX_TEST_SHELL $ARGMAX_TEST_ARGS}
+          if {$env(ARGMAX_TEST_SHELL) eq "fish"} {
+            send -- "set -g ARGMAX_TEST_PROMPT_COUNT 0; function fish_prompt; set -g ARGMAX_TEST_PROMPT_COUNT (math \$ARGMAX_TEST_PROMPT_COUNT + 1); printf 'ARGMAX%s\\x3e ' \$ARGMAX_TEST_PROMPT_COUNT; end; source \"$env(ARGMAX_TEST_INIT)\"\r"
+          } else {
+            send -- "PS1='ARGMAX''> '; source \"$env(ARGMAX_TEST_INIT)\"\r"
+          }
+          expect {
+            -re {ARGMAX[0-9]*> } {}
+            timeout { exit 2 }
+            eof { exit 3 }
+          }
+          send -- "safe"
+          send -- "$env(ARGMAX_TEST_PROBE)"
+          wait_for_probe_count "$env(ARGMAX_TEST_EVENTS)" 1
+          set source [open $env(ARGMAX_TEST_APPEND) rb]
+          fconfigure $source -translation binary
+          set control [read $source]
+          close $source
+          set target [open $env(ARGMAX_TEST_CONTROLS) ab]
+          fconfigure $target -translation binary
+          puts -nonewline $target $control
+          close $target
+          send -- "$env(ARGMAX_TEST_PROBE)"
+          wait_for_probe_resync_count "$env(ARGMAX_TEST_EVENTS)" 1
+          send -- "$env(ARGMAX_TEST_PROBE)"
+          wait_for_probe_count "$env(ARGMAX_TEST_EVENTS)" 2
+          send -- "\003"
+          after 500
+          send -- "exit\r"
+          expect eof
+        "#
+        );
+        let output = Command::new("expect")
+            .args(["-c", expect_program.as_str()])
+            .env("ARGMAX_PRIVATE_SESSION", "1")
+            .env("ARGMAX_EVENT_FD", "3")
+            .env("ARGMAX_CONTROL_FD", "4")
+            .env("ARGMAX_TEST_EVENTS", &events_path)
+            .env("ARGMAX_TEST_CONTROLS", &control_path)
+            .env("ARGMAX_TEST_APPEND", &append_path)
+            .env("ARGMAX_TEST_INIT", &init_path)
+            .env("ARGMAX_TEST_PROBE", probe)
+            .env("ARGMAX_TEST_SHELL", program)
+            .env("ARGMAX_TEST_ARGS", test_shell_arguments(shell))
+            .env("LC_ALL", "en_US.UTF-8")
+            .output()
+            .expect("run probe resync shell harness");
+        assert!(
+            output.status.success(),
+            "{program} probe-resync harness failed with {}:\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Some(read_harness_events(&events_path))
+    }
+
     fn collision_harness(shell: Shell) -> Option<Vec<Vec<u8>>> {
         let program = shell.as_str();
         if !expect_is_available() || !shell_is_available(program) {
@@ -3400,7 +3606,7 @@ if test "$PS0" = user-ps0 &&
     test -z "${__ARGMAX_BASH_HISTORY_INDEX+x}" &&
     test -z "${__ARGMAX_BASH_MULTILINE+x}" &&
     test -z "${__ARGMAX_BASH_PROBE+x}" &&
-    test -z "${__ARGMAX_BASH_PROBE_NONCE+x}" &&
+    test -z "${__ARGMAX_BASH_PROBE_NONCE+x}${__ARGMAX_BASH_PROBE_RESYNC_LAST_ID+x}" &&
     ! declare -F __argmax_emit >/dev/null &&
     ! declare -F __argmax_preexec >/dev/null &&
     ! declare -F __argmax_precmd >/dev/null &&
@@ -3694,6 +3900,68 @@ fi
     }
 
     #[test]
+    fn later_resync_control_supersedes_stale_control_before_one_wakeup() {
+        let mut controls = probe_resync_control(1);
+        controls.extend_from_slice(&probe_resync_control(2));
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let Some(events) = control_shell_events(shell, &controls, "safe") else {
+                continue;
+            };
+            assert!(
+                events
+                    .iter()
+                    .any(|frame| frame.as_slice() == b"probe-resync:2:0"),
+                "{} stranded the current resync behind a stale control: {events:?}",
+                shell.as_str()
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|frame| frame.as_slice() == b"probe-resync:1:0"),
+                "{} answered the stale resync control: {events:?}",
+                shell.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn probe_resync_reports_current_nonce_without_consuming_the_next_one() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let Some(events) = probe_resync_shell_events(shell) else {
+                continue;
+            };
+            let first = probe_buffer_wire(shell, 1, 4, "safe");
+            let second = probe_buffer_wire(shell, 2, 4, "safe");
+            assert!(
+                events.iter().any(|frame| frame == &first),
+                "{} did not emit ordinary nonce 1: {events:?}",
+                shell.as_str()
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|frame| frame.as_slice() == b"probe-resync:1:1")
+                    .count(),
+                1,
+                "{} did not correlate exactly one resync response: {events:?}",
+                shell.as_str()
+            );
+            assert!(
+                events.iter().any(|frame| frame == &second),
+                "{} consumed nonce 2 during resync: {events:?}",
+                shell.as_str()
+            );
+            let first_index = events.iter().position(|frame| frame == &first).unwrap();
+            let resync_index = events
+                .iter()
+                .position(|frame| frame.as_slice() == b"probe-resync:1:1")
+                .unwrap();
+            let second_index = events.iter().position(|frame| frame == &second).unwrap();
+            assert!(first_index < resync_index && resync_index < second_index);
+        }
+    }
+
+    #[test]
     fn shell_controls_replace_unicode_multiline_buffers_without_execution() {
         for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
             let sentinel_directory = HarnessDirectory::create(shell);
@@ -3744,6 +4012,32 @@ fi
             assert!(
                 events.iter().any(|frame| frame == &want),
                 "{} misplaced an end cursor: {events:?}",
+                shell.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_probe_resync_controls_are_inert() {
+        let controls = b"argmax-control-v1:resync:0\0\
+            argmax-control-v1:resync:01\0\
+            argmax-control-v1:resync:2147483648\0\
+            argmax-control-v1:resync:1:extra\0";
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let Some(events) = control_shell_events(shell, controls, "safe") else {
+                continue;
+            };
+            let want = probe_buffer_wire(shell, 1, 4, "safe");
+            assert!(
+                events.iter().any(|frame| frame == &want),
+                "{} treated an invalid resync as authoritative: {events:?}",
+                shell.as_str()
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|frame| frame.starts_with(b"probe-resync:")),
+                "{} answered an invalid resync: {events:?}",
                 shell.as_str()
             );
         }

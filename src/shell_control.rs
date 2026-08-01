@@ -1,15 +1,18 @@
-//! Bounded parent-to-shell editing-buffer replacement controls.
+//! Bounded parent-to-shell editing-buffer and probe-recovery controls.
 //!
-//! Controls use a direction-specific, versioned ASCII grammar so arbitrary
+//! Controls use direction-specific, versioned ASCII grammars so arbitrary
 //! buffer bytes are never interpreted as shell syntax:
 //!
 //! `argmax-control-v1:replace:REQUEST:CURSOR:LENGTH:LOWER_HEX\0`
 //!
-//! `CURSOR` and `LENGTH` are UTF-8 byte counts. Shell adapters accept a request
-//! only when its identifier is the next synchronization-probe nonce, apply it
-//! without execution, and answer with their existing correlated `probe-buffer`
-//! event. The event stream therefore remains the sole source of authoritative
-//! editing state.
+//! `argmax-control-v1:resync:REQUEST\0`
+//!
+//! `CURSOR` and `LENGTH` are UTF-8 byte counts. Replacement identifiers reserve
+//! an ordinary synchronization-probe nonce. Probe-resynchronization identifiers
+//! use an independent bounded sequence and correlate a shell response reporting
+//! its current adapter counter. Correlation recovers transport state; it is not
+//! authentication against another same-user process that already holds the
+//! private control or event descriptor.
 
 use std::error::Error;
 use std::fmt;
@@ -22,12 +25,19 @@ pub const MAX_CONTROL_BUFFER_BYTES: usize = crate::integration::MAX_SYNC_EVENT_C
 /// Fish intentionally exhausts its probe counter at this signed 32-bit bound.
 pub const MAX_CONTROL_REQUEST_ID: u64 = 2_147_483_647;
 
-const CONTROL_PREFIX: &[u8] = b"argmax-control-v1:replace:";
+/// Largest probe-resynchronization identifier supported by every adapter.
+pub const MAX_PROBE_RESYNC_REQUEST_ID: u64 = 2_147_483_647;
+
+const REPLACEMENT_CONTROL_PREFIX: &[u8] = b"argmax-control-v1:replace:";
+const PROBE_RESYNC_CONTROL_PREFIX: &[u8] = b"argmax-control-v1:resync:";
 const MAX_REQUEST_ID_DIGITS: usize = 10;
 const MAX_BUFFER_SIZE_DIGITS: usize = 5;
 
 /// Hard maximum frame size excluding the NUL terminator.
-pub const MAX_CONTROL_FRAME_BYTES: usize = CONTROL_PREFIX.len()
+///
+/// The largest replacement remains the limiting grammar; adding the shorter
+/// resynchronization control does not increase retained decoder storage.
+pub const MAX_CONTROL_FRAME_BYTES: usize = REPLACEMENT_CONTROL_PREFIX.len()
     + MAX_REQUEST_ID_DIGITS
     + 1
     + MAX_BUFFER_SIZE_DIGITS
@@ -95,6 +105,66 @@ impl fmt::Display for ControlRequestIdError {
 
 impl Error for ControlRequestIdError {}
 
+/// Monotonic identifier for one explicit adapter-counter resynchronization.
+///
+/// This sequence is independent from replacement controls and ordinary snapshot
+/// nonces. [`crate::shell_events::ShellSessionState`] allocates values without
+/// wrapping or reuse within one parent session.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProbeResyncRequestId(u64);
+
+impl ProbeResyncRequestId {
+    /// Validates a nonzero identifier supported by every shell adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProbeResyncRequestIdError`] for zero or a value above the
+    /// shared shell-adapter bound.
+    pub const fn new(value: u64) -> Result<Self, ProbeResyncRequestIdError> {
+        if value == 0 {
+            return Err(ProbeResyncRequestIdError::Zero);
+        }
+        if value > MAX_PROBE_RESYNC_REQUEST_ID {
+            return Err(ProbeResyncRequestIdError::OutOfRange {
+                maximum: MAX_PROBE_RESYNC_REQUEST_ID,
+            });
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the numeric request identifier.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Invalid probe-resynchronization request identifier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbeResyncRequestIdError {
+    /// Zero is never a valid request identifier.
+    Zero,
+    /// The identifier cannot be represented by every shell adapter.
+    OutOfRange {
+        /// Largest accepted identifier.
+        maximum: u64,
+    },
+}
+
+impl fmt::Display for ProbeResyncRequestIdError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Zero => formatter.write_str("probe resync request identifier is zero"),
+            Self::OutOfRange { maximum } => write!(
+                formatter,
+                "probe resync request identifier exceeds shared maximum {maximum}"
+            ),
+        }
+    }
+}
+
+impl Error for ProbeResyncRequestIdError {}
+
 /// One validated request to replace the shell-native editing buffer.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ReplacementControl {
@@ -160,14 +230,14 @@ impl ReplacementControl {
         let request = self.request_id.get().to_string();
         let cursor = self.cursor.to_string();
         let length = self.buffer.len().to_string();
-        let capacity = CONTROL_PREFIX.len()
+        let capacity = REPLACEMENT_CONTROL_PREFIX.len()
             + request.len()
             + cursor.len()
             + length.len()
             + self.buffer.len() * 2
             + 4;
         let mut bytes = Vec::with_capacity(capacity);
-        bytes.extend_from_slice(CONTROL_PREFIX);
+        bytes.extend_from_slice(REPLACEMENT_CONTROL_PREFIX);
         bytes.extend_from_slice(request.as_bytes());
         bytes.push(b':');
         bytes.extend_from_slice(cursor.as_bytes());
@@ -191,7 +261,38 @@ impl fmt::Debug for ReplacementControl {
     }
 }
 
-/// Complete replacement-control wire bytes, including the NUL terminator.
+/// One request for the shell adapter's current ordinary probe counter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProbeResyncControl {
+    request_id: ProbeResyncRequestId,
+}
+
+impl ProbeResyncControl {
+    /// Creates a correlated adapter-counter resynchronization request.
+    #[must_use]
+    pub const fn new(request_id: ProbeResyncRequestId) -> Self {
+        Self { request_id }
+    }
+
+    /// Returns the independent resynchronization request identifier.
+    #[must_use]
+    pub const fn request_id(self) -> ProbeResyncRequestId {
+        self.request_id
+    }
+
+    /// Encodes this request as one complete NUL-framed control.
+    #[must_use]
+    pub fn encode(self) -> EncodedControlFrame {
+        let request = self.request_id.get().to_string();
+        let mut bytes = Vec::with_capacity(PROBE_RESYNC_CONTROL_PREFIX.len() + request.len() + 1);
+        bytes.extend_from_slice(PROBE_RESYNC_CONTROL_PREFIX);
+        bytes.extend_from_slice(request.as_bytes());
+        bytes.push(0);
+        EncodedControlFrame(bytes.into_boxed_slice())
+    }
+}
+
+/// Complete parent-to-shell control wire bytes, including the NUL terminator.
 #[derive(Clone, Eq, PartialEq)]
 pub struct EncodedControlFrame(Box<[u8]>);
 
@@ -275,6 +376,8 @@ impl Error for ControlEncodeError {}
 pub enum DecodedControlFrame {
     /// A validated inert replacement request.
     Replacement(ReplacementControl),
+    /// A validated request for the adapter's current ordinary probe counter.
+    ProbeResync(ProbeResyncControl),
     /// One isolated malformed frame; later frames remain decodable.
     Rejected(ControlFrameError),
 }
@@ -480,7 +583,7 @@ impl ShellControlDecoder {
         }
         let frame = std::mem::take(&mut self.pending);
         match parse_control_frame(&frame) {
-            Ok(control) => DecodedControlFrame::Replacement(control),
+            Ok(control) => control,
             Err(error) => DecodedControlFrame::Rejected(error),
         }
     }
@@ -530,11 +633,22 @@ fn encode_lower_hex(source: &[u8], destination: &mut Vec<u8>) {
     }
 }
 
-fn parse_control_frame(frame: &[u8]) -> Result<ReplacementControl, ControlFrameError> {
+fn parse_control_frame(frame: &[u8]) -> Result<DecodedControlFrame, ControlFrameError> {
     if frame.is_empty() {
         return Err(ControlFrameError::EmptyFrame);
     }
-    let Some(fields) = frame.strip_prefix(CONTROL_PREFIX) else {
+    if let Some(request) = frame.strip_prefix(PROBE_RESYNC_CONTROL_PREFIX) {
+        if request.contains(&b':') {
+            return Err(ControlFrameError::InvalidGrammar);
+        }
+        let request = parse_decimal(request).ok_or(ControlFrameError::InvalidRequestId)?;
+        let request_id = ProbeResyncRequestId::new(request)
+            .map_err(|_| ControlFrameError::RequestIdOutOfRange)?;
+        return Ok(DecodedControlFrame::ProbeResync(ProbeResyncControl::new(
+            request_id,
+        )));
+    }
+    let Some(fields) = frame.strip_prefix(REPLACEMENT_CONTROL_PREFIX) else {
         if frame.starts_with(b"argmax-control-") {
             return Err(ControlFrameError::UnsupportedProtocol);
         }
@@ -579,11 +693,11 @@ fn parse_control_frame(frame: &[u8]) -> Result<ReplacementControl, ControlFrameE
     if !buffer.is_char_boundary(cursor) {
         return Err(ControlFrameError::CursorNotUtf8Boundary);
     }
-    Ok(ReplacementControl {
+    Ok(DecodedControlFrame::Replacement(ReplacementControl {
         request_id,
         buffer: buffer.into_boxed_str(),
         cursor,
-    })
+    }))
 }
 
 fn parse_decimal(bytes: &[u8]) -> Option<u64> {
@@ -628,6 +742,10 @@ mod tests {
         ControlRequestId::new(value).unwrap()
     }
 
+    fn resync_identifier(value: u64) -> ProbeResyncRequestId {
+        ProbeResyncRequestId::new(value).unwrap()
+    }
+
     fn replacement(value: &str, cursor: usize) -> ReplacementControl {
         ReplacementControl::new(identifier(7), value, cursor).unwrap()
     }
@@ -646,7 +764,7 @@ mod tests {
         let decoded = decode(encoded.as_bytes());
 
         assert_eq!(decoded, [DecodedControlFrame::Replacement(control)]);
-        assert!(encoded.as_bytes().starts_with(CONTROL_PREFIX));
+        assert!(encoded.as_bytes().starts_with(REPLACEMENT_CONTROL_PREFIX));
         assert!(encoded.as_bytes().ends_with(&[0]));
         assert!(
             encoded.as_bytes()[..encoded.len() - 1]
@@ -693,7 +811,7 @@ mod tests {
     }
 
     #[test]
-    fn request_identifier_has_shared_strict_range() {
+    fn request_identifiers_have_independent_shared_strict_ranges() {
         assert_eq!(ControlRequestId::new(0), Err(ControlRequestIdError::Zero));
         assert_eq!(
             ControlRequestId::new(MAX_CONTROL_REQUEST_ID + 1),
@@ -705,6 +823,37 @@ mod tests {
             ControlRequestId::new(MAX_CONTROL_REQUEST_ID).unwrap().get(),
             MAX_CONTROL_REQUEST_ID
         );
+        assert_eq!(
+            ProbeResyncRequestId::new(0),
+            Err(ProbeResyncRequestIdError::Zero)
+        );
+        assert_eq!(
+            ProbeResyncRequestId::new(MAX_PROBE_RESYNC_REQUEST_ID + 1),
+            Err(ProbeResyncRequestIdError::OutOfRange {
+                maximum: MAX_PROBE_RESYNC_REQUEST_ID,
+            })
+        );
+        assert_eq!(
+            ProbeResyncRequestId::new(MAX_PROBE_RESYNC_REQUEST_ID)
+                .unwrap()
+                .get(),
+            MAX_PROBE_RESYNC_REQUEST_ID
+        );
+    }
+
+    #[test]
+    fn resync_round_trips_every_stream_partition() {
+        let control = ProbeResyncControl::new(resync_identifier(42));
+        let wire = control.encode();
+        assert_eq!(wire.as_bytes(), b"argmax-control-v1:resync:42\0");
+        for split in 0..=wire.len() {
+            let mut decoder = ShellControlDecoder::new();
+            let mut frames = Vec::new();
+            decoder.push(&wire.as_bytes()[..split], |frame| frames.push(frame));
+            decoder.push(&wire.as_bytes()[split..], |frame| frames.push(frame));
+            assert_eq!(frames, [DecodedControlFrame::ProbeResync(control)]);
+            assert_eq!(decoder.pending_len(), 0);
+        }
     }
 
     #[test]
@@ -724,14 +873,17 @@ mod tests {
     #[test]
     fn coalesced_frames_stay_in_wire_order() {
         let first = ReplacementControl::new(identifier(1), "git", 3).unwrap();
+        let resync = ProbeResyncControl::new(resync_identifier(9));
         let second = ReplacementControl::new(identifier(2), "git status", 4).unwrap();
         let mut wire = first.encode().as_bytes().to_vec();
+        wire.extend_from_slice(resync.encode().as_bytes());
         wire.extend_from_slice(second.encode().as_bytes());
 
         assert_eq!(
             decode(&wire),
             [
                 DecodedControlFrame::Replacement(first),
+                DecodedControlFrame::ProbeResync(resync),
                 DecodedControlFrame::Replacement(second),
             ]
         );
@@ -749,6 +901,26 @@ mod tests {
             (
                 b"argmax-control-v1:other:1:0:0:\0",
                 ControlFrameError::UnsupportedProtocol,
+            ),
+            (
+                b"argmax-control-v1:resync:1:extra\0",
+                ControlFrameError::InvalidGrammar,
+            ),
+            (
+                b"argmax-control-v1:resync:\0",
+                ControlFrameError::InvalidRequestId,
+            ),
+            (
+                b"argmax-control-v1:resync:01\0",
+                ControlFrameError::InvalidRequestId,
+            ),
+            (
+                b"argmax-control-v1:resync:0\0",
+                ControlFrameError::RequestIdOutOfRange,
+            ),
+            (
+                b"argmax-control-v1:resync:2147483648\0",
+                ControlFrameError::RequestIdOutOfRange,
             ),
             (
                 b"argmax-control-v1:replace:1:0:0::extra\0",
@@ -841,12 +1013,14 @@ mod tests {
         let secret = "Dean Pelton private token";
         let control = replacement(secret, secret.len());
         let encoded = control.encode();
+        let resync = ProbeResyncControl::new(resync_identifier(17));
         let mut decoder = ShellControlDecoder::new();
         decoder.push(&encoded.as_bytes()[..8], |_| unreachable!());
 
         for debug in [
             format!("{control:?}"),
             format!("{encoded:?}"),
+            format!("{resync:?}"),
             format!("{decoder:?}"),
         ] {
             assert!(!debug.contains(secret));
@@ -864,5 +1038,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(control.encode().len() - 1, MAX_CONTROL_FRAME_BYTES);
+        assert!(
+            ProbeResyncControl::new(resync_identifier(MAX_PROBE_RESYNC_REQUEST_ID))
+                .encode()
+                .len()
+                - 1
+                < MAX_CONTROL_FRAME_BYTES
+        );
     }
 }

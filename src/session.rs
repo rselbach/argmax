@@ -19,9 +19,11 @@ use crate::input::{
     MAX_ROUTE_BATCH_EVENTS, RouteBatch,
 };
 use crate::selection::{SelectionState, ghost_suffix};
+use crate::shell_control::ProbeResyncRequestId;
 use crate::shell_events::{
     BufferSyncCapability, DecodedFrame, ForegroundCommandState, InputGenerationError,
-    ProbeRequestError, ShellEvent, ShellSessionState, SnapshotNonce, StateUpdate, StreamEpoch,
+    ProbeRequestError, ProbeResyncRequestError, ShellEvent, ShellSessionState, SnapshotNonce,
+    StateUpdate, StreamEpoch,
 };
 
 /// Most effects one bounded input reduction can emit.
@@ -166,6 +168,10 @@ pub enum SessionEffect {
     ReplaceBuffer(BufferReplacement),
     /// Inject the reserved synchronization sequence for this correlated nonce.
     RequestBufferSync(SnapshotNonce),
+    /// Queue a counter-recovery control before one synchronization wakeup.
+    RequestProbeResync(ProbeResyncRequestId),
+    /// Remove an abandoned recovery control and its paired pending wakeup.
+    CancelProbeResync(ProbeResyncRequestId),
     /// Dispatch bounded provider work without delaying input forwarding.
     StartQuery {
         /// Mode that selected the provider set for this query.
@@ -201,6 +207,14 @@ impl fmt::Debug for SessionEffect {
                 .debug_tuple("RequestBufferSync")
                 .field(nonce)
                 .finish(),
+            Self::RequestProbeResync(request) => formatter
+                .debug_tuple("RequestProbeResync")
+                .field(request)
+                .finish(),
+            Self::CancelProbeResync(request) => formatter
+                .debug_tuple("CancelProbeResync")
+                .field(request)
+                .finish(),
             Self::StartQuery {
                 mode,
                 alias_expansion,
@@ -228,6 +242,8 @@ pub enum SessionFault {
     QueryStart(QueryStartError),
     /// A required synchronization probe could not be reserved.
     Probe(ProbeRequestError),
+    /// A required adapter-counter recovery request could not be reserved.
+    ProbeResync(ProbeResyncRequestError),
 }
 
 /// Bounded ordered effects from one reducer operation.
@@ -707,8 +723,19 @@ impl SessionReducer {
             &frame,
             DecodedFrame::Event(event) if matches!(event.event(), ShellEvent::PromptReady)
         );
+        let pending_resync = self.shell.pending_probe_resync_request_id();
         let update = self.shell.apply(frame);
         let mut effects = EffectBatch::default();
+        if let Some(request) = pending_resync
+            && self.shell.pending_probe_resync_request_id() != Some(request)
+            && !matches!(
+                &update,
+                StateUpdate::ProbeResynchronized(response)
+                    if response.request_id() == request
+            )
+        {
+            effects.push(SessionEffect::CancelProbeResync(request));
+        }
 
         match &update {
             StateUpdate::BufferSynchronized { .. } => {
@@ -732,7 +759,27 @@ impl SessionReducer {
                 self.clear_completion(&mut effects);
                 self.clear_history_preview_authority();
                 self.pending_replacement = None;
+                if self.shell.probe_resync_required() {
+                    self.probe_needed = true;
+                }
                 self.issue_probe_if_safe(&mut effects, false);
+            }
+            StateUpdate::ProbeResynchronized(_) => {
+                self.issue_probe_if_safe(&mut effects, false);
+            }
+            StateUpdate::ProbeResyncRejected(_) => {}
+            StateUpdate::LifecycleSuppressed
+                if prompt_observed && self.shell.probe_resync_required() =>
+            {
+                self.pending_replacement = None;
+                self.clear_history_preview_authority();
+                if self.input_boundary_fence {
+                    self.handle_suppressed_prompt(&mut effects);
+                } else {
+                    self.clear_completion(&mut effects);
+                    self.probe_needed = true;
+                    self.issue_probe_if_safe(&mut effects, false);
+                }
             }
             StateUpdate::LifecycleSuppressed if prompt_observed && self.input_boundary_fence => {
                 self.pending_replacement = None;
@@ -1217,7 +1264,12 @@ impl SessionReducer {
         }
         let nonce = match self.shell.begin_sync_probe() {
             Ok(nonce) => nonce,
-            Err(ProbeRequestError::AlreadyPending | ProbeRequestError::NotAtEditablePrompt) => {
+            Err(
+                ProbeRequestError::AlreadyPending
+                | ProbeRequestError::NotAtEditablePrompt
+                | ProbeRequestError::ResyncRequired
+                | ProbeRequestError::ResyncPending,
+            ) => {
                 effects.push(SessionEffect::ClearOverlay);
                 return false;
             }
@@ -1518,6 +1570,19 @@ impl SessionReducer {
         {
             return;
         }
+        if self.shell.probe_resync_required() {
+            match self.shell.begin_probe_resync() {
+                Ok(request) => effects.push(SessionEffect::RequestProbeResync(request)),
+                Err(
+                    ProbeResyncRequestError::AlreadyPending
+                    | ProbeResyncRequestError::NotAtEditablePrompt,
+                ) => {}
+                Err(error) => {
+                    effects.push(SessionEffect::Fault(SessionFault::ProbeResync(error)));
+                }
+            }
+            return;
+        }
         match self.shell.begin_sync_probe() {
             Ok(nonce) => {
                 self.probe_needed = false;
@@ -1716,6 +1781,17 @@ mod tests {
             .flatten()
             .copied()
             .collect()
+    }
+
+    fn recovery_effects_are_inert(effects: &[SessionEffect]) -> bool {
+        effects.iter().all(|effect| {
+            !matches!(
+                effect,
+                SessionEffect::Fault(_)
+                    | SessionEffect::ReplaceBuffer(_)
+                    | SessionEffect::StartQuery { .. }
+            )
+        })
     }
 
     #[test]
@@ -2603,6 +2679,201 @@ mod tests {
         assert!(forwarded(toggle.effects()).is_empty());
         assert_eq!(reducer.mode(), SessionMode::History);
         assert!(!reducer.input_boundary_fence);
+    }
+
+    #[test]
+    fn higher_probe_mismatch_resyncs_before_a_fresh_authoritative_query() {
+        let (mut reducer, mut decoder) = ready();
+        let _ = synchronize(&mut reducer, &mut decoder, b"g", "g", 1);
+        let ordinary = reducer.route_input(b"x");
+        let expected = ordinary
+            .effects()
+            .effects()
+            .iter()
+            .find_map(|effect| match effect {
+                SessionEffect::RequestBufferSync(nonce) => Some(nonce.get()),
+                _ => None,
+            })
+            .expect("ordinary probe");
+        assert_eq!(expected, 2);
+        reducer.pending_replacement = Some(PendingReplacement {
+            replacement: BufferReplacement::new("stale", 5).unwrap(),
+            kind: ReplacementKind::HistoryPreview,
+        });
+        reducer.history_origin = Some(BufferReplacement::new("g", 1).unwrap());
+        reducer.history_preview_active = true;
+
+        let mut frames = Vec::new();
+        decoder.push(b"probe-buffer:b:3:2:gx\0", |frame| frames.push(frame));
+        let (update, effects) = reducer.apply_shell_frame(frames.remove(0));
+        assert!(matches!(update, StateUpdate::SnapshotRejected(_)));
+        assert!(reducer.probe_needed);
+        assert!(reducer.pending_replacement.is_none());
+        assert!(reducer.history_origin.is_none());
+        assert!(reducer.active_query().is_none());
+        let recovery = effects
+            .effects()
+            .iter()
+            .find_map(|effect| match effect {
+                SessionEffect::RequestProbeResync(request) => Some(request.get()),
+                _ => None,
+            })
+            .expect("recovery request");
+        assert_eq!(recovery, 1);
+        assert!(effects.effects().iter().all(|effect| {
+            !matches!(
+                effect,
+                SessionEffect::RequestBufferSync(_) | SessionEffect::StartQuery { .. }
+            )
+        }));
+
+        let mut frames = Vec::new();
+        decoder.push(b"probe-resync:2:999\0", |frame| frames.push(frame));
+        let (_, wrong_effects) = reducer.apply_shell_frame(frames.remove(0));
+        assert!(wrong_effects.is_empty());
+        assert_eq!(
+            reducer
+                .shell()
+                .confirmed_probe_nonce()
+                .map(SnapshotNonce::get),
+            Some(1)
+        );
+        assert_eq!(
+            reducer
+                .shell()
+                .pending_probe_resync_request_id()
+                .map(ProbeResyncRequestId::get),
+            Some(1)
+        );
+
+        let mut frames = Vec::new();
+        decoder.push(b"probe-resync:1:2\0", |frame| frames.push(frame));
+        let (_, recovered_effects) = reducer.apply_shell_frame(frames.remove(0));
+        assert_eq!(
+            recovered_effects
+                .effects()
+                .iter()
+                .find_map(|effect| match effect {
+                    SessionEffect::RequestBufferSync(nonce) => Some(nonce.get()),
+                    _ => None,
+                }),
+            Some(3)
+        );
+        assert!(
+            recovered_effects
+                .effects()
+                .iter()
+                .all(|effect| { !matches!(effect, SessionEffect::StartQuery { .. }) })
+        );
+        assert!(reducer.active_query().is_none());
+
+        let final_effects = apply_wire(&mut reducer, &mut decoder, b"probe-buffer:b:3:2:gx\0");
+        assert!(
+            final_effects
+                .iter()
+                .flat_map(EffectBatch::effects)
+                .any(|effect| matches!(effect, SessionEffect::StartQuery { .. }))
+        );
+        assert!(reducer.active_query().is_some());
+    }
+
+    #[test]
+    fn history_prompt_waits_for_recovery_after_command_abandons_resync() {
+        let mut reducer = SessionReducer::new_with_mode(
+            StreamEpoch::INITIAL,
+            b"\x12",
+            b"\x10",
+            [PROVIDER],
+            10,
+            "/tmp",
+            SessionMode::History,
+        )
+        .unwrap();
+        let mut decoder = ShellEventDecoder::new(StreamEpoch::INITIAL);
+        let ready_effects = apply_wire(
+            &mut reducer,
+            &mut decoder,
+            b"capability:sync-probe:0\0prompt-ready\0",
+        );
+        let generation = query_effect(&ready_effects).0.query().generation;
+
+        let typed = reducer.route_input(b"x");
+        assert!(typed.effects().effects().iter().any(|effect| {
+            matches!(effect, SessionEffect::RequestBufferSync(nonce) if nonce.get() == 1)
+        }));
+        let mut frames = Vec::new();
+        decoder.push(b"probe-buffer:b:2:1:x\0", |frame| frames.push(frame));
+        let (_, mismatch_effects) = reducer.apply_shell_frame(frames.remove(0));
+        assert!(mismatch_effects.effects().iter().any(|effect| {
+            matches!(effect, SessionEffect::RequestProbeResync(request) if request.get() == 1)
+        }));
+        let enter = reducer.route_input(b"\r");
+        assert_eq!(forwarded(enter.effects()), b"\r");
+        assert!(reducer.input_boundary_fence);
+
+        let mut frames = Vec::new();
+        decoder.push(b"command-start:x\0", |frame| frames.push(frame));
+        let (_, start_effects) = reducer.apply_shell_frame(frames.remove(0));
+        assert!(matches!(
+            start_effects.effects().first(),
+            Some(SessionEffect::CancelProbeResync(request)) if request.get() == 1
+        ));
+        let lifecycle_effects = apply_wire(
+            &mut reducer,
+            &mut decoder,
+            b"command-stop:0\0prompt-ready\0",
+        );
+        assert!(
+            lifecycle_effects
+                .iter()
+                .flat_map(EffectBatch::effects)
+                .any(|effect| {
+                    matches!(effect, SessionEffect::RequestProbeResync(request) if request.get() == 2)
+                })
+        );
+        assert!(
+            lifecycle_effects
+                .iter()
+                .flat_map(EffectBatch::effects)
+                .all(|effect| {
+                    !matches!(
+                        effect,
+                        SessionEffect::Fault(_) | SessionEffect::StartQuery { .. }
+                    )
+                })
+        );
+
+        assert!(reducer.active_query().is_none());
+        assert!(!reducer.shell().suggestions_allowed());
+        assert!(reducer.shell().probe_resync_required());
+        assert_eq!(
+            reducer
+                .shell()
+                .pending_probe_resync_request_id()
+                .map(ProbeResyncRequestId::get),
+            Some(2)
+        );
+
+        let candidate = suggestion(
+            "",
+            "git status",
+            SuggestionSource::History,
+            InsertionBehavior::Exact,
+        );
+        assert!(matches!(
+            reducer.accept_provider_batch(ProviderBatch::success(
+                PROVIDER,
+                generation,
+                vec![candidate.clone()]
+            )),
+            BatchOutcome::Rejected(_)
+        ));
+        let late = reducer.apply_ranked_candidates(generation, vec![candidate]);
+        assert!(recovery_effects_are_inert(late.effects().effects()));
+
+        let up = reducer.route_input(b"\x1b[A");
+        assert_eq!(forwarded(up.effects()), b"\x1b[A");
+        assert!(recovery_effects_are_inert(up.effects().effects()));
     }
 
     #[test]

@@ -49,7 +49,9 @@ use crate::runtime_completion::{
 use crate::runtime_update::{RuntimeUpdateOptions, RuntimeUpdateWorker};
 use crate::screen::{CursorPosition, ScreenObserver, TerminalSize};
 use crate::session::{EffectBatch, SessionEffect, SessionReducer};
-use crate::shell_control::{ControlRequestId, ReplacementControl};
+use crate::shell_control::{
+    ControlRequestId, ProbeResyncControl, ProbeResyncRequestId, ReplacementControl,
+};
 use crate::shell_events::{
     DecodedFrame, ForegroundCommandState, ReloadRequest, SYNC_PROBE_SEQUENCE, ShellEventDecoder,
     StateUpdate, StreamEpoch,
@@ -782,8 +784,14 @@ enum WriteDestination {
     Control,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingWriteGroup {
+    ProbeResync(ProbeResyncRequestId),
+}
+
 struct PendingWrite {
     destination: WriteDestination,
+    group: Option<PendingWriteGroup>,
     bytes: Box<[u8]>,
     written: usize,
 }
@@ -808,6 +816,15 @@ impl PendingWrites {
         destination: WriteDestination,
         bytes: impl Into<Box<[u8]>>,
     ) -> Result<(), RuntimeError> {
+        self.push_grouped(destination, None, bytes)
+    }
+
+    fn push_grouped(
+        &mut self,
+        destination: WriteDestination,
+        group: Option<PendingWriteGroup>,
+        bytes: impl Into<Box<[u8]>>,
+    ) -> Result<(), RuntimeError> {
         let bytes = bytes.into();
         if bytes.is_empty() {
             return Ok(());
@@ -821,6 +838,7 @@ impl PendingWrites {
         self.bytes = total;
         self.writes.push_back(PendingWrite {
             destination,
+            group,
             bytes,
             written: 0,
         });
@@ -847,14 +865,48 @@ impl PendingWrites {
         Ok(())
     }
 
+    fn cancel_probe_resync(&mut self, request: ProbeResyncRequestId) {
+        let group = PendingWriteGroup::ProbeResync(request);
+        let preserve_partial_control = self.writes.iter().any(|write| {
+            write.group == Some(group)
+                && write.destination == WriteDestination::Control
+                && write.written != 0
+        });
+        let mut discarded = 0;
+        self.writes.retain_mut(|write| {
+            if write.group != Some(group) {
+                return true;
+            }
+            if preserve_partial_control && write.destination == WriteDestination::Control {
+                write.group = None;
+                return true;
+            }
+            discarded += write.bytes.len() - write.written;
+            false
+        });
+        self.bytes -= discarded;
+    }
+
     fn discard(&mut self, destination: WriteDestination) {
-        let discarded: usize = self
+        let groups = self
             .writes
             .iter()
             .filter(|write| write.destination == destination)
+            .filter_map(|write| write.group)
+            .collect::<Vec<_>>();
+        let discarded: usize = self
+            .writes
+            .iter()
+            .filter(|write| {
+                write.destination == destination
+                    || write.group.is_some_and(|group| groups.contains(&group))
+            })
             .map(|write| write.bytes.len() - write.written)
             .sum();
-        self.writes.retain(|write| write.destination != destination);
+        self.writes.retain(|write| {
+            write.destination != destination
+                && !write.group.is_some_and(|group| groups.contains(&group))
+        });
         self.bytes -= discarded;
     }
 }
@@ -1686,6 +1738,8 @@ impl SessionDriver {
             StateUpdate::BufferSynchronized { .. }
             | StateUpdate::PromptReady { .. }
             | StateUpdate::CapabilityChanged(_)
+            | StateUpdate::ProbeResynchronized(_)
+            | StateUpdate::ProbeResyncRejected(_)
             | StateUpdate::FrameRejected(_)
             | StateUpdate::LifecycleRejected(_)
             | StateUpdate::LifecycleSuppressed
@@ -1858,6 +1912,21 @@ impl SessionDriver {
                     }
                     self.pending
                         .push(WriteDestination::Pty, self.sync_probe_sequence)?;
+                }
+                SessionEffect::RequestProbeResync(request) => {
+                    if replacement.is_some() || !staged.is_empty() {
+                        return Err(RuntimeError::ProtocolInvariant(
+                            "probe resync followed an incomplete buffer replacement",
+                        ));
+                    }
+                    enqueue_probe_resync_wakeup(
+                        &mut self.pending,
+                        request,
+                        self.sync_probe_sequence,
+                    )?;
+                }
+                SessionEffect::CancelProbeResync(request) => {
+                    self.pending.cancel_probe_resync(request);
                 }
                 SessionEffect::StartQuery {
                     mode,
@@ -2043,6 +2112,21 @@ impl SessionDriver {
     }
 }
 
+fn enqueue_probe_resync_wakeup(
+    pending: &mut PendingWrites,
+    request: ProbeResyncRequestId,
+    sync_probe_sequence: &'static [u8],
+) -> Result<(), RuntimeError> {
+    let group = Some(PendingWriteGroup::ProbeResync(request));
+    let control = ProbeResyncControl::new(request).encode();
+    pending.push_grouped(WriteDestination::Control, group, control.as_bytes())?;
+    if let Err(error) = pending.push_grouped(WriteDestination::Pty, group, sync_probe_sequence) {
+        pending.cancel_probe_resync(request);
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// Decides whether the session is over once the child has been reaped.
 ///
 /// The clean path still requires the reader to observe end of file and the
@@ -2171,23 +2255,140 @@ mod tests {
     }
 
     #[test]
-    fn pending_writes_preserve_destination_order_and_exact_progress() {
+    fn probe_resync_control_precedes_wakeup_through_partial_writes() {
         let mut pending = PendingWrites::default();
-        pending
-            .push(WriteDestination::Control, &b"control"[..])
-            .unwrap();
-        pending.push(WriteDestination::Pty, &b"probe"[..]).unwrap();
+        enqueue_probe_resync_wakeup(
+            &mut pending,
+            ProbeResyncRequestId::new(7).unwrap(),
+            SYNC_PROBE_SEQUENCE,
+        )
+        .unwrap();
+
+        let control = b"argmax-control-v1:resync:7\0";
+        assert_eq!(pending.writes.len(), 2);
+        assert_eq!(pending.writes[0].destination, WriteDestination::Control);
+        assert_eq!(pending.writes[0].bytes.as_ref(), control);
+        assert_eq!(pending.writes[1].destination, WriteDestination::Pty);
+        assert_eq!(pending.writes[1].bytes.as_ref(), SYNC_PROBE_SEQUENCE);
 
         pending.advance_front(3).unwrap();
         let front = pending.writes.front().unwrap();
         assert_eq!(front.destination, WriteDestination::Control);
-        assert_eq!(&front.bytes[front.written..], b"trol");
-        pending.advance_front(4).unwrap();
+        assert_eq!(&front.bytes[front.written..], &control[3..]);
+        pending.advance_front(control.len() - 3).unwrap();
         assert_eq!(
             pending.writes.front().unwrap().destination,
             WriteDestination::Pty
         );
-        assert_eq!(pending.bytes, 5);
+        assert_eq!(pending.bytes, SYNC_PROBE_SEQUENCE.len());
+    }
+
+    #[test]
+    fn command_start_cancels_only_the_abandoned_resync_write_group() {
+        let mut pending = PendingWrites::default();
+        pending.push(WriteDestination::Pty, &b"typed"[..]).unwrap();
+        let abandoned = ProbeResyncRequestId::new(1).unwrap();
+        enqueue_probe_resync_wakeup(&mut pending, abandoned, SYNC_PROBE_SEQUENCE).unwrap();
+        pending
+            .push(WriteDestination::Control, &b"replacement"[..])
+            .unwrap();
+
+        pending.cancel_probe_resync(abandoned);
+
+        assert_eq!(pending.writes.len(), 2);
+        assert_eq!(pending.writes[0].destination, WriteDestination::Pty);
+        assert_eq!(pending.writes[0].bytes.as_ref(), b"typed");
+        assert_eq!(pending.writes[1].destination, WriteDestination::Control);
+        assert_eq!(pending.writes[1].bytes.as_ref(), b"replacement");
+        assert!(pending.writes.iter().all(|write| write.group.is_none()));
+
+        let current = ProbeResyncRequestId::new(2).unwrap();
+        enqueue_probe_resync_wakeup(&mut pending, current, SYNC_PROBE_SEQUENCE).unwrap();
+        assert_eq!(
+            pending.writes[2].group,
+            Some(PendingWriteGroup::ProbeResync(current))
+        );
+        assert_eq!(
+            pending.writes[3].group,
+            Some(PendingWriteGroup::ProbeResync(current))
+        );
+    }
+
+    #[test]
+    fn mismatch_then_command_start_cancels_resync_before_transport_flush() {
+        let mut reducer =
+            SessionReducer::new(StreamEpoch::INITIAL, b"\x12", b"\x10", ["test"], 10, "/tmp")
+                .unwrap();
+        let mut decoder = ShellEventDecoder::new(StreamEpoch::INITIAL);
+        let mut pending = PendingWrites::default();
+        let mut frames = Vec::new();
+        decoder.push(b"capability:sync-probe:0\0prompt-ready\0", |frame| {
+            frames.push(frame);
+        });
+        for frame in frames.drain(..) {
+            let _ = reducer.apply_shell_frame(frame);
+        }
+        let _ = reducer.route_input(b"x");
+
+        decoder.push(b"probe-buffer:b:2:1:x\0", |frame| frames.push(frame));
+        let (_, mismatch_effects) = reducer.apply_shell_frame(frames.remove(0));
+        for effect in mismatch_effects.into_effects() {
+            if let SessionEffect::RequestProbeResync(request) = effect {
+                enqueue_probe_resync_wakeup(&mut pending, request, SYNC_PROBE_SEQUENCE).unwrap();
+            }
+        }
+        assert_eq!(pending.writes.len(), 2);
+        let _ = reducer.route_input(b"\r");
+
+        decoder.push(b"command-start:x\0", |frame| frames.push(frame));
+        let (_, start_effects) = reducer.apply_shell_frame(frames.remove(0));
+        for effect in start_effects.into_effects() {
+            if let SessionEffect::CancelProbeResync(request) = effect {
+                pending.cancel_probe_resync(request);
+            }
+        }
+        assert!(pending.is_empty());
+
+        decoder.push(b"command-stop:0\0prompt-ready\0", |frame| {
+            frames.push(frame);
+        });
+        for frame in frames.drain(..) {
+            let (_, effects) = reducer.apply_shell_frame(frame);
+            for effect in effects.into_effects() {
+                if let SessionEffect::RequestProbeResync(request) = effect {
+                    enqueue_probe_resync_wakeup(&mut pending, request, SYNC_PROBE_SEQUENCE)
+                        .unwrap();
+                }
+            }
+        }
+        assert_eq!(pending.writes.len(), 2);
+        assert!(pending.writes.iter().all(|write| {
+            write.group
+                == Some(PendingWriteGroup::ProbeResync(
+                    ProbeResyncRequestId::new(2).unwrap(),
+                ))
+        }));
+    }
+
+    #[test]
+    fn cancelling_a_partial_resync_finishes_only_its_control_frame() {
+        let mut pending = PendingWrites::default();
+        let abandoned = ProbeResyncRequestId::new(1).unwrap();
+        enqueue_probe_resync_wakeup(&mut pending, abandoned, SYNC_PROBE_SEQUENCE).unwrap();
+        pending.advance_front(3).unwrap();
+
+        pending.cancel_probe_resync(abandoned);
+
+        assert_eq!(pending.writes.len(), 1);
+        assert_eq!(pending.writes[0].destination, WriteDestination::Control);
+        assert_eq!(pending.writes[0].written, 3);
+        assert_eq!(pending.writes[0].group, None);
+        assert!(
+            pending
+                .writes
+                .iter()
+                .all(|write| write.destination != WriteDestination::Pty)
+        );
     }
 
     #[test]
