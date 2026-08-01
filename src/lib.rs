@@ -26,7 +26,7 @@ pub mod overlay;
 pub mod process_runner;
 pub mod providers;
 pub mod pty;
-pub mod ranking;
+mod ranking;
 pub mod release;
 pub mod reload;
 pub mod runtime;

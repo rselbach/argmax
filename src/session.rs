@@ -831,7 +831,7 @@ impl SessionReducer {
         self.completion.accept_batch(batch)
     }
 
-    /// Returns merged current-generation candidates for caller-owned ranking.
+    /// Returns merged current-generation candidates without changing their order.
     ///
     /// # Errors
     ///
@@ -843,7 +843,10 @@ impl SessionReducer {
         self.completion.merged_candidates(generation)
     }
 
-    /// Applies a full ranked permutation and derives rendering or history recall.
+    /// Applies the caller's exact full permutation without reranking it.
+    ///
+    /// The coordinator validates candidate authority, bounds, and membership before
+    /// selection changes, then the reducer derives rendering or history recall.
     #[must_use]
     pub fn apply_ranked_candidates(
         &mut self,

@@ -1,8 +1,9 @@
 //! Bounded coordination of asynchronous completion-provider results.
 //!
 //! The coordinator owns query authority, cooperative cancellation, cumulative
-//! provider results, full-set local ranking, and selection updates. Providers
-//! receive immutable query snapshots and observer-only cancellation tokens.
+//! provider results, exact caller-order validation, and selection updates.
+//! Providers receive immutable query snapshots and observer-only cancellation
+//! tokens; production workers own candidate ranking before submission.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -14,11 +15,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::completion::{
     CancellationToken, CompletionQuery, InsertionBehavior, MAX_PROVIDER_FAILURE_BYTES,
     ProviderBatch, Suggestion, SuggestionSource, merge_suggestions,
-};
-use crate::providers::{WorkspaceContext, WorkspaceKind};
-use crate::ranking::{
-    LocalRankingCandidate, LocalRankingContext, LocalRankingMetadata,
-    rank_all_with_local_intelligence,
 };
 use crate::selection::{SelectionState, UpdateOutcome};
 
@@ -42,16 +38,6 @@ pub const MAX_PROVIDER_ERROR_BYTES: usize = MAX_PROVIDER_FAILURE_BYTES;
 pub const MAX_CUMULATIVE_CANDIDATES: usize = 4_096;
 /// Maximum candidate and error bytes retained across providers for one query.
 pub const MAX_CUMULATIVE_BYTES: usize = 4 * 1024 * 1024;
-/// Maximum bytes in one canonical command skeleton supplied for ranking.
-pub const MAX_RANKING_SKELETON_BYTES: usize = 8 * 1024;
-/// Maximum tokens in one canonical command skeleton supplied for ranking.
-pub const MAX_RANKING_SKELETON_TOKENS: usize = 64;
-/// Maximum canonical skeleton bytes admitted to one full-set ranking pass.
-pub const MAX_RANKING_BYTES: usize = 4 * 1024 * 1024;
-/// Maximum distinct workspace signatures admitted to ranking.
-pub const MAX_WORKSPACE_SIGNATURES: usize = 9;
-/// Maximum encoded byte length of one ranking workspace path.
-pub const MAX_WORKSPACE_PATH_BYTES: usize = MAX_QUERY_CWD_BYTES;
 /// Maximum validated UI result limit.
 pub const MAX_UI_SUGGESTIONS: usize = 500;
 
@@ -592,105 +578,6 @@ pub enum PresentationRejection {
         /// Hard cumulative byte limit.
         limit: usize,
     },
-    /// One canonical ranking skeleton exceeded its byte bound.
-    RankingSkeletonTooLarge {
-        /// Zero-based merged candidate position.
-        index: usize,
-        /// Observed UTF-8 bytes.
-        bytes: usize,
-        /// Hard byte limit.
-        limit: usize,
-    },
-    /// One candidate skeleton was not canonical single-space-separated text.
-    InvalidRankingSkeleton {
-        /// Zero-based merged candidate position.
-        index: usize,
-    },
-    /// One candidate skeleton exceeded the canonical token-count bound.
-    TooManyRankingSkeletonTokens {
-        /// Zero-based merged candidate position.
-        index: usize,
-        /// Tokens observed before validation stopped.
-        observed: usize,
-        /// Hard token-count limit.
-        limit: usize,
-    },
-    /// Aggregate canonical ranking skeleton bytes exceeded the pass bound.
-    RankingMetadataTooLarge {
-        /// Observed bytes, saturated at [`usize::MAX`].
-        bytes: usize,
-        /// Hard byte limit.
-        limit: usize,
-    },
-    /// The prior skeleton exceeded its hard byte bound.
-    PriorSkeletonTooLarge {
-        /// Observed UTF-8 bytes.
-        bytes: usize,
-        /// Hard byte limit.
-        limit: usize,
-    },
-    /// The prior skeleton was not canonical single-space-separated text.
-    InvalidPriorSkeleton,
-    /// The prior skeleton exceeded the canonical token-count bound.
-    TooManyPriorSkeletonTokens {
-        /// Tokens observed before validation stopped.
-        observed: usize,
-        /// Hard token-count limit.
-        limit: usize,
-    },
-    /// The workspace detection origin exceeded its encoded byte bound.
-    WorkspaceCwdTooLarge {
-        /// Observed encoded bytes.
-        bytes: usize,
-        /// Hard path byte limit.
-        limit: usize,
-    },
-    /// The workspace detection origin was empty or relative.
-    WorkspaceCwdNotAbsolute,
-    /// The workspace detection origin did not match the authoritative query.
-    WorkspaceCwdMismatch,
-    /// Workspace context contained more than one signature per supported kind.
-    TooManyWorkspaceSignatures {
-        /// Submitted signature count.
-        observed: usize,
-        /// Hard signature count limit.
-        limit: usize,
-    },
-    /// Workspace context repeated an ecosystem kind.
-    DuplicateWorkspaceKind {
-        /// Zero-based duplicate signature position.
-        index: usize,
-        /// Repeated ecosystem kind.
-        kind: WorkspaceKind,
-    },
-    /// A workspace signature root was empty or relative.
-    WorkspaceRootNotAbsolute {
-        /// Zero-based signature position.
-        index: usize,
-    },
-    /// A workspace signature root exceeded its encoded byte bound.
-    WorkspaceRootTooLarge {
-        /// Zero-based signature position.
-        index: usize,
-        /// Observed encoded bytes.
-        bytes: usize,
-        /// Hard path byte limit.
-        limit: usize,
-    },
-    /// A workspace signature marker was empty or relative.
-    WorkspaceMarkerNotAbsolute {
-        /// Zero-based signature position.
-        index: usize,
-    },
-    /// A workspace signature marker exceeded its encoded byte bound.
-    WorkspaceMarkerTooLarge {
-        /// Zero-based signature position.
-        index: usize,
-        /// Observed encoded bytes.
-        bytes: usize,
-        /// Hard path byte limit.
-        limit: usize,
-    },
     /// Ranked candidates were not an exact permutation of the current merged set.
     CandidateSetMismatch,
     /// Selection and coordinator generations unexpectedly diverged.
@@ -717,51 +604,6 @@ impl fmt::Display for PresentationRejection {
                 formatter,
                 "ranked candidates contain {bytes} owned-text bytes; limit is {limit}"
             ),
-            Self::RankingSkeletonTooLarge {
-                index,
-                bytes,
-                limit,
-            } => write!(
-                formatter,
-                "ranking skeleton {index} is {bytes} bytes; limit is {limit}"
-            ),
-            Self::InvalidRankingSkeleton { index } => write!(
-                formatter,
-                "ranking skeleton {index} is not canonical single-space-separated text"
-            ),
-            Self::TooManyRankingSkeletonTokens {
-                index,
-                observed,
-                limit,
-            } => write!(
-                formatter,
-                "ranking skeleton {index} contains at least {observed} tokens; limit is {limit}"
-            ),
-            Self::RankingMetadataTooLarge { bytes, limit } => write!(
-                formatter,
-                "ranking metadata contains {bytes} bytes; limit is {limit}"
-            ),
-            Self::PriorSkeletonTooLarge { bytes, limit } => write!(
-                formatter,
-                "prior ranking skeleton is {bytes} bytes; limit is {limit}"
-            ),
-            Self::InvalidPriorSkeleton => formatter
-                .write_str("prior ranking skeleton is not canonical single-space-separated text"),
-            Self::TooManyPriorSkeletonTokens { observed, limit } => write!(
-                formatter,
-                "prior ranking skeleton contains at least {observed} tokens; limit is {limit}"
-            ),
-            rejection @ (Self::WorkspaceCwdTooLarge { .. }
-            | Self::WorkspaceCwdNotAbsolute
-            | Self::WorkspaceCwdMismatch
-            | Self::TooManyWorkspaceSignatures { .. }
-            | Self::DuplicateWorkspaceKind { .. }
-            | Self::WorkspaceRootNotAbsolute { .. }
-            | Self::WorkspaceRootTooLarge { .. }
-            | Self::WorkspaceMarkerNotAbsolute { .. }
-            | Self::WorkspaceMarkerTooLarge { .. }) => {
-                format_workspace_rejection(rejection, formatter)
-            }
             Self::CandidateSetMismatch => formatter.write_str(
                 "ranked candidates are not an exact permutation of the merged candidate set",
             ),
@@ -769,57 +611,6 @@ impl fmt::Display for PresentationRejection {
                 formatter.write_str("selection generation does not match the active query")
             }
         }
-    }
-}
-
-fn format_workspace_rejection(
-    rejection: &PresentationRejection,
-    formatter: &mut fmt::Formatter<'_>,
-) -> fmt::Result {
-    match rejection {
-        PresentationRejection::WorkspaceCwdTooLarge { bytes, limit } => write!(
-            formatter,
-            "workspace detection origin is {bytes} bytes; limit is {limit}"
-        ),
-        PresentationRejection::WorkspaceCwdNotAbsolute => {
-            formatter.write_str("workspace detection origin must be absolute")
-        }
-        PresentationRejection::WorkspaceCwdMismatch => {
-            formatter.write_str("workspace detection origin does not match the active query")
-        }
-        PresentationRejection::TooManyWorkspaceSignatures { observed, limit } => write!(
-            formatter,
-            "workspace context contains {observed} signatures; limit is {limit}"
-        ),
-        PresentationRejection::DuplicateWorkspaceKind { index, kind } => write!(
-            formatter,
-            "workspace signature {index} repeats ecosystem {kind:?}"
-        ),
-        PresentationRejection::WorkspaceRootNotAbsolute { index } => write!(
-            formatter,
-            "workspace signature {index} root must be absolute"
-        ),
-        PresentationRejection::WorkspaceRootTooLarge {
-            index,
-            bytes,
-            limit,
-        } => write!(
-            formatter,
-            "workspace signature {index} root is {bytes} bytes; limit is {limit}"
-        ),
-        PresentationRejection::WorkspaceMarkerNotAbsolute { index } => write!(
-            formatter,
-            "workspace signature {index} marker must be absolute"
-        ),
-        PresentationRejection::WorkspaceMarkerTooLarge {
-            index,
-            bytes,
-            limit,
-        } => write!(
-            formatter,
-            "workspace signature {index} marker is {bytes} bytes; limit is {limit}"
-        ),
-        _ => formatter.write_str("invalid ranking workspace context"),
     }
 }
 
@@ -832,7 +623,7 @@ impl Error for PresentationRejection {
     }
 }
 
-/// Result of applying full-set ranking followed by the UI limit.
+/// Result of applying caller-owned ordering followed by the UI limit.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[must_use]
 pub enum PresentationOutcome {
@@ -1261,9 +1052,8 @@ impl CompletionCoordinator {
 
     /// Applies a caller-ranked full permutation after exact validation.
     ///
-    /// This path supports modes with their own documented ranking rules, such as
-    /// history. Spec-mode callers should use [`Self::rank_and_apply`] so local
-    /// intelligence is applied by the coordinator itself.
+    /// The coordinator does not reorder candidates: ranking owners must pass an
+    /// exact permutation in their intended display order.
     pub fn apply_ranked(
         &mut self,
         generation: u64,
@@ -1275,92 +1065,6 @@ impl CompletionCoordinator {
                 return PresentationOutcome::Rejected(PresentationRejection::Authority(error));
             }
         };
-        self.apply_ranked_against(generation, &merged, ranked)
-    }
-
-    /// Merges, ranks the complete set with local intelligence, then applies the UI limit.
-    ///
-    /// The metadata callback cannot add, remove, or replace a suggestion. It is
-    /// called exactly once per merged candidate to supply a bounded canonical
-    /// skeleton and match quality. The real composite ranker returns a full list,
-    /// which is verified as an exact permutation before selection changes.
-    pub fn rank_and_apply(
-        &mut self,
-        generation: u64,
-        context: LocalRankingContext<'_>,
-        mut metadata_for: impl FnMut(&Suggestion) -> LocalRankingMetadata,
-    ) -> PresentationOutcome {
-        let (query, merged) = match self.authority(generation) {
-            Ok(active) => (Arc::clone(&active.query), merged_for(active)),
-            Err(error) => {
-                return PresentationOutcome::Rejected(PresentationRejection::Authority(error));
-            }
-        };
-
-        if let Err(error) = validate_ranking_context(&query, context) {
-            return PresentationOutcome::Rejected(error);
-        }
-
-        let mut metadata_bytes = 0usize;
-        let mut candidates = Vec::with_capacity(merged.len());
-        for (index, suggestion) in merged.iter().enumerate() {
-            let metadata = metadata_for(suggestion);
-            if metadata.skeleton.len() > MAX_RANKING_SKELETON_BYTES {
-                return PresentationOutcome::Rejected(
-                    PresentationRejection::RankingSkeletonTooLarge {
-                        index,
-                        bytes: metadata.skeleton.len(),
-                        limit: MAX_RANKING_SKELETON_BYTES,
-                    },
-                );
-            }
-            match validate_canonical_skeleton(&metadata.skeleton) {
-                Ok(()) => {}
-                Err(SkeletonRejection::Invalid) => {
-                    return PresentationOutcome::Rejected(
-                        PresentationRejection::InvalidRankingSkeleton { index },
-                    );
-                }
-                Err(SkeletonRejection::TooManyTokens { observed }) => {
-                    return PresentationOutcome::Rejected(
-                        PresentationRejection::TooManyRankingSkeletonTokens {
-                            index,
-                            observed,
-                            limit: MAX_RANKING_SKELETON_TOKENS,
-                        },
-                    );
-                }
-            }
-            metadata_bytes = metadata_bytes.saturating_add(metadata.skeleton.len());
-            if metadata_bytes > MAX_RANKING_BYTES {
-                return PresentationOutcome::Rejected(
-                    PresentationRejection::RankingMetadataTooLarge {
-                        bytes: metadata_bytes,
-                        limit: MAX_RANKING_BYTES,
-                    },
-                );
-            }
-            candidates.push(LocalRankingCandidate::new(
-                suggestion.clone(),
-                metadata.skeleton,
-                metadata.match_quality,
-            ));
-        }
-
-        let context = LocalRankingContext {
-            workspace: context.workspace,
-            learning: context.learning,
-            cwd: &query.cwd,
-            now: context.now,
-            prior_skeleton: context.prior_skeleton,
-        };
-        let ranked =
-            rank_all_with_local_intelligence(candidates.into_boxed_slice().into_vec(), context)
-                .candidates
-                .into_iter()
-                .map(|candidate| candidate.suggestion)
-                .collect();
-
         self.apply_ranked_against(generation, &merged, ranked)
     }
 
@@ -1438,121 +1142,6 @@ impl CompletionCoordinator {
         self.selection
             .begin_query(self.selection.generation(), Vec::new());
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SkeletonRejection {
-    Invalid,
-    TooManyTokens { observed: usize },
-}
-
-fn validate_canonical_skeleton(skeleton: &str) -> Result<(), SkeletonRejection> {
-    let mut token_count = 0usize;
-    for token in skeleton.split(' ') {
-        if token.is_empty()
-            || token
-                .chars()
-                .any(|character| character.is_whitespace() || character.is_control())
-        {
-            return Err(SkeletonRejection::Invalid);
-        }
-        token_count = token_count.saturating_add(1);
-        if token_count > MAX_RANKING_SKELETON_TOKENS {
-            return Err(SkeletonRejection::TooManyTokens {
-                observed: token_count,
-            });
-        }
-    }
-    Ok(())
-}
-
-fn validate_ranking_context(
-    query: &CompletionQuery,
-    context: LocalRankingContext<'_>,
-) -> Result<(), PresentationRejection> {
-    if let Some(prior) = context.prior_skeleton {
-        if prior.len() > MAX_RANKING_SKELETON_BYTES {
-            return Err(PresentationRejection::PriorSkeletonTooLarge {
-                bytes: prior.len(),
-                limit: MAX_RANKING_SKELETON_BYTES,
-            });
-        }
-        match validate_canonical_skeleton(prior) {
-            Ok(()) => {}
-            Err(SkeletonRejection::Invalid) => {
-                return Err(PresentationRejection::InvalidPriorSkeleton);
-            }
-            Err(SkeletonRejection::TooManyTokens { observed }) => {
-                return Err(PresentationRejection::TooManyPriorSkeletonTokens {
-                    observed,
-                    limit: MAX_RANKING_SKELETON_TOKENS,
-                });
-            }
-        }
-    }
-
-    validate_workspace_context(query, context.workspace)
-}
-
-fn validate_workspace_context(
-    query: &CompletionQuery,
-    workspace: &WorkspaceContext,
-) -> Result<(), PresentationRejection> {
-    let cwd_bytes = path_bytes(&workspace.cwd);
-    if cwd_bytes > MAX_WORKSPACE_PATH_BYTES {
-        return Err(PresentationRejection::WorkspaceCwdTooLarge {
-            bytes: cwd_bytes,
-            limit: MAX_WORKSPACE_PATH_BYTES,
-        });
-    }
-    if !workspace.cwd.is_absolute() {
-        return Err(PresentationRejection::WorkspaceCwdNotAbsolute);
-    }
-    if workspace.cwd != query.cwd {
-        return Err(PresentationRejection::WorkspaceCwdMismatch);
-    }
-    if workspace.signatures.len() > MAX_WORKSPACE_SIGNATURES {
-        return Err(PresentationRejection::TooManyWorkspaceSignatures {
-            observed: workspace.signatures.len(),
-            limit: MAX_WORKSPACE_SIGNATURES,
-        });
-    }
-
-    let mut kinds = BTreeSet::new();
-    for (index, signature) in workspace.signatures.iter().enumerate() {
-        if !kinds.insert(signature.kind) {
-            return Err(PresentationRejection::DuplicateWorkspaceKind {
-                index,
-                kind: signature.kind,
-            });
-        }
-
-        let root_bytes = path_bytes(&signature.root);
-        if root_bytes > MAX_WORKSPACE_PATH_BYTES {
-            return Err(PresentationRejection::WorkspaceRootTooLarge {
-                index,
-                bytes: root_bytes,
-                limit: MAX_WORKSPACE_PATH_BYTES,
-            });
-        }
-        if !signature.root.is_absolute() {
-            return Err(PresentationRejection::WorkspaceRootNotAbsolute { index });
-        }
-
-        let marker_bytes = path_bytes(&signature.marker);
-        if marker_bytes > MAX_WORKSPACE_PATH_BYTES {
-            return Err(PresentationRejection::WorkspaceMarkerTooLarge {
-                index,
-                bytes: marker_bytes,
-                limit: MAX_WORKSPACE_PATH_BYTES,
-            });
-        }
-        if !signature.marker.is_absolute() {
-            return Err(PresentationRejection::WorkspaceMarkerNotAbsolute { index });
-        }
-    }
-
-    Ok(())
 }
 
 fn validate_batch(batch: ProviderBatch) -> Result<StoredBatch, BatchRejection> {
@@ -1755,8 +1344,6 @@ mod tests {
     use std::ops::Range;
 
     use crate::completion::TextEdit;
-    use crate::learning::LearningState;
-    use crate::providers::{WorkspaceContext, WorkspaceKind, WorkspaceSignature};
 
     use super::*;
 
@@ -1821,35 +1408,12 @@ mod tests {
         rejection
     }
 
-    fn ranking_context<'a>(
-        workspace: &'a WorkspaceContext,
-        learning: &'a LearningState,
-    ) -> LocalRankingContext<'a> {
-        LocalRankingContext {
-            workspace,
-            learning,
-            cwd: &workspace.cwd,
-            now: 4_000_000,
-            prior_skeleton: None,
-        }
-    }
-
-    fn empty_workspace() -> WorkspaceContext {
-        WorkspaceContext {
-            cwd: PathBuf::from("/tmp/Greendale"),
-            signatures: Vec::new(),
-        }
-    }
-
-    fn apply_local(
+    fn apply_merged(
         coordinator: &mut CompletionCoordinator,
         generation: u64,
     ) -> PresentationOutcome {
-        let workspace = empty_workspace();
-        let learning = LearningState::default();
-        coordinator.rank_and_apply(generation, ranking_context(&workspace, &learning), |item| {
-            LocalRankingMetadata::new(item.identity(), 0.5)
-        })
+        let ranked = coordinator.merged_candidates(generation).unwrap();
+        coordinator.apply_ranked(generation, ranked)
     }
 
     #[test]
@@ -1999,7 +1563,7 @@ mod tests {
             vec![candidate("git", "git")],
         )));
         assert!(matches!(
-            apply_local(&mut coordinator, generation),
+            apply_merged(&mut coordinator, generation),
             PresentationOutcome::Applied { displayed: 1, .. }
         ));
 
@@ -2029,7 +1593,7 @@ mod tests {
             vec![candidate("cargo", "cargo")],
         )));
         assert!(matches!(
-            apply_local(&mut coordinator, generation),
+            apply_merged(&mut coordinator, generation),
             PresentationOutcome::Applied { .. }
         ));
         let selected = coordinator.selection().selected().cloned();
@@ -2052,14 +1616,8 @@ mod tests {
         ));
         assert_eq!(coordinator.selection().selected(), selected.as_ref());
 
-        let workspace = empty_workspace();
-        let learning = LearningState::default();
         assert!(matches!(
-            coordinator.rank_and_apply(
-                first_generation,
-                ranking_context(&workspace, &learning),
-                |_| panic!("stale work must not invoke ranking metadata"),
-            ),
+            coordinator.apply_ranked(first_generation, Vec::new()),
             PresentationOutcome::Rejected(PresentationRejection::Authority(
                 AuthorityRejection::GenerationMismatch { .. }
             ))
@@ -2080,11 +1638,7 @@ mod tests {
             BatchRejection::Authority(AuthorityRejection::Cancelled { .. })
         ));
         assert!(matches!(
-            coordinator.rank_and_apply(
-                generation,
-                ranking_context(&workspace, &learning),
-                |_| panic!("cancelled work must not invoke ranking metadata"),
-            ),
+            coordinator.apply_ranked(generation, Vec::new()),
             PresentationOutcome::Rejected(PresentationRejection::Authority(
                 AuthorityRejection::Cancelled { .. }
             ))
@@ -2133,51 +1687,6 @@ mod tests {
     }
 
     #[test]
-    fn full_set_local_ranking_precedes_the_five_hundred_item_ui_ceiling() {
-        let mut coordinator = CompletionCoordinator::new(["first", "second"], 500).unwrap();
-        let work = start(&mut coordinator, "g");
-        let generation = work.query().generation;
-        for (provider, start_index) in [("first", 0), ("second", 300)] {
-            let candidates = (start_index..start_index + 300)
-                .map(|index| {
-                    candidate(
-                        &format!("command-{index:03}"),
-                        &format!("identity-{index:03}"),
-                    )
-                })
-                .collect();
-            accepted(
-                coordinator.accept_batch(ProviderBatch::success(provider, generation, candidates)),
-            );
-        }
-
-        let workspace = empty_workspace();
-        let learning = LearningState::default();
-        let outcome = coordinator.rank_and_apply(
-            generation,
-            ranking_context(&workspace, &learning),
-            |item| {
-                LocalRankingMetadata::new(
-                    item.identity(),
-                    f64::from(item.identity() == "identity-599"),
-                )
-            },
-        );
-        assert_eq!(
-            outcome,
-            PresentationOutcome::Applied {
-                available: 600,
-                displayed: 500,
-            }
-        );
-        assert_eq!(
-            coordinator.selection().selected().unwrap().identity(),
-            "identity-599"
-        );
-        assert_eq!(coordinator.selection().candidates().len(), 500);
-    }
-
-    #[test]
     fn nan_fields_do_not_break_exact_linearithmic_permutation_validation() {
         let mut coordinator = coordinator(10);
         let work = start(&mut coordinator, "g");
@@ -2187,12 +1696,9 @@ mod tests {
         nan.confidence = f64::from_bits(0x7ff8_0000_0000_0001);
         accepted(coordinator.accept_batch(ProviderBatch::success("spec", generation, vec![nan])));
 
-        let workspace = empty_workspace();
-        let learning = LearningState::default();
+        let ranked = coordinator.merged_candidates(generation).unwrap();
         assert!(matches!(
-            coordinator.rank_and_apply(generation, ranking_context(&workspace, &learning), |_| {
-                LocalRankingMetadata::new("git", f64::NAN)
-            },),
+            coordinator.apply_ranked(generation, ranked),
             PresentationOutcome::Applied { displayed: 1, .. }
         ));
     }
@@ -2270,320 +1776,6 @@ mod tests {
     }
 
     #[test]
-    fn ranking_metadata_rejection_leaves_selection_unchanged() {
-        let mut coordinator = coordinator(10);
-        let work = start(&mut coordinator, "g");
-        let generation = work.query().generation;
-        accepted(coordinator.accept_batch(ProviderBatch::success(
-            "spec",
-            generation,
-            vec![candidate("git", "git")],
-        )));
-        assert!(matches!(
-            apply_local(&mut coordinator, generation),
-            PresentationOutcome::Applied { .. }
-        ));
-        let selected = coordinator.selection().selected().cloned();
-
-        let workspace = empty_workspace();
-        let learning = LearningState::default();
-        assert!(matches!(
-            coordinator.rank_and_apply(generation, ranking_context(&workspace, &learning), |_| {
-                LocalRankingMetadata::new("x".repeat(MAX_RANKING_SKELETON_BYTES + 1), 1.0)
-            },),
-            PresentationOutcome::Rejected(PresentationRejection::RankingSkeletonTooLarge { .. })
-        ));
-        assert_eq!(coordinator.selection().selected(), selected.as_ref());
-    }
-
-    #[test]
-    fn canonical_skeleton_bounds_are_validated_before_ranking() {
-        let mut coordinator = coordinator(10);
-        let work = start(&mut coordinator, "g");
-        let generation = work.query().generation;
-        accepted(coordinator.accept_batch(ProviderBatch::success(
-            "spec",
-            generation,
-            vec![candidate("git", "git")],
-        )));
-        assert!(matches!(
-            apply_local(&mut coordinator, generation),
-            PresentationOutcome::Applied { .. }
-        ));
-        let selected = coordinator.selection().selected().cloned();
-        let workspace = empty_workspace();
-        let learning = LearningState::default();
-
-        for (skeleton, rejection) in [
-            (
-                "git  status".to_owned(),
-                PresentationRejection::InvalidRankingSkeleton { index: 0 },
-            ),
-            (
-                (0..=MAX_RANKING_SKELETON_TOKENS)
-                    .map(|_| "token")
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                PresentationRejection::TooManyRankingSkeletonTokens {
-                    index: 0,
-                    observed: MAX_RANKING_SKELETON_TOKENS + 1,
-                    limit: MAX_RANKING_SKELETON_TOKENS,
-                },
-            ),
-        ] {
-            assert_eq!(
-                coordinator.rank_and_apply(
-                    generation,
-                    ranking_context(&workspace, &learning),
-                    |_| LocalRankingMetadata::new(&skeleton, 1.0),
-                ),
-                PresentationOutcome::Rejected(rejection)
-            );
-            assert_eq!(coordinator.selection().selected(), selected.as_ref());
-        }
-
-        let oversized = "x".repeat(MAX_RANKING_SKELETON_BYTES + 1);
-        assert!(matches!(
-            coordinator.rank_and_apply(generation, ranking_context(&workspace, &learning), |_| {
-                LocalRankingMetadata::new(&oversized, 1.0)
-            },),
-            PresentationOutcome::Rejected(PresentationRejection::RankingSkeletonTooLarge { .. })
-        ));
-        assert_eq!(coordinator.selection().selected(), selected.as_ref());
-    }
-
-    #[test]
-    fn prior_skeleton_is_bounded_and_canonical_even_without_candidates() {
-        let mut coordinator = coordinator(10);
-        let work = start(&mut coordinator, "g");
-        let generation = work.query().generation;
-        let workspace = empty_workspace();
-        let learning = LearningState::default();
-        let too_many_tokens = (0..=MAX_RANKING_SKELETON_TOKENS)
-            .map(|_| "token")
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        for (prior, rejection) in [
-            (
-                "git  status".to_owned(),
-                PresentationRejection::InvalidPriorSkeleton,
-            ),
-            (
-                too_many_tokens,
-                PresentationRejection::TooManyPriorSkeletonTokens {
-                    observed: MAX_RANKING_SKELETON_TOKENS + 1,
-                    limit: MAX_RANKING_SKELETON_TOKENS,
-                },
-            ),
-            (
-                "x".repeat(MAX_RANKING_SKELETON_BYTES + 1),
-                PresentationRejection::PriorSkeletonTooLarge {
-                    bytes: MAX_RANKING_SKELETON_BYTES + 1,
-                    limit: MAX_RANKING_SKELETON_BYTES,
-                },
-            ),
-        ] {
-            let mut context = ranking_context(&workspace, &learning);
-            context.prior_skeleton = Some(&prior);
-            assert_eq!(
-                coordinator.rank_and_apply(generation, context, |_| {
-                    panic!("invalid prior context must be rejected before metadata")
-                }),
-                PresentationOutcome::Rejected(rejection)
-            );
-            assert!(coordinator.selection().candidates().is_empty());
-        }
-    }
-
-    #[test]
-    fn ranking_workspace_context_must_match_query_and_remain_bounded() {
-        let mut coordinator = coordinator(10);
-        let work = start(&mut coordinator, "g");
-        let generation = work.query().generation;
-        accepted(coordinator.accept_batch(ProviderBatch::success(
-            "spec",
-            generation,
-            vec![candidate("git", "git")],
-        )));
-        assert!(matches!(
-            apply_local(&mut coordinator, generation),
-            PresentationOutcome::Applied { .. }
-        ));
-        let selected = coordinator.selection().selected().cloned();
-        let learning = LearningState::default();
-
-        let contexts = [
-            (
-                WorkspaceContext {
-                    cwd: PathBuf::from("relative"),
-                    signatures: Vec::new(),
-                },
-                PresentationRejection::WorkspaceCwdNotAbsolute,
-            ),
-            (
-                WorkspaceContext {
-                    cwd: PathBuf::from("/tmp/CityCollege"),
-                    signatures: Vec::new(),
-                },
-                PresentationRejection::WorkspaceCwdMismatch,
-            ),
-            (
-                WorkspaceContext {
-                    cwd: PathBuf::from("/").join("x".repeat(MAX_WORKSPACE_PATH_BYTES + 1)),
-                    signatures: Vec::new(),
-                },
-                PresentationRejection::WorkspaceCwdTooLarge {
-                    bytes: MAX_WORKSPACE_PATH_BYTES + 2,
-                    limit: MAX_WORKSPACE_PATH_BYTES,
-                },
-            ),
-        ];
-        for (workspace, rejection) in contexts {
-            assert_eq!(
-                coordinator.rank_and_apply(
-                    generation,
-                    ranking_context(&workspace, &learning),
-                    |_| LocalRankingMetadata::new("git", 1.0),
-                ),
-                PresentationOutcome::Rejected(rejection)
-            );
-            assert_eq!(coordinator.selection().selected(), selected.as_ref());
-        }
-    }
-
-    #[test]
-    fn ranking_workspace_signatures_are_unique_and_count_bounded() {
-        let mut coordinator = coordinator(10);
-        let work = start(&mut coordinator, "g");
-        let generation = work.query().generation;
-        accepted(coordinator.accept_batch(ProviderBatch::success(
-            "spec",
-            generation,
-            vec![candidate("git", "git")],
-        )));
-        let learning = LearningState::default();
-        let cwd = PathBuf::from("/tmp/Greendale");
-
-        let duplicate = WorkspaceContext {
-            cwd: cwd.clone(),
-            signatures: vec![
-                WorkspaceSignature {
-                    kind: WorkspaceKind::Git,
-                    root: cwd.clone(),
-                    marker: cwd.join(".git"),
-                },
-                WorkspaceSignature {
-                    kind: WorkspaceKind::Git,
-                    root: cwd.clone(),
-                    marker: cwd.join("nested/.git"),
-                },
-            ],
-        };
-        assert_eq!(
-            coordinator.rank_and_apply(generation, ranking_context(&duplicate, &learning), |_| {
-                LocalRankingMetadata::new("git", 1.0)
-            },),
-            PresentationOutcome::Rejected(PresentationRejection::DuplicateWorkspaceKind {
-                index: 1,
-                kind: WorkspaceKind::Git,
-            })
-        );
-
-        let excessive = WorkspaceContext {
-            cwd: cwd.clone(),
-            signatures: (0..=MAX_WORKSPACE_SIGNATURES)
-                .map(|index| WorkspaceSignature {
-                    kind: WorkspaceKind::Git,
-                    root: cwd.clone(),
-                    marker: cwd.join(format!("marker-{index}")),
-                })
-                .collect(),
-        };
-        assert_eq!(
-            coordinator.rank_and_apply(generation, ranking_context(&excessive, &learning), |_| {
-                LocalRankingMetadata::new("git", 1.0)
-            },),
-            PresentationOutcome::Rejected(PresentationRejection::TooManyWorkspaceSignatures {
-                observed: MAX_WORKSPACE_SIGNATURES + 1,
-                limit: MAX_WORKSPACE_SIGNATURES,
-            })
-        );
-        assert!(coordinator.selection().candidates().is_empty());
-    }
-
-    #[test]
-    fn ranking_workspace_signature_paths_are_absolute_and_bounded() {
-        let mut coordinator = coordinator(10);
-        let work = start(&mut coordinator, "g");
-        let generation = work.query().generation;
-        accepted(coordinator.accept_batch(ProviderBatch::success(
-            "spec",
-            generation,
-            vec![candidate("git", "git")],
-        )));
-        let learning = LearningState::default();
-        let cwd = PathBuf::from("/tmp/Greendale");
-
-        for (signature, rejection) in [
-            (
-                WorkspaceSignature {
-                    kind: WorkspaceKind::Git,
-                    root: PathBuf::from("relative"),
-                    marker: cwd.join(".git"),
-                },
-                PresentationRejection::WorkspaceRootNotAbsolute { index: 0 },
-            ),
-            (
-                WorkspaceSignature {
-                    kind: WorkspaceKind::Git,
-                    root: PathBuf::from("/").join("x".repeat(MAX_WORKSPACE_PATH_BYTES + 1)),
-                    marker: cwd.join(".git"),
-                },
-                PresentationRejection::WorkspaceRootTooLarge {
-                    index: 0,
-                    bytes: MAX_WORKSPACE_PATH_BYTES + 2,
-                    limit: MAX_WORKSPACE_PATH_BYTES,
-                },
-            ),
-            (
-                WorkspaceSignature {
-                    kind: WorkspaceKind::Git,
-                    root: cwd.clone(),
-                    marker: PathBuf::from("relative"),
-                },
-                PresentationRejection::WorkspaceMarkerNotAbsolute { index: 0 },
-            ),
-            (
-                WorkspaceSignature {
-                    kind: WorkspaceKind::Git,
-                    root: cwd.clone(),
-                    marker: PathBuf::from("/").join("x".repeat(MAX_WORKSPACE_PATH_BYTES + 1)),
-                },
-                PresentationRejection::WorkspaceMarkerTooLarge {
-                    index: 0,
-                    bytes: MAX_WORKSPACE_PATH_BYTES + 2,
-                    limit: MAX_WORKSPACE_PATH_BYTES,
-                },
-            ),
-        ] {
-            let workspace = WorkspaceContext {
-                cwd: cwd.clone(),
-                signatures: vec![signature],
-            };
-            assert_eq!(
-                coordinator.rank_and_apply(
-                    generation,
-                    ranking_context(&workspace, &learning),
-                    |_| LocalRankingMetadata::new("git", 1.0),
-                ),
-                PresentationOutcome::Rejected(rejection)
-            );
-        }
-        assert!(coordinator.selection().candidates().is_empty());
-    }
-
-    #[test]
     fn aggregate_ranked_bytes_are_rejected_without_selection_changes() {
         let mut coordinator = coordinator(10);
         let work = start(&mut coordinator, "g");
@@ -2594,7 +1786,7 @@ mod tests {
             vec![candidate("git", "git")],
         )));
         assert!(matches!(
-            apply_local(&mut coordinator, generation),
+            apply_merged(&mut coordinator, generation),
             PresentationOutcome::Applied { .. }
         ));
         let selected = coordinator.selection().selected().cloned();

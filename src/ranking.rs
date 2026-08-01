@@ -1,4 +1,4 @@
-//! Deterministic composite ranking for completion candidates.
+//! Deterministic composite ranking for worker-owned local candidate sets.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -126,49 +126,19 @@ impl LocalRankingCandidate {
     }
 }
 
-/// Canonical metadata supplied for one coordinator-owned merged candidate.
-#[derive(Clone, PartialEq)]
-pub struct LocalRankingMetadata {
-    /// Canonical command/subcommand path used for learning and context.
-    pub skeleton: String,
-    /// Provider-computed query match quality in the inclusive range zero to one.
-    pub match_quality: f64,
-}
-
-impl fmt::Debug for LocalRankingMetadata {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("LocalRankingMetadata")
-            .field("skeleton_bytes", &self.skeleton.len())
-            .field("match_quality", &self.match_quality)
-            .finish()
-    }
-}
-
-impl LocalRankingMetadata {
-    /// Creates local metadata without granting authority to replace the candidate.
-    #[must_use]
-    pub fn new(skeleton: impl Into<String>, match_quality: f64) -> Self {
-        Self {
-            skeleton: compact_string(skeleton.into()),
-            match_quality,
-        }
-    }
-}
-
-/// Session-local inputs shared by every candidate in one ranking pass.
+/// Worker-local inputs shared by every candidate in one ranking pass.
 #[derive(Clone, Copy)]
-pub struct LocalRankingContext<'a> {
+pub(crate) struct LocalRankingContext<'a> {
     /// Cached workspace signatures for the active directory.
-    pub workspace: &'a WorkspaceContext,
+    pub(crate) workspace: &'a WorkspaceContext,
     /// Learned command and transition aggregates.
-    pub learning: &'a LearningState,
+    pub(crate) learning: &'a LearningState,
     /// Exact active working directory used for local aggregate preference.
-    pub cwd: &'a Path,
+    pub(crate) cwd: &'a Path,
     /// Current Unix timestamp in seconds.
-    pub now: Timestamp,
+    pub(crate) now: Timestamp,
     /// Prior canonical command skeleton, when the session has one.
-    pub prior_skeleton: Option<&'a str>,
+    pub(crate) prior_skeleton: Option<&'a str>,
 }
 
 /// Composite ranking output plus the transition lineage used for diagnostics.
@@ -196,8 +166,8 @@ impl fmt::Debug for LocalRankingResult {
 /// Combines static, workspace, match, frecency, and transition signals.
 ///
 /// Learning scores are normalized over the complete merged candidate set before
-/// the caller's result limit is applied. The suggestion's static priority is the
-/// source/static component; provider confidence remains merge metadata.
+/// the worker's provider/UI bound is applied. The suggestion's static priority is
+/// the source/static component; provider confidence remains merge metadata.
 #[must_use]
 #[cfg(test)]
 fn rank_with_local_intelligence(
@@ -211,10 +181,10 @@ fn rank_with_local_intelligence(
     result
 }
 
-/// Ranks the complete merged set with local intelligence and applies no UI limit.
+/// Ranks the worker's complete merged local set and applies no UI limit.
 ///
-/// This primitive lets the coordinator validate a full permutation and preserve
-/// an explicitly selected result that falls below the ordinary rendering cutoff.
+/// The completion worker calls this before bounding its provider batch so local
+/// scoring considers every available local candidate.
 #[must_use]
 pub(crate) fn rank_all_with_local_intelligence(
     candidates: impl IntoIterator<Item = LocalRankingCandidate>,
@@ -519,7 +489,6 @@ mod tests {
     fn ranking_debug_output_redacts_candidate_and_skeleton_text() {
         let candidate =
             LocalRankingCandidate::new(suggestion("hunter2"), "classified command", 0.5);
-        let metadata = LocalRankingMetadata::new("classified command", 0.5);
         let result = LocalRankingResult {
             candidates: vec![RankedSuggestion {
                 suggestion: candidate.suggestion.clone(),
@@ -528,11 +497,7 @@ mod tests {
             matched_prior_skeleton: Some("classified parent".to_owned()),
         };
 
-        for debug in [
-            format!("{candidate:?}"),
-            format!("{metadata:?}"),
-            format!("{result:?}"),
-        ] {
+        for debug in [format!("{candidate:?}"), format!("{result:?}")] {
             assert!(!debug.contains("hunter2"));
             assert!(!debug.contains("classified"));
         }

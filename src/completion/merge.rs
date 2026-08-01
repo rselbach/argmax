@@ -9,8 +9,8 @@ use super::{CompletionQuery, InsertionBehavior, Suggestion};
 /// current buffer are discarded. Each result is represented by a canonical
 /// one-edit delta relative to the shared query. The query is indexed once, while
 /// retained keys own only changed bytes bounded by candidate replacement size.
-/// No UI limit is applied here: FR-029 requires ranking before
-/// `ui.max-suggestions` truncation.
+/// No ranking or UI limit is applied here; downstream consumers own ordering and
+/// presentation bounds.
 #[must_use]
 pub(crate) fn merge_suggestions(
     query: &CompletionQuery,

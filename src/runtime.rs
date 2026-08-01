@@ -963,11 +963,15 @@ struct WorkerDiagnosticState {
     update_persistence_failures: u64,
 }
 
+/// Last worker-ranked local provider order for one query generation.
+///
+/// The runtime preserves this order ahead of candidates contributed only by AI.
 struct LocalRankingSnapshot {
     generation: u64,
     candidates: Vec<Suggestion>,
 }
 
+/// Preserves worker-ranked local candidates before ordering AI-only additions.
 fn order_merged_candidates(
     candidates: &mut [Suggestion],
     query: &CompletionQuery,
@@ -2471,11 +2475,17 @@ mod tests {
     }
 
     #[test]
-    fn late_ai_candidate_preserves_the_complete_local_ranking() {
+    fn higher_priority_ai_only_candidate_still_follows_worker_ranked_local_candidates() {
         let query = CompletionQuery::new("git ch", 6, "/tmp", 7).unwrap();
-        let cherry = suggestion(&query, "erry-pick", "cherry");
-        let checkout = suggestion(&query, "eckout", "checkout");
-        let ai = suggestion(&query, "at --amend", "ai");
+        let mut cherry = suggestion(&query, "erry-pick", "cherry");
+        let mut checkout = suggestion(&query, "eckout", "checkout");
+        let mut ai = suggestion(&query, "at --amend", "ai");
+        cherry.static_priority = 0.0;
+        cherry.confidence = 0.0;
+        checkout.static_priority = 0.0;
+        checkout.confidence = 0.0;
+        ai.static_priority = 1.0;
+        ai.confidence = 1.0;
         let local = LocalRankingSnapshot {
             generation: query.generation,
             candidates: vec![cherry.clone(), checkout.clone()],

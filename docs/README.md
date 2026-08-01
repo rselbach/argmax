@@ -24,10 +24,12 @@ terminal input continue through to the shell.
 
 Local completion combines the compiled [command catalog](commands.md), commands
 on `PATH`, filesystem entries, aliases, shell history, current-session learning,
-workspace metadata, and bounded dynamic providers. Individual provider failures
-degrade the result set rather than blocking typing.
+workspace metadata, and bounded dynamic providers. The local worker ranks its
+complete candidate set before applying the display bound. Individual provider
+failures degrade the result set rather than blocking typing.
 
-AI is a separate, optional provider. Read the
+AI is a separate, optional provider. Locally ranked suggestions stay ahead of
+AI-only additions, even when the AI result reports higher confidence. Read the
 [AI and privacy disclosure](privacy.md#optional-ai-completion) before enabling
 it.
 

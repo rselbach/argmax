@@ -23,8 +23,7 @@ use crate::completion::{
 };
 use crate::config::Settings;
 use crate::coordinator::{
-    MAX_BATCH_BYTES, MAX_BATCH_CANDIDATES, MAX_CANDIDATE_BYTES, MAX_QUERY_CWD_BYTES,
-    MAX_RANKING_SKELETON_BYTES, MAX_RANKING_SKELETON_TOKENS, QueryWork,
+    MAX_BATCH_BYTES, MAX_BATCH_CANDIDATES, MAX_CANDIDATE_BYTES, MAX_QUERY_CWD_BYTES, QueryWork,
 };
 use crate::history::{
     HistoryCache, HistoryEntry, HistoryFormat, HistoryTier, parse_history, search_history,
@@ -66,6 +65,8 @@ const MAX_ENVIRONMENT_NAMES: usize = 4_096;
 const MAX_ENVIRONMENT_NAME_BYTES: usize = 1_024;
 const MAX_SESSION_HISTORY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SESSION_HISTORY_ENTRIES: usize = 16 * 1024;
+const MAX_RANKING_SKELETON_BYTES: usize = 8 * 1024;
+const MAX_RANKING_SKELETON_TOKENS: usize = 64;
 const UNKNOWN_SKELETON: &str = "command";
 
 /// One persistent shell-history source.
@@ -977,6 +978,10 @@ impl Worker {
             .map_or_else(Vec::new, |result| result.suggestions)
     }
 
+    /// Ranks the complete merged local set, then applies provider/UI bounds.
+    ///
+    /// This worker is the production owner of local composite ranking. Bounding
+    /// happens only after every local candidate has participated in scoring.
     fn rank_and_publish(
         &self,
         query: &CompletionQuery,
@@ -1458,6 +1463,39 @@ mod tests {
         coordinator.start_query(line, line.len(), cwd).unwrap()
     }
 
+    fn worker(options: LocalCompletionOptions) -> (Worker, Arc<Mutex<VecDeque<ProviderBatch>>>) {
+        let output = Arc::new(Mutex::new(VecDeque::new()));
+        let latest_generation = Arc::new(AtomicU64::new(0));
+        let worker = Worker::new(
+            options,
+            Arc::new(WorkerInbox::default()),
+            Arc::clone(&output),
+            Arc::new(Mutex::new(VecDeque::new())),
+            latest_generation,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+        );
+        (worker, output)
+    }
+
+    fn local_suggestion(index: usize, best: bool) -> Suggestion {
+        let mut suggestion = Suggestion::new(
+            TextEdit {
+                range: 0..1,
+                replacement: format!("git command-{index:03}"),
+            },
+            if best { "g" } else { "unmatched" },
+            "",
+            "command",
+            SuggestionSource::Spec,
+            InsertionBehavior::Exact,
+            format!("local-{index:03}"),
+        );
+        suggestion.static_priority = 0.0;
+        suggestion.confidence = 0.0;
+        suggestion
+    }
+
     fn wait_for_batches(dispatcher: &LocalCompletionDispatcher) -> Vec<ProviderBatch> {
         for _ in 0..100 {
             let batches = dispatcher.drain_batches(MAX_COMPLETION_DRAIN_BATCHES);
@@ -1498,6 +1536,75 @@ mod tests {
         assert!(!execution_context(&options, &settings, &[]).infer_completions);
         settings.core.infer_completions = true;
         assert!(execution_context(&options, &settings, &[]).infer_completions);
+    }
+
+    #[test]
+    fn worker_ranks_the_full_local_set_before_applying_the_ui_bound() {
+        let temporary = TempDirectory::new();
+        let mut settings = Settings::default();
+        settings.ui.max_suggestions = 500;
+        let (worker, output) = worker(LocalCompletionOptions::new(
+            ShellKind::Bash,
+            settings.clone(),
+            OsString::new(),
+        ));
+        let mut coordinator = CompletionCoordinator::new(LOCAL_COMPLETION_PROVIDERS, 500).unwrap();
+        let work = work(&mut coordinator, "g", &temporary.0);
+        worker
+            .latest_generation
+            .store(work.query().generation, Ordering::Release);
+        let suggestions = (0..=500)
+            .map(|index| local_suggestion(index, index == 500))
+            .collect::<Vec<_>>();
+        let workspace = WorkspaceContext {
+            cwd: temporary.0.clone(),
+            signatures: Vec::new(),
+        };
+        let history_order = BTreeMap::new();
+
+        worker.rank_and_publish(
+            work.query(),
+            &suggestions,
+            QueryRankingContext {
+                mode: SessionMode::Spec,
+                settings: &settings,
+                history_order: &history_order,
+                workspace: &workspace,
+            },
+            &work,
+        );
+
+        let batch = lock(&output).pop_front().expect("ranked local batch");
+        assert_eq!(batch.suggestions.len(), 500);
+        assert_eq!(batch.suggestions[0].identity(), "local-500");
+    }
+
+    #[test]
+    fn worker_skeleton_fallback_is_bounded_and_canonical() {
+        let oversized = "x".repeat(MAX_RANKING_SKELETON_BYTES + 1);
+        let too_many_tokens = (0..=MAX_RANKING_SKELETON_TOKENS)
+            .map(|_| "token")
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(!valid_skeleton(&oversized));
+        assert!(!valid_skeleton(&too_many_tokens));
+        assert!(!valid_skeleton("git  status"));
+
+        for command in [
+            "git status",
+            "AWS_SECRET_ACCESS_KEY=greendale",
+            oversized.as_str(),
+            too_many_tokens.as_str(),
+        ] {
+            let skeleton = command_skeleton(None, command);
+            assert!(valid_skeleton(&skeleton));
+            assert!(skeleton.len() <= MAX_RANKING_SKELETON_BYTES);
+            assert!(skeleton.split(' ').count() <= MAX_RANKING_SKELETON_TOKENS);
+        }
+        assert_eq!(
+            command_skeleton(None, "AWS_SECRET_ACCESS_KEY=greendale"),
+            UNKNOWN_SKELETON
+        );
     }
 
     #[test]
