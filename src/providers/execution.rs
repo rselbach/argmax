@@ -45,22 +45,25 @@ const MAX_IDENTITY_BYTES: usize = 8 * 1024;
 /// Command-line configuration applied to every git generator invocation.
 ///
 /// A working directory carries its own `.git/config`, which the repository
-/// author controls rather than the user. Both `core.fsmonitor` and
-/// `core.hooksPath` name programs git executes during otherwise read-only
-/// queries, so a generator running in an untrusted checkout would execute
-/// repository-supplied commands. Command-line `-c` wins over every file-based
-/// source, so neutralizing them here cannot be overridden by the repository.
+/// author controls rather than the user. `core.fsmonitor`, `core.hooksPath`,
+/// and signature display can invoke repository-selected programs during
+/// otherwise read-only queries, so a generator running in an untrusted
+/// checkout would execute repository-supplied commands. Command-line `-c` wins
+/// over every file-based source, so neutralizing them here cannot be overridden
+/// by the repository.
 ///
 /// `core.fsmonitor` is cleared rather than set to `false`: git releases before
 /// 2.36 read the value as a hook path, where `false` resolves to an executable
 /// on `PATH`, while an empty value is inert for every version.
-pub(crate) const GIT_READ_ONLY_CONFIG: [&str; 6] = [
+pub(crate) const GIT_READ_ONLY_CONFIG: [&str; 8] = [
     "-c",
     "color.ui=false",
     "-c",
     "core.fsmonitor=",
     "-c",
     "core.hooksPath=/dev/null",
+    "-c",
+    "log.showSignature=false",
 ];
 
 /// Prefixes [`GIT_READ_ONLY_CONFIG`] to one git generator's own arguments.
@@ -1799,10 +1802,19 @@ mod tests {
             );
 
             assert!(!runner.plans.is_empty(), "{label} ran no process");
-            let required = GIT_READ_ONLY_CONFIG
-                .map(OsString::from)
-                .into_iter()
-                .collect::<Vec<_>>();
+            let required = [
+                "-c",
+                "color.ui=false",
+                "-c",
+                "core.fsmonitor=",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "log.showSignature=false",
+            ]
+            .map(OsString::from)
+            .into_iter()
+            .collect::<Vec<_>>();
             for plan in &runner.plans {
                 assert!(
                     plan.1.starts_with(&required),
@@ -1816,6 +1828,106 @@ mod tests {
                     .iter()
                     .all(|withheld| withheld.as_slice() == credentials),
                 "{label} spawned a process without withholding credentials"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_git_queries_disable_repository_selected_signature_verifiers() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let marker = root.join("verifier-invoked");
+        let run = |arguments: &[&str]| {
+            std::process::Command::new("git")
+                .args(arguments)
+                .current_dir(root)
+                .env("ARGMAX_TEST_MARKER", &marker)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", root)
+                .output()
+                .expect("run git")
+        };
+        assert!(run(&["init", "--quiet"]).status.success());
+
+        let empty = root.join("empty-tree");
+        fs::write(&empty, []).unwrap();
+        let tree = run(&["hash-object", "-t", "tree", "-w", "empty-tree"]);
+        assert!(tree.status.success());
+        let tree = std::str::from_utf8(&tree.stdout).unwrap().trim();
+        let commit = format!(
+            "tree {tree}\n\
+             author Troy Barnes <troy@greendale.edu> 1700000000 +0000\n\
+             committer Troy Barnes <troy@greendale.edu> 1700000000 +0000\n\
+             gpgsig -----BEGIN PGP SIGNATURE-----\n\
+              \n\
+              dGVzdA==\n\
+              -----END PGP SIGNATURE-----\n\
+             \n\
+             Greendale study\n"
+        );
+        fs::write(root.join("signed-commit"), commit).unwrap();
+        let commit = run(&["hash-object", "-t", "commit", "-w", "signed-commit"]);
+        assert!(commit.status.success());
+        let commit = std::str::from_utf8(&commit.stdout).unwrap().trim();
+        assert!(run(&["update-ref", "HEAD", commit]).status.success());
+        assert!(
+            run(&[
+                "update-ref",
+                "--create-reflog",
+                "-m",
+                "WIP on main: Greendale study",
+                "refs/stash",
+                commit,
+            ])
+            .status
+            .success()
+        );
+
+        let verifier = root.join("evil");
+        fs::write(
+            &verifier,
+            "#!/bin/sh\n: > \"${ARGMAX_TEST_MARKER}\"\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&verifier, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            run(&["config", "--local", "log.showSignature", "true"])
+                .status
+                .success()
+        );
+        assert!(
+            run(&["config", "--local", "gpg.program", "./evil"])
+                .status
+                .success()
+        );
+
+        for arguments in [
+            &["log", "--max-count=1", "--format=%h%x09%s"][..],
+            &["stash", "list", "--format=%gd%x09%gs"][..],
+        ] {
+            let unprotected = run(arguments);
+            assert!(
+                unprotected.status.success(),
+                "unprotected git failed: {}",
+                String::from_utf8_lossy(&unprotected.stderr)
+            );
+            assert!(
+                marker.exists(),
+                "fixture did not invoke verifier for {arguments:?}"
+            );
+            fs::remove_file(&marker).unwrap();
+
+            let protected_arguments = git_arguments(arguments);
+            let protected = run(&protected_arguments);
+            assert!(
+                protected.status.success(),
+                "protected git failed: {}",
+                String::from_utf8_lossy(&protected.stderr)
+            );
+            assert!(
+                !marker.exists(),
+                "read-only configuration invoked verifier for {arguments:?}"
             );
         }
     }

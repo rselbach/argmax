@@ -1582,8 +1582,8 @@ fn git_lines(
 
 /// Builds a git argument vector with the repository's own configuration
 /// neutralized, matching the discipline every completion generator applies:
-/// a hostile checkout must not execute `core.fsmonitor` or hook programs
-/// during read-only context queries.
+/// a hostile checkout must not execute fsmonitor, hook, or signature-verifier
+/// programs during read-only context queries.
 fn git_argv(arguments: &[&str]) -> Vec<OsString> {
     crate::providers::execution::GIT_READ_ONLY_CONFIG
         .iter()
@@ -1856,16 +1856,23 @@ mod tests {
 
     #[test]
     fn git_context_argv_neutralizes_repository_configuration() {
-        let argv = git_argv(&["status", "--short"]);
-        let prefix: Vec<OsString> = crate::providers::execution::GIT_READ_ONLY_CONFIG
-            .iter()
-            .copied()
-            .map(OsString::from)
-            .collect();
-        assert!(argv.starts_with(&prefix));
+        let argv = git_argv(&["log", "-6", "--pretty=format:%s"]);
         assert_eq!(
-            &argv[prefix.len()..],
-            &[OsString::from("status"), OsString::from("--short")]
+            argv,
+            [
+                "-c",
+                "color.ui=false",
+                "-c",
+                "core.fsmonitor=",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "log.showSignature=false",
+                "log",
+                "-6",
+                "--pretty=format:%s",
+            ]
+            .map(OsString::from)
         );
     }
 
