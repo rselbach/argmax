@@ -65,6 +65,10 @@ brews:
     repository:
       owner: rselbach
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    # The default workflow token cannot push to the tap repository; skip
+    # the formula upload until the secret exists, then it enables itself.
+    skip_upload: "{{ if .Env.HOMEBREW_TAP_GITHUB_TOKEN }}false{{ else }}true{{ end }}"
     homepage: https://github.com/rselbach/argmax
     description: Terminal-resident command completion and prediction
     license: MIT
