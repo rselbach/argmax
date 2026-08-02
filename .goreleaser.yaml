@@ -62,6 +62,8 @@ nfpms:
 
 brews:
   - name: argmax
+    # Modern Homebrew only resolves formulae under Formula/.
+    directory: Formula
     repository:
       owner: rselbach
       name: homebrew-tap
