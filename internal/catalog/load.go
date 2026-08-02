@@ -35,29 +35,36 @@ func LoadManifest() (*Manifest, error) {
 	return &m, nil
 }
 
-// Registry builds the bundled specification registry: hand-tuned Go specs
-// take precedence, generated data specs fill the remaining catalog. A
-// corrupt data bundle degrades to the Go specs alone.
+// Registry builds the bundled specification registry. Hand-tuned Go specs
+// take precedence node by node, and the generated corpus specs enrich
+// them with the flags and subcommands they omit; corpus-only commands
+// register directly. A corrupt data bundle degrades to the Go specs
+// alone.
 func Registry() *complete.Registry {
 	goSpecs := specs()
-	exclude := make(map[string]bool)
-	for _, s := range goSpecs {
-		exclude[strings.ToLower(s.Name)] = true
-		for _, a := range s.Aliases {
-			exclude[strings.ToLower(a)] = true
-		}
-	}
-	data, err := dataSpecs(exclude)
+	data, err := dataSpecs()
 	if err != nil {
 		logging.L().Error("embedded catalog data unavailable; using built-in specs only", "error", err)
 		return complete.NewRegistry(goSpecs...)
 	}
-	return complete.NewRegistry(append(goSpecs, data...)...)
+	goByName := make(map[string]*complete.Spec, len(goSpecs))
+	for _, g := range goSpecs {
+		goByName[strings.ToLower(g.Name)] = g
+	}
+	standalone := data[:0]
+	for _, d := range data {
+		if g, ok := goByName[strings.ToLower(d.Name)]; ok {
+			enrichSpec(g, d)
+			continue
+		}
+		standalone = append(standalone, d)
+	}
+	return complete.NewRegistry(append(goSpecs, standalone...)...)
 }
 
 // dataSpecs decodes the embedded bundle, merges cross-listed placements
 // by command name, and resolves generator references.
-func dataSpecs(exclude map[string]bool) ([]*complete.Spec, error) {
+func dataSpecs() ([]*complete.Spec, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(bundleGz))
 	if err != nil {
 		return nil, fmt.Errorf("open catalog bundle: %w", err)
@@ -88,9 +95,6 @@ func dataSpecs(exclude map[string]bool) ([]*complete.Spec, error) {
 			continue
 		}
 		name := strings.ToLower(d.Name)
-		if exclude[name] {
-			continue
-		}
 		if existing, ok := merged[name]; ok {
 			mergeSpecData(existing, d)
 			continue

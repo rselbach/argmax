@@ -156,3 +156,50 @@ func TestGeneratedDocsMatch(t *testing.T) {
 		t.Errorf("docs/commands.md drifted from the registry; regenerate with `go run ./tools/docgen`")
 	}
 }
+
+// TestGoSpecsEnrichedFromCorpus verifies hand-tuned specs gain the corpus
+// flags they omit while keeping their curated entries and generators.
+func TestGoSpecsEnrichedFromCorpus(t *testing.T) {
+	reg := Registry()
+	goSpec := reg.Lookup("go")
+	if goSpec == nil {
+		t.Fatal("go spec missing")
+	}
+	var build *complete.Spec
+	for _, sub := range goSpec.Subcommands {
+		if sub.Name == "build" {
+			build = sub
+		}
+	}
+	if build == nil {
+		t.Fatal("go build subcommand missing")
+	}
+	names := map[string]bool{}
+	for _, o := range build.Options {
+		for _, n := range o.Names {
+			names[n] = true
+		}
+	}
+	for _, want := range []string{"-o", "-race", "-v", "-ldflags", "-tags"} {
+		if !names[want] {
+			t.Errorf("go build missing option %s after enrichment (have %d options)", want, len(build.Options))
+		}
+	}
+	if build.Generator == nil {
+		t.Error("hand-tuned go build generator must survive the merge")
+	}
+
+	git := reg.Lookup("git")
+	var checkout *complete.Spec
+	for _, sub := range git.Subcommands {
+		if sub.Name == "checkout" {
+			checkout = sub
+		}
+	}
+	if checkout == nil || checkout.Generator == nil {
+		t.Fatal("git checkout branch generator must survive the merge")
+	}
+	if len(checkout.Options) <= 2 {
+		t.Errorf("git checkout should gain corpus flags, has %d", len(checkout.Options))
+	}
+}

@@ -62,18 +62,14 @@ func run(prdPath, figDir, outDir string) error {
 		return err
 	}
 	stats := struct {
-		converted, stubbed, skippedGo int
-		truncated                     []string
-		stubs                         []string
+		converted, enriching, stubbed, goOnly int
+		truncated                             []string
+		stubs                                 []string
 	}{}
 	bundle := map[string]catalog.SpecData{} // "<slug>/<name>" -> spec
 	seen := map[string]string{}             // name -> category slug of first placement
 	for _, cat := range categories {
 		for _, name := range cat.Entries {
-			if goNames[name] {
-				stats.skippedGo++
-				continue
-			}
 			key := cat.Slug + "/" + name
 			if first, dup := seen[name]; dup {
 				// Cross-listed entry (such as find): emit a placement
@@ -88,12 +84,21 @@ func run(prdPath, figDir, outDir string) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w", name, err)
 			}
-			if !ok {
+			switch {
+			case ok && goNames[name]:
+				// The loader deep-merges this under the hand-tuned spec,
+				// filling in flags and subcommands the Go code omits.
+				stats.enriching++
+			case ok:
+				stats.converted++
+			case goNames[name]:
+				// Hand-authored coverage; nothing to convert or stub.
+				stats.goOnly++
+				continue
+			default:
 				spec = stub(name, cat.Icon)
 				stats.stubbed++
 				stats.stubs = append(stats.stubs, name)
-			} else {
-				stats.converted++
 			}
 			if spec.truncated {
 				stats.truncated = append(stats.truncated, name)
@@ -113,7 +118,8 @@ func run(prdPath, figDir, outDir string) error {
 	}
 	fmt.Printf("cataloggen: %d PRD entries across %d categories\n", total, len(categories))
 	fmt.Printf("  converted from Fig corpus: %d\n", stats.converted)
-	fmt.Printf("  kept as Go specs:          %d\n", stats.skippedGo)
+	fmt.Printf("  enriching Go specs:        %d\n", stats.enriching)
+	fmt.Printf("  Go specs without corpus:   %d\n", stats.goOnly)
 	fmt.Printf("  minimal stubs:             %d\n", stats.stubbed)
 	if len(stats.truncated) > 0 {
 		fmt.Printf("  truncated by caps:         %s\n", strings.Join(stats.truncated, ", "))

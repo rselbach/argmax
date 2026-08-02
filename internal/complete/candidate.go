@@ -3,6 +3,8 @@
 // a typed buffer into ranked completion candidates.
 package complete
 
+import "strings"
+
 // Source identifies where a candidate came from.
 type Source string
 
@@ -44,13 +46,14 @@ type Candidate struct {
 }
 
 // Dedupe removes candidates whose final command text repeats an earlier
-// entry and drops exact copies of the current query unless the candidate is
-// an alias the user may be discovering.
+// entry and drops exact copies of the current query, keeping candidates
+// the user may be discovering: aliases, and documented flags whose
+// description explains what was just typed.
 func Dedupe(cands []Candidate, query string) []Candidate {
 	seen := make(map[string]int, len(cands))
 	out := cands[:0]
 	for _, c := range cands {
-		if c.Text == query && c.Source != SourceAlias {
+		if c.Text == query && c.Source != SourceAlias && !documentsFlag(c) {
 			continue
 		}
 		if i, ok := seen[c.Text]; ok {
@@ -65,4 +68,11 @@ func Dedupe(cands []Candidate, query string) []Candidate {
 		out = append(out, c)
 	}
 	return out
+}
+
+// documentsFlag reports whether an exact-match candidate still teaches
+// the user something: a flag row whose description explains the typed
+// option.
+func documentsFlag(c Candidate) bool {
+	return c.Description != "" && strings.HasPrefix(c.Title, "-")
 }

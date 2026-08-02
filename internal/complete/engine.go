@@ -195,7 +195,9 @@ func (e *Engine) nodeCandidates(ctx Context, line string, res walkResult, partia
 	}
 	for i := range node.Options {
 		opt := &node.Options[i]
-		if optionUsed(line, opt) {
+		// Only options completed earlier in the line count as used; the
+		// partial token being typed is the one we are completing.
+		if optionUsed(base, opt) {
 			continue
 		}
 		name := matchingOptionName(opt, prefix)

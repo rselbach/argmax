@@ -257,3 +257,30 @@ func TestPendingOptionArgument(t *testing.T) {
 		t.Errorf("node generator should resume after the option argument, got %v", findTitles(got))
 	}
 }
+
+func TestDedupeKeepsDocumentedFlag(t *testing.T) {
+	got := Dedupe([]Candidate{
+		{Text: "go build -v", Title: "-v", Description: "print package names as they compile", Source: SourceSpec},
+	}, "go build -v")
+	if len(got) != 1 {
+		t.Fatal("an exact-match flag with a description must stay visible")
+	}
+	// Without a description there is nothing to teach; the row drops.
+	got = Dedupe([]Candidate{{Text: "go build -v", Title: "-v", Source: SourceSpec}}, "go build -v")
+	if len(got) != 0 {
+		t.Fatal("an undocumented exact-match flag should still be dropped")
+	}
+}
+
+func TestExactlyTypedOptionStaysVisible(t *testing.T) {
+	e := &Engine{Registry: testRegistry()}
+	got := e.Complete(Context{}, "git checkout --force")
+	if !contains(got, "git checkout --force") {
+		t.Errorf("fully typed flag should stay documented in the menu, got %v", findTitles(got))
+	}
+	// A flag used earlier in the line is still excluded.
+	got = e.Complete(Context{}, "git checkout --force --f")
+	if contains(got, "git checkout --force --force") {
+		t.Error("an already-used option must not be suggested again")
+	}
+}

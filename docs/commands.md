@@ -41,7 +41,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `datree` | Datree can be used on the command line to run policies against Kubernetes manifests YAML files or Helm charts | 7 | 1 |
 | `deployctl` | Command line tool for Deno Deploy | 2 | 2 |
 | `direnv` | Unclutter your .profile | 21 | 2 |
-| `docker` | container runtime | 18 | 0 |
+| `docker` | container runtime | 58 | 0 |
 | `docker-compose` | Define and run multi-container applications with Docker | 25 | 10 |
 | `doctl` | The official DigitalOcean command line interface (CLI) | 16 | 8 |
 | `doppler` | The official Doppler CLI | 18 | 20 |
@@ -62,7 +62,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `k9s` | K9s is a terminal based UI to interact with your Kubernetes clusters | 3 | 23 |
 | `kind` | Kubernetes IN Docker - local clusters for testing Kubernetes | 8 | 3 |
 | `knex` | SQL query builder for JavaScript | 12 | 14 |
-| `kubectl` | Kubernetes CLI | 11 | 2 |
+| `kubectl` | Kubernetes CLI | 42 | 2 |
 | `kubectx` | Switch between Kubernetes-contexts | 0 | 4 |
 | `kubens` | Switch between Kubernetes-namespaces | 0 | 2 |
 | `limactl` | Control the Lima(Linux virtual machines) | 13 | 3 |
@@ -97,15 +97,15 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `railway` | CLI for managing Railway Apps | 23 | 3 |
 | `rbenv` | Pick a Ruby version for your application and guarantee that your development environment matches production | 10 | 0 |
 | `robot` | CLI for running Robot Framework automation tests | 0 | 60 |
-| `rsync` | fast incremental transfer | 0 | 4 |
-| `scp` | secure copy | 0 | 2 |
+| `rsync` | fast incremental transfer | 0 | 134 |
+| `scp` | secure copy | 0 | 19 |
 | `serverless` | Zero-friction serverless development | 21 | 1 |
 | `sfdx` |  | 134 | 0 |
 | `sftp` | OpenSSH secure file transfer | 0 | 25 |
 | `space` | Deta Space CLI for mananging Deta Space projects | 10 | 1 |
 | `sqlite3` | A command line interface for SQLite version 3 | 0 | 29 |
 | `src` | Interact with Sourcegraph from the command line | 12 | 1 |
-| `ssh` | remote login | 0 | 3 |
+| `ssh` | remote login | 0 | 41 |
 | `ssh-keygen` | Generates, manages and converts authentication keys for ssh | 0 | 42 |
 | `stripe` | CLI interface for Stripe.com | 16 | 7 |
 | `supabase` | Supabase CLI | 15 | 2 |
@@ -138,7 +138,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `blitz` | Blitz.js CLI is your single access point for interacting with your app, from database management to code generation | 14 | 0 |
 | `browser-sync` | Keep multiple browsers & devices in sync when building websites | 4 | 2 |
 | `build-storybook` | Storybook build CLI tools | 0 | 19 |
-| `bun` | JavaScript package manager | 12 | 0 |
+| `bun` | JavaScript package manager | 23 | 5 |
 | `bunx` |  | 0 | 0 |
 | `cordova` | Manage your Cordova application | 14 | 5 |
 | `create-completion-spec` | Setup fig folder and create spec with the given name | 1 | 2 |
@@ -174,15 +174,15 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `nest` | Nest CLI | 6 | 1 |
 | `next` | Next.js CLI to start, build and export your application | 5 | 2 |
 | `ng` | CLI interface for Angular | 3 | 1 |
-| `node` | JavaScript runtime | 0 | 0 |
-| `npm` | JavaScript package manager | 12 | 0 |
-| `npx` | run a package binary | 0 | 0 |
+| `node` | JavaScript runtime | 0 | 12 |
+| `npm` | JavaScript package manager | 73 | 0 |
+| `npx` | run a package binary | 0 | 15 |
 | `nuxi` | Nuxt 3 CLI | 14 | 1 |
 | `nuxt` |  | 5 | 0 |
 | `nx` | Fig completions for Nx by Nrwl | 22 | 0 |
 | `oxlint` | A high performance linter for the Oxidation Compiler | 0 | 29 |
 | `playwright` |  | 2 | 2 |
-| `pnpm` | JavaScript package manager | 12 | 0 |
+| `pnpm` | JavaScript package manager | 31 | 4 |
 | `pnpx` | Execute binaries from npm packages | 6 | 14 |
 | `prettier` | Run Prettier from the command line | 0 | 44 |
 | `quasar` | Quasar Framework CLI | 4 | 1 |
@@ -213,7 +213,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `watchman` | A file watching service | 23 | 21 |
 | `webpack` |  | 10 | 951 |
 | `yalc` | Work with yarn/npm packages locally like a boss | 11 | 3 |
-| `yarn` | JavaScript package manager | 12 | 0 |
+| `yarn` | JavaScript package manager | 43 | 47 |
 
 ## Python and data science (19)
 
@@ -243,7 +243,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `cargo` | Rust package manager | 15 | 0 |
+| `cargo` | Rust package manager | 40 | 12 |
 | `dprint` | A pluggable and configurable code formatting platform written in Rust | 11 | 4 |
 | `pijul` | A distributed version control system that is at the same time theoretically sound, fast and easy to learn and use | 20 | 0 |
 | `rustc` | CLI for rustc | 0 | 29 |
@@ -259,7 +259,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `go` | Go toolchain | 15 | 0 |
+| `go` | Go toolchain | 18 | 0 |
 | `goctl` | A cli tool to generate go-zero code | 13 | 1 |
 | `goreleaser` | Deliver Go binaries as fast and easily as possible | 8 | 3 |
 
@@ -308,7 +308,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
 | `ghq` | 'ghq' provides a way to organize remote repository clones, like go get does. When you clone a remote repository by ghq get, ghq makes a… | 4 | 2 |
-| `git` | distributed version control | 27 | 3 |
+| `git` | distributed version control | 39 | 16 |
 | `git-cliff` | A highly customizable changelog generator ⛰️ | 0 | 21 |
 | `git-flow` | A collection of Git extensions to provide high-level repository operations for Vincent Driessen's branching model | 5 | 0 |
 | `git-profile` | Switch profiles | 1 | 2 |
@@ -320,9 +320,9 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `apt` | Debian package manager | 5 | 0 |
+| `apt` | Debian package manager | 19 | 2 |
 | `apt-get` | Debian package manager | 5 | 0 |
-| `brew` | Homebrew package manager | 8 | 0 |
+| `brew` | Homebrew package manager | 32 | 1 |
 | `dnf` | Fedora package manager | 5 | 0 |
 | `dpkg` | Debian package management system | 10 | 1 |
 | `flatpak` | application sandboxing and distribution | 9 | 0 |
@@ -339,63 +339,63 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | --- | --- | ---: | ---: |
 | `broot` | Broot lets you explore file hierarchies with a tree-like view, manipulate files, launch actions, and define your own shortcuts. broot is… | 0 | 37 |
 | `cd` | change directory | 0 | 0 |
-| `chmod` | change file modes | 0 | 1 |
+| `chmod` | change file modes | 0 | 7 |
 | `chown` | Change the user and/or group ownership of a given file, directory, or symbolic link | 0 | 8 |
-| `cp` | copy files | 0 | 0 |
+| `cp` | copy files | 0 | 11 |
 | `df` | Display free disk space | 0 | 11 |
 | `dust` | Like du but more intuitive | 0 | 20 |
 | `exa` | A modern replacement for ls | 0 | 37 |
-| `eza` | modern ls | 0 | 0 |
+| `eza` | modern ls | 0 | 63 |
 | `find` | Walk a file hierarchy | 0 | 24 |
 | `fold` | Fold long lines for finite width output device | 0 | 3 |
 | `ln` | Create (default hard) symbolic links to files | 0 | 7 |
-| `ls` | list directory contents | 0 | 0 |
+| `ls` | list directory contents | 0 | 42 |
 | `lsd` | An ls command with a lot of pretty colors and some other stuff | 0 | 32 |
-| `mkdir` | create directories | 0 | 0 |
-| `mv` | move files | 0 | 0 |
+| `mkdir` | create directories | 0 | 6 |
+| `mv` | move files | 0 | 4 |
 | `paper` | The Paper CLI | 15 | 1 |
 | `rclone` | The Swiss army knife of cloud storage | 49 | 2 |
 | `readlink` | Display file status | 0 | 2 |
-| `rm` | remove files | 0 | 0 |
-| `rmdir` | remove empty directories | 0 | 0 |
+| `rm` | remove files | 0 | 6 |
+| `rmdir` | remove empty directories | 0 | 1 |
 | `stow` | Manage farms of symbolic links | 0 | 15 |
-| `tar` | archive files | 0 | 0 |
-| `touch` | update file timestamps | 0 | 0 |
+| `tar` | archive files | 13 | 39 |
+| `touch` | update file timestamps | 0 | 8 |
 | `trash` | Trash, move files/folders to the trash | 0 | 6 |
-| `tree` | directory tree | 0 | 0 |
-| `unzip` | extract zip archives | 0 | 0 |
+| `tree` | directory tree | 0 | 51 |
+| `unzip` | extract zip archives | 0 | 4 |
 | `z` | zoxide jump | 0 | 0 |
 | `zi` | zoxide interactive jump | 0 | 0 |
-| `zip` | create zip archives | 0 | 0 |
+| `zip` | create zip archives | 0 | 5 |
 
 ## Editors, pagers, and file viewers (27)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `bat` | cat with wings | 0 | 0 |
-| `cat` | concatenate files | 0 | 0 |
-| `code` | Visual Studio Code | 0 | 0 |
+| `bat` | cat with wings | 0 | 29 |
+| `cat` | concatenate files | 0 | 8 |
+| `code` | Visual Studio Code | 0 | 33 |
 | `cot` | Command-line utility for CotEditor | 0 | 7 |
-| `du` | disk usage | 0 | 0 |
+| `du` | disk usage | 0 | 14 |
 | `emacs` | An extensible, customizable, free/libre text editor — and more | 0 | 16 |
-| `file` | file type | 0 | 0 |
+| `file` | file type | 0 | 31 |
 | `glow` | Render markdown on the CLI, with pizzazz! | 3 | 8 |
-| `head` | output file start | 0 | 0 |
+| `head` | output file start | 0 | 6 |
 | `idea` | InteliJ IDEA cli | 5 | 4 |
-| `less` | pager | 0 | 0 |
+| `less` | pager | 0 | 64 |
 | `lvim` | Hyperextensible Vim-based text editor | 0 | 30 |
 | `micro` | A modern and intuitive terminal-based text editor | 1 | 62 |
 | `more` | Opposite of less | 0 | 10 |
 | `nano` | text editor | 0 | 0 |
-| `nvim` | text editor | 0 | 0 |
+| `nvim` | text editor | 0 | 30 |
 | `rich` | Rich text and formatting in the terminal | 0 | 43 |
-| `stat` | file status | 0 | 0 |
+| `stat` | file status | 0 | 10 |
 | `subl` | Sublime Text | 0 | 11 |
-| `tail` | output file end | 0 | 0 |
+| `tail` | output file end | 0 | 2 |
 | `vi` | Vi[m] is an one of two powerhouse text editors in the Unix world, the other being EMACS | 0 | 1 |
-| `vim` | text editor | 0 | 0 |
+| `vim` | text editor | 0 | 39 |
 | `vimr` | VimR — Neovim GUI for macOS in Swift | 0 | 9 |
-| `wc` | count lines and words | 0 | 0 |
+| `wc` | count lines and words | 0 | 4 |
 | `xed` | Xcode text editor invocation tool | 0 | 7 |
 | `xxd` | Make a hexdump or do the reverse | 0 | 17 |
 | `zed` | A lightning-fast, collaborative code editor written in Rust | 0 | 4 |
@@ -406,29 +406,29 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | --- | --- | ---: | ---: |
 | `awk` | pattern scanning and processing | 0 | 3 |
 | `cut` | Cut out selected portions of each line of a file | 0 | 7 |
-| `diff` | compare files | 0 | 0 |
+| `diff` | compare files | 0 | 49 |
 | `dos2unix` | DOS to Unix file format converter | 0 | 37 |
-| `egrep` | search file contents | 0 | 7 |
-| `fd` | find entries | 0 | 0 |
+| `egrep` | search file contents | 0 | 44 |
+| `fd` | find entries | 0 | 22 |
 | `find` | Walk a file hierarchy | 0 | 24 |
 | `gawk` | pattern scanning and processing | 0 | 3 |
-| `grep` | search file contents | 0 | 7 |
+| `grep` | search file contents | 0 | 44 |
 | `iconv` | Character set conversion | 0 | 9 |
-| `jq` | JSON processor | 0 | 0 |
+| `jq` | JSON processor | 0 | 26 |
 | `pandoc` | A universal document converter | 0 | 89 |
-| `rg` | ripgrep search | 0 | 0 |
-| `sed` | stream editor | 0 | 0 |
+| `rg` | ripgrep search | 0 | 98 |
+| `sed` | stream editor | 22 | 10 |
 | `seq` | Print sequences of numbers. (Defaults to increments of 1) | 0 | 4 |
 | `sha1sum` | Print or check SHA1 (160-bit) checksums | 0 | 12 |
 | `shasum` | Print or Check SHA Checksums | 0 | 14 |
 | `shred` | Overwrite a file to hide its contents, and optionally delete it | 0 | 10 |
-| `sort` | sort lines | 0 | 0 |
+| `sort` | sort lines | 0 | 35 |
 | `split` | The split utility reads the given file and breaks it up into files of 1000 lines each (if no options are specified), leaving the file… | 0 | 5 |
 | `tee` | Duplicate standard input | 0 | 2 |
 | `tr` | Translate characters | 0 | 5 |
 | `truncate` | Shrink or extend the size of a file to the specified size | 0 | 6 |
 | `typos` | Source code spelling correction | 0 | 28 |
-| `uniq` | filter duplicate lines | 0 | 0 |
+| `uniq` | filter duplicate lines | 0 | 11 |
 | `unix2dos` | Unix to DOS text file format convertor | 0 | 37 |
 | `vale` | A syntax-aware linter for prose built with speed and extensibility in mind | 2 | 10 |
 | `xargs` | Execute a command with whitespace-delimited strings (from stdin) as arguments | 0 | 15 |
@@ -444,10 +444,10 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `elixir` | Elixir Language | 0 | 24 |
 | `gem` | Ruby package manager | 34 | 10 |
 | `hexo` | Command line interface for Hexo, a static site generator | 13 | 6 |
-| `just` | command runner | 0 | 3 |
+| `just` | command runner | 0 | 38 |
 | `laravel` | Laravel Installer | 3 | 7 |
 | `magento` | Open-source E-commerce | 0 | 0 |
-| `make` | build automation | 0 | 4 |
+| `make` | build automation | 0 | 26 |
 | `mix` | Build tool for Elixir | 3 | 2 |
 | `php` | Run the PHP interpreter | 0 | 0 |
 | `phpunit` | The PHPUnit is a command-line test runner that can be invoked through the phpunit command | 0 | 38 |
@@ -485,7 +485,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `codesign` | Create and manipulate code signatures | 0 | 27 |
 | `croc` | Croc is a tool that allows any two computers to simply and securely transfer files and folders | 3 | 20 |
 | `crontab` | Maintain crontab file for individual users | 0 | 4 |
-| `curl` | transfer data from URLs | 0 | 0 |
+| `curl` | transfer data from URLs | 0 | 225 |
 | `date` | Display or set date and time | 0 | 9 |
 | `dateseq` | Nifty command line date and time utilities; fast date calculations and conversion in the shell | 0 | 11 |
 | `dcli` | Dashlane CLI | 14 | 3 |
@@ -504,7 +504,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `dtm` | DevStream is an open-source DevOps toolchain manager | 12 | 2 |
 | `echo` | Write arguments to the standard output | 0 | 3 |
 | `eleventy` | Eleventy is a simpler static site generator | 0 | 12 |
-| `env` | print the environment | 0 | 0 |
+| `env` | print the environment | 0 | 6 |
 | `exec` | Replace the current shell with a program | 0 | 0 |
 | `export` | set environment variables | 0 | 0 |
 | `fastlane` | Fastlane is an open source platform aimed at simplifying Android and iOS deployment | 19 | 7 |
@@ -537,8 +537,8 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `julia` | The Julia Programming Language | 0 | 43 |
 | `kafkactl` | Command-line interface for Apache Kafka | 14 | 3 |
 | `kamal` | Deploy web apps anywhere | 0 | 0 |
-| `kill` | terminate processes | 0 | 3 |
-| `killall` | kill processes by name | 0 | 0 |
+| `kill` | terminate processes | 0 | 5 |
+| `killall` | kill processes by name | 0 | 43 |
 | `kitty` |  | 12 | 13 |
 | `klist` | Reads and displays the current tickets in the credential cache (also known as the ticket file) | 0 | 10 |
 | `kool` | Cloud and docker environments made easy | 15 | 2 |
@@ -548,7 +548,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `login` | Begin session on the system | 0 | 4 |
 | `lsblk` | List block devices | 0 | 28 |
 | `lsof` | List open files | 0 | 40 |
-| `man` | manual pages | 0 | 0 |
+| `man` | manual pages | 0 | 20 |
 | `meroxa` | The Meroxa CLI | 17 | 6 |
 | `mkdocs` | Project documentation with Markdown | 4 | 2 |
 | `mkfifo` | Make FIFOs (first-in, first-out) | 0 | 1 |
@@ -609,13 +609,13 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `su` |  | 0 | 4 |
 | `sudo` | Execute a command as the superuser or another user | 0 | 3 |
 | `sysctl` | Get or set kernel state | 0 | 12 |
-| `systemctl` | control systemd | 7 | 0 |
+| `systemctl` | control systemd | 68 | 50 |
 | `tac` | Concatenate and print files in reverse | 0 | 5 |
 | `tailcall` | TailCall CLI for managing and optimizing GraphQL configurations | 4 | 0 |
 | `tailwindcss` | Tailwindcss CLI tools | 2 | 10 |
 | `time` | Time how long a command takes! | 0 | 0 |
 | `tldr` | A simpler man page than the existing man page | 0 | 9 |
-| `tmux` | terminal multiplexer | 4 | 0 |
+| `tmux` | terminal multiplexer | 88 | 0 |
 | `tmuxinator` | Create and manage tmux sessions easily | 16 | 0 |
 | `top` | Display Linux tasks | 0 | 6 |
 | `traceroute` | Print the route packets take to network host | 0 | 25 |
@@ -625,14 +625,14 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `tuist` | Generate, build and test your Xcode projects. For more info please see https://docs.tuist.io/ | 10 | 1 |
 | `twilio` | Manage your Twilio resources from your terminal | 32 | 1 |
 | `uname` | Print operating system name | 0 | 7 |
-| `unset` | unset environment variables | 0 | 0 |
+| `unset` | unset environment variables | 0 | 1 |
 | `visudo` | Visudo edits the sudoers file, which defines the users and groups with administrator rights | 0 | 9 |
 | `vultr-cli` | Official command line interface for the Vultr API | 24 | 0 |
 | `wezterm` | Wez's Terminal Emulator | 13 | 5 |
-| `wget` | download files | 0 | 0 |
+| `wget` | download files | 0 | 116 |
 | `where` | For each name, indicate how it should be interpreted | 0 | 6 |
 | `whereis` | Locate the binary, source, and manual page files for a command | 0 | 8 |
-| `which` | locate a command | 0 | 0 |
+| `which` | locate a command | 0 | 2 |
 | `who` | Display who is logged in | 1 | 13 |
 | `wing` |  | 4 | 0 |
 | `wp` | WP-CLI is the command-line interface for WordPress | 43 | 0 |
