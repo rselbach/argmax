@@ -13,7 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rselbach/argmax/internal/completion"
 	"github.com/rselbach/argmax/internal/pty"
+	"github.com/rselbach/argmax/internal/shellcontrol"
+	"github.com/rselbach/argmax/internal/shellevents"
+	"github.com/rselbach/argmax/internal/shellintegration"
 	"github.com/rselbach/argmax/internal/shellselect"
 	"golang.org/x/sys/unix"
 )
@@ -33,10 +37,38 @@ type outerSession struct {
 	stopped bool
 }
 
-func isolateShellConfiguration(t *testing.T, directory string) {
+func isolateShellConfiguration(t *testing.T, directory string, kind shellselect.Kind) {
 	t.Helper()
-	for _, name := range []string{".bashrc", ".zshrc"} {
-		if err := os.WriteFile(filepath.Join(directory, name), nil, 0o600); err != nil {
+	script, err := shellintegration.Script(kind)
+	if err != nil {
+		t.Fatalf("shellintegration.Script(%s): %v", kind, err)
+	}
+	scriptName := ".argmax-integration"
+	if err := os.WriteFile(filepath.Join(directory, scriptName), []byte(script), 0o600); err != nil {
+		t.Fatalf("write isolated shell integration: %v", err)
+	}
+	for _, startup := range []struct {
+		path string
+	}{
+		{path: filepath.Join(directory, ".bashrc")},
+		{path: filepath.Join(directory, ".zshrc")},
+		{
+			path: filepath.Join(directory, "fish", "config.fish"),
+		},
+	} {
+		if err := os.MkdirAll(filepath.Dir(startup.path), 0o700); err != nil {
+			t.Fatalf("create isolated shell startup directory: %v", err)
+		}
+		contents := []byte(nil)
+		switch {
+		case kind == shellselect.Bash && filepath.Base(startup.path) == ".bashrc":
+			contents = []byte("source \"$HOME/" + scriptName + "\"\n")
+		case kind == shellselect.Zsh && filepath.Base(startup.path) == ".zshrc":
+			contents = []byte("source \"$ZDOTDIR/" + scriptName + "\"\n")
+		case kind == shellselect.Fish && filepath.Base(startup.path) == "config.fish":
+			contents = []byte("source \"$HOME/" + scriptName + "\"\n")
+		}
+		if err := os.WriteFile(startup.path, contents, 0o600); err != nil {
 			t.Fatalf("create isolated shell startup: %v", err)
 		}
 	}
@@ -199,7 +231,7 @@ func TestRealOuterPTYTransparentBytesShellsCwdAndNonzeroExit(t *testing.T) {
 				t.Skipf("%s is not installed", kind)
 			}
 			cwd := t.TempDir()
-			isolateShellConfiguration(t, cwd)
+			isolateShellConfiguration(t, cwd, kind)
 			session := startOuterSession(t, shell, cwd)
 			session.write(t, []byte("printf '%s%s<%s>\\n' ARGMAX_ CWD: \"$PWD\"; stty raw -echo; printf '%s%s' ARGMAX_ BYTES:; dd bs=5 count=1 2>/dev/null; exit 23\n"))
 			output := session.readUntil(t, []byte("ARGMAX_BYTES:"))
@@ -230,7 +262,7 @@ func TestRealOuterPTYResizeAndForegroundCtrlC(t *testing.T) {
 		t.Skip("bash is not installed")
 	}
 	cwd := t.TempDir()
-	isolateShellConfiguration(t, cwd)
+	isolateShellConfiguration(t, cwd, shellselect.Bash)
 	session := startOuterSession(t, shell, cwd)
 	session.write(t, []byte("printf '%s%s' INITIAL :; stty size; sleep 30\n"))
 	output := session.readUntil(t, []byte("INITIAL:31 97"))
@@ -265,7 +297,7 @@ func TestRealOuterPTYNativeSignalExitAndIntegrationDrain(t *testing.T) {
 	}
 	t.Run("integration drain", func(t *testing.T) {
 		cwd := t.TempDir()
-		isolateShellConfiguration(t, cwd)
+		isolateShellConfiguration(t, cwd, shellselect.Bash)
 		session := startOuterSession(t, shell, cwd)
 		session.write(t, []byte("dd if=/dev/zero bs=65536 count=32 >&3 2>/dev/null; printf '%s%s\\n' DRAIN ED; exit 0\n"))
 		session.readUntil(t, []byte("DRAINED"))
@@ -276,7 +308,7 @@ func TestRealOuterPTYNativeSignalExitAndIntegrationDrain(t *testing.T) {
 	})
 	t.Run("signal status", func(t *testing.T) {
 		cwd := t.TempDir()
-		isolateShellConfiguration(t, cwd)
+		isolateShellConfiguration(t, cwd, shellselect.Bash)
 		session := startOuterSession(t, shell, cwd)
 		session.write(t, []byte("exec /bin/sh -c 'kill -TERM $$'\n"))
 		result := session.wait(t)
@@ -293,7 +325,7 @@ func TestWrapperTerminationForwardsAndLeavesNoChild(t *testing.T) {
 		t.Skip("bash is not installed")
 	}
 	cwd := t.TempDir()
-	isolateShellConfiguration(t, cwd)
+	isolateShellConfiguration(t, cwd, shellselect.Bash)
 	session := startOuterSession(t, shell, cwd)
 	session.write(t, []byte("trap 'exit 42' TERM; printf '%s%s\\n' TERM_ READY\n"))
 	session.readUntil(t, []byte("TERM_READY"))
@@ -370,6 +402,234 @@ func TestTerminalRestoredAfterNormalErrorAndPanic(t *testing.T) {
 				t.Errorf("terminal local modes not restored: got %#x, want %#x", after.Lflag, original.Lflag)
 			}
 		})
+	}
+}
+
+func newTestController(t *testing.T, kind shellselect.Kind) *sessionController {
+	t.Helper()
+	controller, err := newSessionControllerForShell(kind, []byte(t.TempDir()))
+	if err != nil {
+		t.Fatalf("newSessionControllerForShell(%s): %v", kind, err)
+	}
+	t.Cleanup(func() {
+		if err := controller.reducer.Close(); err != nil {
+			t.Errorf("close reducer: %v", err)
+		}
+	})
+	return controller
+}
+
+func applyIntegrationWire(t *testing.T, controller *sessionController, wire []byte) {
+	t.Helper()
+	var applyErr error
+	controller.decoder.Push(wire, func(frame shellevents.DecodedFrame) {
+		if applyErr == nil {
+			applyErr = controller.applyFrame(frame)
+		}
+	})
+	if applyErr != nil {
+		t.Fatalf("apply integration wire: %v", applyErr)
+	}
+}
+
+func pendingDestinationBytes(pending *pendingWrites, destination writeDestination) []byte {
+	var result []byte
+	for _, write := range pending.writes {
+		if write.destination == destination {
+			result = append(result, write.bytes[write.written:]...)
+		}
+	}
+	return result
+}
+
+func TestControllerUsesExactInitialConfiguration(t *testing.T) {
+	cwd := []byte("/tmp/Greendale-\xff")
+	for _, tc := range []struct {
+		kind shellselect.Kind
+		want string
+	}{
+		{kind: shellselect.Bash, want: shellintegration.SyncProbeSequence},
+		{kind: shellselect.Zsh, want: shellintegration.SyncProbeSequence},
+		{kind: shellselect.Fish, want: shellintegration.FishSyncProbeSequence},
+	} {
+		t.Run(tc.kind.String(), func(t *testing.T) {
+			controller, err := newSessionControllerForShell(tc.kind, cwd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := controller.reducer.Close(); err != nil {
+					t.Errorf("close reducer: %v", err)
+				}
+			}()
+			if !bytes.Equal(controller.reducer.CWD(), cwd) {
+				t.Error("reducer did not preserve exact cwd bytes")
+			}
+			shell := controller.reducer.Shell()
+			if controller.decoder.Epoch() != shellevents.InitialStreamEpoch() ||
+				shell.Epoch() != shellevents.InitialStreamEpoch() {
+				t.Error("controller did not use the initial stream epoch")
+			}
+			if string(controller.syncProbeSequence) != tc.want {
+				t.Errorf("sync probe = %q, want %q", controller.syncProbeSequence, tc.want)
+			}
+		})
+	}
+}
+
+func TestPendingProbeResyncControlPrecedesWakeupAndCancelsSafely(t *testing.T) {
+	controller := newTestController(t, shellselect.Bash)
+	request, err := shellcontrol.NewProbeResyncRequestID(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.enqueueProbeResync(request); err != nil {
+		t.Fatal(err)
+	}
+	if len(controller.pending.writes) != 2 {
+		t.Fatalf("pending writes = %d, want 2", len(controller.pending.writes))
+	}
+	control := controller.pending.writes[0]
+	wakeup := controller.pending.writes[1]
+	if control.destination != writeControl || wakeup.destination != writePTY {
+		t.Fatalf("destinations = (%d, %d), want control then PTY", control.destination, wakeup.destination)
+	}
+	if !bytes.Equal(wakeup.bytes, []byte(shellintegration.SyncProbeSequence)) {
+		t.Errorf("wakeup = %q", wakeup.bytes)
+	}
+	if err := controller.pending.advanceFront(3); err != nil {
+		t.Fatal(err)
+	}
+	controller.pending.cancelProbeResync(request)
+	if len(controller.pending.writes) != 1 {
+		t.Fatalf("writes after partial cancellation = %d, want 1", len(controller.pending.writes))
+	}
+	remaining := controller.pending.writes[0]
+	if remaining.destination != writeControl || remaining.written != 3 || remaining.hasGroup {
+		t.Errorf("preserved write = %+v, want detached partial control", remaining)
+	}
+	if got := pendingDestinationBytes(&controller.pending, writePTY); len(got) != 0 {
+		t.Errorf("cancelled wakeup remains: %q", got)
+	}
+}
+
+func TestControllerInputBatchBoundariesRemainByteTransparent(t *testing.T) {
+	controller := newTestController(t, shellselect.Bash)
+	chunks := [][]byte{
+		{0x12},
+		{0x1b},
+		[]byte("[Z\xc3"),
+		append([]byte{0xa9}, bytes.Repeat([]byte("x"), 600)...),
+	}
+	var want []byte
+	for _, chunk := range chunks {
+		want = append(want, chunk...)
+		if err := controller.routeInput(chunk); err != nil {
+			t.Fatalf("route input: %v", err)
+		}
+	}
+	if err := controller.finishInput(); err != nil {
+		t.Fatalf("finish input: %v", err)
+	}
+	if got := pendingDestinationBytes(&controller.pending, writePTY); !bytes.Equal(got, want) {
+		t.Errorf("forwarded input = %q, want %q", got, want)
+	}
+	if got := pendingDestinationBytes(&controller.pending, writeControl); len(got) != 0 {
+		t.Errorf("unexpected control bytes in transparent fallback: %q", got)
+	}
+}
+
+func TestControllerMalformedIntegrationRecoversAuthoritativeSnapshot(t *testing.T) {
+	controller := newTestController(t, shellselect.Bash)
+	applyIntegrationWire(t, controller, []byte("not-an-event\x00"))
+	applyIntegrationWire(t, controller, []byte("capability:sync-probe:7\x00prompt-ready\x00"))
+	if err := controller.routeInput([]byte("é")); err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingDestinationBytes(&controller.pending, writePTY); !bytes.HasSuffix(got, []byte(shellintegration.SyncProbeSequence)) {
+		t.Fatalf("probe wakeup missing after recovery: %q", got)
+	}
+	controller.pending = pendingWrites{}
+	applyIntegrationWire(t, controller, []byte("probe-buffer:b:8:2:é\x00"))
+
+	shell := controller.reducer.Shell()
+	if shell.Capability() != shellevents.BufferSyncProbe {
+		t.Errorf("capability = %d, want probe", shell.Capability())
+	}
+	snapshot, ok := shell.Buffer()
+	if !ok || !bytes.Equal(snapshot.Bytes(), []byte("é")) || snapshot.Cursor() != 2 {
+		t.Errorf("authoritative snapshot = (%v, %t)", snapshot, ok)
+	}
+}
+
+func TestControllerNoProviderQueryUnicodeMultilineReplacementAndAcknowledgment(t *testing.T) {
+	controller := newTestController(t, shellselect.Bash)
+	applyIntegrationWire(t, controller, []byte("capability:sync-probe:0\x00prompt-ready\x00"))
+	if err := controller.routeInput([]byte("tail")); err != nil {
+		t.Fatal(err)
+	}
+	controller.pending = pendingWrites{}
+	applyIntegrationWire(t, controller, []byte("probe-buffer:b:1:4:tail\x00"))
+	query, ok := controller.reducer.ActiveQuery()
+	if !ok {
+		t.Fatal("authoritative nonempty snapshot did not start a no-provider query")
+	}
+
+	inserted := "Troy 🏫\nGreendale: "
+	want := inserted + "tail"
+	edit, err := completion.NewTextEdit(0, 0, inserted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.applyEffects(
+		controller.reducer.ApplyAliasExpansion(query.Generation(), edit),
+	); err != nil {
+		t.Fatalf("apply replacement effects: %v", err)
+	}
+	if len(controller.pending.writes) != 2 ||
+		controller.pending.writes[0].destination != writeControl ||
+		controller.pending.writes[1].destination != writePTY {
+		t.Fatalf("replacement writes = %+v, want control then wakeup", controller.pending.writes)
+	}
+	if got := controller.pending.writes[1].bytes; !bytes.Equal(got, []byte(shellintegration.SyncProbeSequence)) {
+		t.Errorf("replacement PTY bytes = %q, want only sync wakeup", got)
+	}
+
+	var frames []shellcontrol.DecodedControlFrame
+	decoder := shellcontrol.NewDecoder()
+	decoder.Push(controller.pending.writes[0].bytes, func(frame shellcontrol.DecodedControlFrame) {
+		frames = append(frames, frame)
+	})
+	if len(frames) != 1 {
+		t.Fatalf("decoded replacement frames = %d, want 1", len(frames))
+	}
+	control, ok := frames[0].Replacement()
+	if !ok || control.Buffer() != want || control.Cursor() != len(want) ||
+		control.RequestID().Value() != 2 {
+		t.Errorf("replacement control = (%v, %t)", control, ok)
+	}
+
+	controller.pending = pendingWrites{}
+	ack := []byte(fmt.Sprintf("probe-buffer:b:2:%d:%s\x00", len(want), want))
+	applyIntegrationWire(t, controller, ack)
+	shell := controller.reducer.Shell()
+	snapshot, ok := shell.Buffer()
+	if !ok || string(snapshot.Bytes()) != want || snapshot.Cursor() != len(want) {
+		t.Errorf("acknowledged snapshot = (%v, %t)", snapshot, ok)
+	}
+	if controller.reducer.ReplacementPending() {
+		t.Error("replacement remained pending after authoritative acknowledgment")
+	}
+}
+
+func TestPendingWritesEnforceBoundWithoutMutation(t *testing.T) {
+	var pending pendingWrites
+	oversized := make([]byte, maxPendingWriteBytes+1)
+	if err := pending.push(writePTY, oversized); err == nil {
+		t.Fatal("oversized pending write succeeded")
+	}
+	if !pending.empty() || pending.bytes != 0 {
+		t.Errorf("rejected queue = (%d writes, %d bytes)", len(pending.writes), pending.bytes)
 	}
 }
 

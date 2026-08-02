@@ -688,7 +688,7 @@ func (session *Session) signalTargets(groups processGroups, signal syscall.Signa
 		if group == 0 {
 			continue
 		}
-		if err := unix.Kill(-group, signal); err != nil && !errors.Is(err, unix.ESRCH) {
+		if err := unix.Kill(-group, signal); err != nil && !ignorableProcessGroupError(err) {
 			result = errors.Join(result, err)
 		}
 	}
@@ -718,7 +718,7 @@ func groupsAlive(groups processGroups) bool {
 		if group == 0 {
 			continue
 		}
-		if err := unix.Kill(-group, 0); !errors.Is(err, unix.ESRCH) {
+		if err := unix.Kill(-group, 0); !ignorableProcessGroupError(err) {
 			return true
 		}
 	}

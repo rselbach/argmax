@@ -11,14 +11,18 @@ import (
 	"strings"
 
 	"github.com/rselbach/argmax/internal/pty"
+	"github.com/rselbach/argmax/internal/shellintegration"
 	"github.com/rselbach/argmax/internal/shellselect"
 	"github.com/rselbach/argmax/internal/transparuntime"
 	"golang.org/x/sys/unix"
 )
 
-const usage = `Usage: argmax-go [--shell bash|zsh|fish]
+const usage = `Usage:
+  argmax-go [--shell bash|zsh|fish]
+  argmax-go init bash|zsh|fish
 
-Run one supported interactive shell through a byte-transparent pseudoterminal.
+Run one supported interactive shell through a byte-transparent pseudoterminal,
+or print sourceable shell integration code.
 
 Options:
   --shell SHELL  select bash, zsh, or fish
@@ -37,17 +41,29 @@ func main() {
 }
 
 func execute(arguments []string) (pty.ExitStatus, int) {
-	kind, help, err := parseArguments(arguments)
+	parsed, err := parseArguments(arguments)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "argmax-go:", err)
 		fmt.Fprint(os.Stderr, usage)
 		return pty.ExitStatus{}, 2
 	}
-	if help {
+	if parsed.help {
 		fmt.Print(usage)
 		return pty.ExitStatus{}, 0
 	}
-	request, err := shellselect.FromProcess(kind)
+	if parsed.initShell != nil {
+		script, err := shellintegration.Script(*parsed.initShell)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "argmax-go:", err)
+			return pty.ExitStatus{}, 2
+		}
+		if _, err := fmt.Fprint(os.Stdout, script); err != nil {
+			fmt.Fprintln(os.Stderr, "argmax-go: write shell integration:", err)
+			return pty.ExitStatus{}, 1
+		}
+		return pty.ExitStatus{}, 0
+	}
+	request, err := shellselect.FromProcess(parsed.interactiveShell)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "argmax-go:", err)
 		return pty.ExitStatus{}, 2
@@ -82,40 +98,58 @@ func execute(arguments []string) (pty.ExitStatus, int) {
 	return status, code
 }
 
-func parseArguments(arguments []string) (*shellselect.Kind, bool, error) {
-	var selected *shellselect.Kind
+type parsedArguments struct {
+	interactiveShell *shellselect.Kind
+	initShell        *shellselect.Kind
+	help             bool
+}
+
+func parseArguments(arguments []string) (parsedArguments, error) {
+	if len(arguments) > 0 && arguments[0] == "init" {
+		if len(arguments) != 2 {
+			return parsedArguments{}, errors.New("init requires exactly one shell")
+		}
+		kind, err := shellselect.ParseKind(arguments[1])
+		if err != nil {
+			return parsedArguments{}, err
+		}
+		return parsedArguments{initShell: &kind}, nil
+	}
+
+	var parsed parsedArguments
 	for index := 0; index < len(arguments); index++ {
 		argument := arguments[index]
 		switch {
 		case argument == "-h" || argument == "--help":
-			return selected, true, nil
+			parsed.help = true
+			return parsed, nil
 		case argument == "--shell":
 			index++
 			if index == len(arguments) {
-				return nil, false, errors.New("--shell requires a value")
+				return parsedArguments{}, errors.New("--shell requires a value")
 			}
 			kind, err := shellselect.ParseKind(arguments[index])
 			if err != nil {
-				return nil, false, err
+				return parsedArguments{}, err
 			}
-			if selected != nil {
-				return nil, false, errors.New("--shell may be specified only once")
+			if parsed.interactiveShell != nil {
+				return parsedArguments{}, errors.New("--shell may be specified only once")
 			}
-			selected = &kind
+			parsed.interactiveShell = &kind
 		case strings.HasPrefix(argument, "--shell="):
 			kind, err := shellselect.ParseKind(strings.TrimPrefix(argument, "--shell="))
 			if err != nil {
-				return nil, false, err
+				return parsedArguments{}, err
 			}
-			if selected != nil {
-				return nil, false, errors.New("--shell may be specified only once")
+			if parsed.interactiveShell != nil {
+				return parsedArguments{}, errors.New("--shell may be specified only once")
 			}
-			selected = &kind
+			parsed.interactiveShell = &kind
 		case strings.HasPrefix(argument, "-"):
-			return nil, false, fmt.Errorf("unknown option %q", argument)
+			return parsedArguments{}, fmt.Errorf("unknown option %q", argument)
 		default:
-			return nil, false, fmt.Errorf("interactive mode does not accept argument %q", argument)
+			return parsedArguments{}, fmt.Errorf("interactive mode does not accept argument %q", argument)
 		}
 	}
-	return selected, false, nil
+	return parsed, nil
 }
