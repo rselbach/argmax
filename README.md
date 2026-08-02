@@ -1,146 +1,141 @@
 # argmax
 
-argmax is a local, terminal-native command assistant for Bash, Zsh, and Fish. It
-runs the selected shell inside a PTY, forwards input immediately, and renders
-inert command suggestions from its built-in catalog and local context. Optional
-AI completion is disabled by default.
+Editor-style command completion for your real terminal.
 
-Release binaries are published for Linux and macOS on 64-bit x86 and Arm:
+`argmax` wraps your interactive shell — Bash, Zsh, or Fish — in a lightweight
+PTY session and gives it an inline completion menu, ghost-text suggestions,
+fuzzy history search, and context-aware ranking. Suggestions appear while you
+type; nothing runs until you press Enter. It works in local terminals, SSH,
+tmux, and Linux virtual terminals, with no account, no daemon, and no
+telemetry.
 
-| Platform | Release asset |
-| --- | --- |
-| Linux x86_64 | `argmax-linux-amd64` |
-| Linux aarch64 | `argmax-linux-arm64` |
-| macOS x86_64 | `argmax-macos-amd64` |
-| macOS arm64 | `argmax-macos-arm64` |
+```
+% git che
+    ❯  checkout    switch branches or restore files
+       cherry-pick apply existing commits
+    tab insert · ctrl+r mode · shift+tab hide
+```
 
-An interactive session requires an installed Bash, Zsh, or Fish executable, a
-TTY, and a terminal supporting common ANSI/VT sequences. For SSH sessions,
-install argmax on the remote host.
+- **One ranked surface** — commands, subcommands, flags, files, shell and
+  Git/Cargo aliases, history, and live values (branches, containers, SSH
+  hosts, package scripts, processes) in a single menu.
+- **567-command catalog** — bundled specifications with nested subcommands
+  and options, plus automatic [Cobra](https://cobra.dev) `__complete`
+  inference for CLIs it doesn't know.
+- **Learns your workflow** — successful commands earn frecency in a local
+  SQLite database, command sequences learn transitions (`git add` →
+  `git commit`), and workspace signatures (go.mod, package.json, …) boost
+  what's relevant to the repository you're in.
+- **Local by default** — completion, history, ranking, and learning all work
+  offline. AI completion exists but is off until you configure a provider,
+  local (Ollama) or remote (any OpenAI-compatible endpoint).
 
 ## Install
 
-Install the latest stable release with one command:
+From a published release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh \
-  | sh
+# verified install script (checksum-checked)
+curl -fsSL https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh | bash
+
+# Homebrew
+brew install rselbach/tap/argmax
+
+# Go toolchain
+go install github.com/rselbach/argmax/cmd/argmax@latest
 ```
 
-The installer selects the matching asset, downloads its `.sha256` file, verifies
-the binary, validates the version reported by the executable, and publishes it
-atomically. It uses `/usr/local/bin` when that directory is writable and safe;
-otherwise it uses `$HOME/.local/bin`. Follow the exact PATH and `argmax setup`
-commands it prints, then open a new terminal.
-
-To inspect the installer before running it:
+`.deb` and `.rpm` packages ship with each release, and `packaging/` carries
+an AUR PKGBUILD and a Nix flake. From source:
 
 ```sh
-curl -fsSL -o argmax-install.sh \
-  https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh
-less argmax-install.sh
-sh argmax-install.sh
-rm argmax-install.sh
+git clone https://github.com/rselbach/argmax && cd argmax
+go build -o argmax ./cmd/argmax   # Go 1.26+
 ```
 
-To select an absolute directory instead:
-
-```sh
-ARGMAX_INSTALL_DIR="$HOME/.local/bin" sh argmax-install.sh
-```
-
-The installer does not edit shell configuration itself.
-
-Then install one marked shell hook and create the default config if it is absent:
+## Quick start
 
 ```sh
 argmax setup
 ```
 
-Pass `bash`, `zsh`, or `fish` when automatic detection is not appropriate:
+Setup detects your shell, installs a clearly marked autostart block in its
+configuration file, and creates a commented config. Restart the terminal (or
+source the reported file) and your shell now runs inside an argmax session.
 
-```sh
-argmax setup zsh
-```
+You can also try it without installing anything: running `argmax` directly
+wraps a shell for just that session (with slightly reduced accuracy until
+the shell hooks are installed).
 
-Open a new terminal, or source the generated integration manually as described
-in the [lifecycle guide](docs/lifecycle.md#shell-setup).
+## Using it
 
-### Verify a release artifact manually
-
-Download the platform asset and its identically named `.sha256` file into the
-same directory. On Linux:
-
-```sh
-sha256sum --check argmax-linux-amd64.sha256
-chmod 0755 argmax-linux-amd64
-./argmax-linux-amd64 version
-```
-
-On macOS:
-
-```sh
-shasum -a 256 --check argmax-macos-arm64.sha256
-chmod 0755 argmax-macos-arm64
-./argmax-macos-arm64 version
-```
-
-Use the asset matching the host table above. Confirm that the printed semantic
-version matches the release before moving the executable to a directory on
-`PATH` under the name `argmax`.
-
-## Use
-
-Run `argmax` in an interactive terminal. The defaults are:
-
-- `Ctrl+R`: toggle specification and history modes.
-- `Shift+Tab`: toggle the session menu.
-- `Up`/`Down`: move through suggestions; on an empty prompt they can enter
-  history navigation.
-- `Tab`: insert the selected suggestion without executing it.
-- `Right`: accept visible ghost text.
-- `Escape`: dismiss transient argmax UI.
-- `Enter`: execute only the current shell buffer.
-
-The full built-in inventory is in the [generated command catalog](docs/commands.md).
-
-## CLI
-
-| Command | Effect |
+| Key | Action |
 | --- | --- |
-| `argmax` | Start an interactive wrapped shell. |
-| `argmax --shell <bash\|zsh\|fish>` | Override the shell for this session. |
-| `argmax --debug` | Start with private diagnostic logging. |
-| `argmax init <bash\|zsh\|fish>` | Print sourceable integration code to standard output. |
-| `argmax setup [bash\|zsh\|fish]` | Install one idempotent shell hook and initialize config. |
-| `argmax config init` | Create the commented default config if absent. |
-| `argmax config show` | Print fully resolved, credential-redacted settings. |
-| `argmax reload` | Reload configuration in the active argmax session. |
-| `argmax version` | Print the running semantic version. |
-| `argmax update` | Check, verify, and atomically install an available release. |
-| `argmax crash-log` | Print the newest private crash-report path. |
-| `argmax crash-log --clear` | Remove argmax crash reports. |
-| `argmax uninstall` | Remove managed hooks, the running binary, and argmax local data. |
+| type | suggestions appear; ghost text shows the best completion's suffix |
+| `Tab` | insert the highlighted suggestion |
+| `→` (at end of line) | accept just the ghost suffix |
+| `↑` / `↓` | navigate the menu; on an empty prompt, open recent history |
+| `Ctrl+R` | toggle between spec and history mode |
+| `Shift+Tab` | hide/show suggestions for this session |
+| `Esc` | dismiss the menu until you edit again |
+| `Enter` | run the line (or a deliberately selected suggestion) |
 
-`--shell` and `--debug` apply only when starting an interactive session.
-Subcommand errors go to standard error and return a non-zero status.
+History mode searches your shell history plus everything typed this session,
+with exact, prefix, substring, and fuzzy tiers — and it finds commands by
+alias or expansion interchangeably (`gco` matches `git checkout` history).
 
-## Documentation
+## Configuration
 
-- [User guide](docs/README.md)
-- [Configuration and live reload](docs/configuration.md)
-- [AI, privacy, and security](docs/privacy.md)
-- [Install, update, migration, recovery, rollback, and removal](docs/lifecycle.md)
-- [Built-in command catalog](docs/commands.md)
+Config lives at `~/.config/argmax/config.toml` (XDG-aware), fully commented
+by `argmax config init`. Most settings — style, limits, keybindings, AI —
+apply live when the file changes; `argmax config show` prints the resolved
+values. Keybindings accept `ctrl+<letter>`, `tab`, `shift+tab`, arrows, or a
+single character.
 
-## Build from source
+### AI completion (opt-in)
 
-argmax requires Rust 1.85 or newer.
+```toml
+[ai]
+enabled = true
+provider = "ollama"
 
-```sh
-cargo build --locked --release
-./target/release/argmax version
+[ai.providers.ollama]
+inherited_from = "openai"
+endpoint = "http://localhost:11434/v1"
+model = "qwen2.5-coder"
 ```
 
-Building from source creates the executable only; run `argmax setup` after
-placing it on `PATH`.
+Any OpenAI-compatible endpoint works; `api_key_env` is the recommended
+credential mechanism for cloud providers. Requests are debounced,
+rate-limited, and canceled the moment you keep typing. A suggestion is never
+executed automatically. Before enabling a cloud provider, know what a
+request may contain: your current command line and working directory, recent
+commands and exit status, visible file names, workspace signatures, Git
+branch names/short status/staged diff, and bounded `--help` output — never
+environment-variable values, file contents, unstaged diffs, or credentials.
+
+## Privacy
+
+Everything argmax learns stays on your machine: `~/.local/share/argmax`
+holds the ranking database and state (mode 0600/0700), and caches are
+disposable. There is no telemetry, no account, and no network traffic except
+the release check (configurable in `[updater]`) and AI when you enable it.
+`argmax uninstall` removes hooks, state, and binaries.
+
+## Development
+
+```sh
+just check          # fmt + lint + race tests
+just bench          # performance benchmarks
+just docs           # regenerate docs/commands.md from the registry
+```
+
+The bundled catalog is generated from the MIT-licensed
+[Fig autocomplete](https://github.com/withfig/autocomplete) corpus by
+`tools/figexport` and `tools/cataloggen`; see `docs/commands.md` for the full
+command list and `packaging/README.md` for release channels.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Bundled completion data derived from Fig
+autocomplete is used under its MIT license; see [NOTICE](NOTICE).
