@@ -1,80 +1,48 @@
 name: CI
 
 on:
-  pull_request:
   push:
-    branches:
-      - main
-
-permissions:
-  contents: read
+    branches: [main]
+  pull_request:
 
 jobs:
   test:
-    name: ${{ matrix.runner }} / Rust 1.85
     strategy:
-      fail-fast: false
       matrix:
-        runner:
-          - ubuntu-24.04
-          - macos-15
-          - macos-15-intel
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          persist-credentials: false
-      - name: Install shell test dependencies on Linux
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bash expect fish shellcheck zsh
-      - name: Install shell test dependencies on macOS
-        if: runner.os == 'macOS'
-        run: brew install bash expect fish shellcheck
-      - name: Install Rust 1.85
+          go-version-file: go.mod
+      - name: Formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Tests (race)
+        run: go test -race ./...
+      - name: Benchmarks compile and run once
+        run: go test -run NONE -bench . -benchtime 1x ./...
+      - name: Tools build
         run: |
-          rustup toolchain install 1.85.0 --profile minimal \
-            --component clippy --component rustfmt
-          rustup override set 1.85.0
-      - name: Check formatting and generated catalog
-        run: |
-          cargo fmt --all -- --check
-          cargo run --example generate_catalog -- --check
-      - name: Check shell scripts
-        run: |
-          shellcheck -s sh scripts/*.sh tests/*.sh
-          tests/installer.sh
-          tests/release-packaging.sh
-      - name: Lint all Rust targets
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Test debug build
-        run: cargo test --all-targets --all-features
-      - name: Test release library
-        run: cargo test --release --lib --all-features
-      - name: Check documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps --all-features
+          go build ./tools/cataloggen ./tools/docgen
+          cd tools/figexport && go build ./...
 
-  linux-arm:
-    name: ubuntu-24.04-arm / Rust 1.85
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
+  lint:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          persist-credentials: false
-      - name: Install shell test dependencies
-        run: sudo apt-get update && sudo apt-get install -y bash expect fish shellcheck zsh
-      - name: Install Rust 1.85
-        run: |
-          rustup toolchain install 1.85.0 --profile minimal \
-            --component clippy --component rustfmt
-          rustup override set 1.85.0
-      - name: Check and test
-        run: |
-          cargo clippy --all-targets --all-features -- -D warnings
-          cargo test --all-targets --all-features
-          shellcheck -s sh scripts/*.sh tests/*.sh
-          tests/installer.sh
-          tests/release-packaging.sh
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck
+        run: shellcheck scripts/install.sh scripts/nfpm-preremove.sh

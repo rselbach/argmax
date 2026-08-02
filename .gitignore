@@ -1,2 +1,20 @@
-target/
-PRD.md
+# Project-private documents
+argmax-prd.md
+
+# Built binaries (justfile and per-tool go build)
+/argmax
+/tools/figexport/figexport
+/tools/cataloggen/cataloggen
+/tools/docgen/docgen
+
+# Release and packaging output
+/dist/
+/result
+
+# Go test and profiling artifacts
+*.test
+coverage.out
+*.prof
+
+# Editor and OS noise
+.DS_Store

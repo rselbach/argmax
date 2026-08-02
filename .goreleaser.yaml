@@ -1,0 +1,75 @@
+# goreleaser configuration for argmax.
+#
+# Archive and checksum names must stay in sync with internal/update, which
+# downloads "argmax_<os>_<arch>.tar.gz" and verifies it against
+# "checksums.txt".
+version: 2
+project_name: argmax
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: argmax
+    main: ./cmd/argmax
+    binary: argmax
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: tarballs
+    formats: [tar.gz]
+    name_template: "argmax_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE*
+      - NOTICE
+      - README*
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: dev
+
+release:
+  # Nightly tags such as v1.4.0-nightly.20260801 publish as prereleases,
+  # which the stable update channel ignores.
+  prerelease: auto
+
+nfpms:
+  - id: packages
+    package_name: argmax
+    formats: [deb, rpm]
+    vendor: Roberto Selbach
+    homepage: https://github.com/rselbach/argmax
+    maintainer: Roberto Selbach <roberto.selbach@gmail.com>
+    description: Terminal-resident command completion and prediction
+    license: MIT
+    bindir: /usr/bin
+    scripts:
+      preremove: scripts/nfpm-preremove.sh
+
+brews:
+  - name: argmax
+    repository:
+      owner: rselbach
+      name: homebrew-tap
+    homepage: https://github.com/rselbach/argmax
+    description: Terminal-resident command completion and prediction
+    license: MIT
+    install: |
+      bin.install "argmax"
+    caveats: |
+      Run "argmax setup" to install shell integration, and
+      "argmax uninstall" before removing the package.

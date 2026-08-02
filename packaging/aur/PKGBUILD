@@ -1,0 +1,28 @@
+# Maintainer: Roberto Selbach <roberto.selbach@gmail.com>
+# AUR package for argmax. Update pkgver and checksums per release; the
+# release tarballs and checksums.txt come from GitHub releases.
+pkgname=argmax
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Terminal-resident command completion and prediction"
+arch=('x86_64' 'aarch64')
+url="https://github.com/rselbach/argmax"
+license=('MIT')
+makedepends=('go>=1.26')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP') # replace with the release source checksum
+
+build() {
+  cd "${pkgname}-${pkgver}"
+  export CGO_ENABLED=0
+  go build -trimpath \
+    -ldflags "-s -w -X main.version=${pkgver}" \
+    -o argmax ./cmd/argmax
+}
+
+package() {
+  cd "${pkgname}-${pkgver}"
+  install -Dm755 argmax "${pkgdir}/usr/bin/argmax"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 NOTICE "${pkgdir}/usr/share/licenses/${pkgname}/NOTICE"
+}

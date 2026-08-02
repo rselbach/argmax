@@ -2,180 +2,27 @@ name: Release
 
 on:
   push:
-    tags:
-      - v*
-  workflow_dispatch:
-    inputs:
-      version:
-        description: Semantic nightly version, such as 0.1.0-nightly.20260729
-        required: true
-        type: string
+    tags: ["v*"]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
-    name: Build ${{ matrix.asset }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-            asset: argmax-linux-amd64
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-            asset: argmax-linux-arm64
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            asset: argmax-macos-amd64
-          - runner: macos-15
-            target: aarch64-apple-darwin
-            asset: argmax-macos-arm64
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+  goreleaser:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@v4
         with:
-          persist-credentials: false
-      - name: Install Linux static-link tools
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: Install Rust 1.85 target
-        run: |
-          rustup toolchain install 1.85.0 --profile minimal \
-            --target '${{ matrix.target }}'
-          rustup override set 1.85.0
-      - name: Resolve release version
-        id: release
-        shell: bash
-        env:
-          DISPATCH_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          is_semantic_version() {
-            printf '%s\n' "$1" | LC_ALL=C awk '
-              NR != 1 { exit 1 }
-              $0 !~ /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/ {
-                exit 1
-              }
-              {
-                semantic = $0
-                sub(/\+.*/, "", semantic)
-                core = semantic
-                sub(/-.*/, "", core)
-                count = split(core, numbers, ".")
-                if (count != 3) { exit 1 }
-                for (part = 1; part <= count; part++) {
-                  if (length(numbers[part]) > 1 && substr(numbers[part], 1, 1) == "0") {
-                    exit 1
-                  }
-                }
-                if (length(semantic) > length(core)) {
-                  prerelease = substr(semantic, length(core) + 2)
-                  count = split(prerelease, identifiers, ".")
-                  for (part = 1; part <= count; part++) {
-                    if (identifiers[part] ~ /^[0-9]+$/ \
-                        && length(identifiers[part]) > 1 \
-                        && substr(identifiers[part], 1, 1) == "0") {
-                      exit 1
-                    }
-                  }
-                }
-                valid = 1
-              }
-              END { if (!valid) { exit 1 } }
-            '
-          }
-          if [[ ${GITHUB_REF_TYPE} == tag ]]; then
-            [[ ${GITHUB_REF_NAME} == v* ]] || {
-              printf 'stable release tags must start with v\n' >&2
-              exit 1
-            }
-            version=${GITHUB_REF_NAME#v}
-          else
-            version=${DISPATCH_VERSION}
-          fi
-          is_semantic_version "${version}" || {
-            printf 'release version is not strict semantic versioning: %s\n' \
-              "${version}" >&2
-            exit 1
-          }
-          precedence=${version%%+*}
-          if [[ ${GITHUB_REF_TYPE} == tag ]]; then
-            [[ ${precedence} != *-* ]] || {
-              printf 'stable release tags cannot contain a prerelease version\n' >&2
-              exit 1
-            }
-          else
-            [[ ${precedence} == *-* ]] || {
-              printf 'nightly releases require a prerelease version\n' >&2
-              exit 1
-            }
-          fi
-          printf 'version=%s\n' "${version}" >>"${GITHUB_OUTPUT}"
-      - name: Build release executable
-        env:
-          ARGMAX_BUILD_VERSION: ${{ steps.release.outputs.version }}
-        run: cargo build --locked --release --target '${{ matrix.target }}'
-      - name: Package and checksum executable
-        env:
-          RELEASE_ASSET: ${{ matrix.asset }}
-          RELEASE_TARGET: ${{ matrix.target }}
-          RELEASE_VERSION: ${{ steps.release.outputs.version }}
-          RELEASE_OUTPUT: /tmp/argmax-release-${{ github.run_id }}
-        run: |
-          scripts/package-release.sh \
-            "${RELEASE_TARGET}" \
-            "${RELEASE_ASSET}" \
-            "${RELEASE_VERSION}" \
-            "${RELEASE_OUTPUT}"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
         with:
-          name: ${{ matrix.asset }}
-          path: /tmp/argmax-release-${{ github.run_id }}/*
-          if-no-files-found: error
-          retention-days: 7
-
-  publish:
-    name: Publish verified assets
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      GH_REPO: ${{ github.repository }}
-    concurrency:
-      group: argmax-release-publish
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
         with:
-          path: artifacts
-      - name: Publish stable tag
-        if: github.ref_type == 'tag'
+          version: "~> v2"
+          args: release --clean
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${GITHUB_REF_NAME}" artifacts/*/* \
-            --verify-tag --title "${GITHUB_REF_NAME}" --generate-notes
-      - name: Publish rolling nightly
-        if: github.ref_type != 'tag'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NIGHTLY_VERSION: ${{ inputs.version }}
-        run: |
-          if gh release view nightly >/dev/null 2>&1; then
-            gh release upload nightly artifacts/*/* --clobber
-            gh release edit nightly --prerelease \
-              --title "argmax nightly ${NIGHTLY_VERSION}"
-            gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly" \
-              -f sha="${GITHUB_SHA}" -F force=true >/dev/null
-          else
-            gh release create nightly artifacts/*/* --prerelease \
-              --target "${GITHUB_SHA}" \
-              --title "argmax nightly ${NIGHTLY_VERSION}"
-          fi
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Homebrew tap pushes need a token with access to
+          # rselbach/homebrew-tap; omit to skip the tap update.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
