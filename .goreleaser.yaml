@@ -1,8 +1,8 @@
 # goreleaser configuration for argmax.
 #
-# Archive and checksum names must stay in sync with internal/update, which
+# Archive and checksum names must stay in sync with internal/updater, which
 # downloads "argmax_<os>_<arch>.tar.gz" and verifies it against
-# "checksums.txt".
+# "checksums.txt" (scripts/install.sh uses the same names).
 version: 2
 project_name: argmax
 
@@ -60,7 +60,7 @@ nfpms:
     scripts:
       preremove: scripts/nfpm-preremove.sh
 
-brews:
+homebrew_casks:
   - name: argmax
     repository:
       owner: rselbach
@@ -68,8 +68,22 @@ brews:
     homepage: https://github.com/rselbach/argmax
     description: Terminal-resident command completion and prediction
     license: MIT
-    install: |
-      bin.install "argmax"
+    # Only attempt the tap push when the token secret is configured,
+    # so releases without it stay green.
+    skip_upload: "{{ if envOrDefault \"HOMEBREW_TAP_GITHUB_TOKEN\" \"\" }}false{{ else }}true{{ end }}"
+    binaries:
+      - argmax
+    hooks:
+      post:
+        # The binary is not code-signed; remove the quarantine attribute on
+        # macOS or Gatekeeper reports it as damaged. Visible in the cask.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/argmax"]
+          end
     caveats: |
       Run "argmax setup" to install shell integration, and
       "argmax uninstall" before removing the package.
+      The binary is unsigned; the cask removes the quarantine attribute
+      on install (shown above) so macOS will run it.
+

@@ -1,19 +1,183 @@
-// Package config loads, validates, and hot-reloads the argmax TOML
-// configuration, applying compiled defaults, file values, environment
-// overrides, and CLI flags in that order of precedence.
+// Package config implements argmax configuration loading, validation,
+// environment overrides, and platform paths (PRD 9.13, 9.15).
 package config
 
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
+	"path/filepath"
+	"runtime"
 	"time"
-
-	"github.com/BurntSushi/toml"
-
-	"github.com/rselbach/argmax/internal/paths"
 )
+
+// CurrentVersion is the supported configuration schema version.
+const CurrentVersion = 1
+
+// Paths resolves the platform/XDG filesystem layout.
+type Paths struct {
+	ConfigFile string
+	DataDir    string
+	StateFile  string
+	DBFile     string
+	CacheDir   string
+	LogFile    string
+	CrashesDir string
+}
+
+// ResolvePaths computes the filesystem layout (PRD 9.15).
+func ResolvePaths() Paths {
+	home, _ := os.UserHomeDir()
+
+	configBase := os.Getenv("XDG_CONFIG_HOME")
+	if configBase == "" {
+		if runtime.GOOS == "darwin" {
+			configBase = filepath.Join(home, "Library", "Application Support")
+		} else {
+			configBase = filepath.Join(home, ".config")
+		}
+	}
+
+	dataBase := os.Getenv("XDG_DATA_HOME")
+	if dataBase == "" {
+		dataBase = filepath.Join(home, ".local", "share")
+	}
+
+	cacheBase := os.Getenv("XDG_CACHE_HOME")
+	if cacheBase == "" {
+		if runtime.GOOS == "darwin" {
+			cacheBase = filepath.Join(home, "Library", "Caches")
+		} else {
+			cacheBase = filepath.Join(home, ".cache")
+		}
+	}
+
+	dataDir := filepath.Join(dataBase, "argmax")
+	cacheDir := filepath.Join(cacheBase, "argmax")
+	return Paths{
+		ConfigFile: filepath.Join(configBase, "argmax", "config.toml"),
+		DataDir:    dataDir,
+		StateFile:  filepath.Join(dataDir, "state.toml"),
+		DBFile:     filepath.Join(dataDir, "history.db"),
+		CacheDir:   cacheDir,
+		LogFile:    filepath.Join(cacheDir, "argmax.log"),
+		CrashesDir: filepath.Join(cacheDir, "crashes"),
+	}
+}
+
+// EnsureDirs creates the data and cache directories with private permissions.
+func (p Paths) EnsureDirs() error {
+	for _, dir := range []string{p.DataDir, p.CacheDir, p.CrashesDir, filepath.Dir(p.ConfigFile)} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+		// Tighten permissions in case the directory already existed.
+		_ = os.Chmod(dir, 0o700)
+	}
+	return nil
+}
+
+// Duration is a time.Duration that unmarshals from a Go duration string.
+type Duration time.Duration
+
+// D returns the value as a time.Duration.
+func (d Duration) D() time.Duration { return time.Duration(d) }
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (d *Duration) UnmarshalText(text []byte) error {
+	v, err := time.ParseDuration(string(text))
+	if err != nil {
+		return fmt.Errorf("invalid duration %q", string(text))
+	}
+	*d = Duration(v)
+	return nil
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (d Duration) MarshalText() ([]byte, error) {
+	return []byte(time.Duration(d).String()), nil
+}
+
+// Core holds the [core] section.
+type Core struct {
+	Version     int    `toml:"version"`
+	Shell       string `toml:"shell"`
+	ShellLogin  bool   `toml:"shell-login"`
+	Mode        string `toml:"mode"`
+	Debug       bool   `toml:"debug"`
+	ExpandAlias bool   `toml:"expand-alias"`
+}
+
+// UI holds the [ui] section.
+type UI struct {
+	Style          string `toml:"style"`
+	GhostText      bool   `toml:"ghost-text"`
+	HiddenFiles    bool   `toml:"hidden-files"`
+	MaxSuggestions int    `toml:"max-suggestions"`
+	MaxHeight      int    `toml:"max-height"`
+	MaxWidth       int    `toml:"max-width"`
+	NerdFonts      bool   `toml:"nerd-fonts"`
+}
+
+// Keybindings holds the [keybindings] section.
+type Keybindings struct {
+	ToggleMode   string `toml:"toggle-mode"`
+	ToggleMenu   string `toml:"toggle-menu"`
+	Select       string `toml:"select"`
+	NavigateUp   string `toml:"navigate-up"`
+	NavigateDown string `toml:"navigate-down"`
+}
+
+// Git holds the [git] section.
+type Git struct {
+	FilterActiveBranch  bool `toml:"filter-active-branch"`
+	DeduplicateBranches bool `toml:"deduplicate-branches"`
+}
+
+// Updater holds the [updater] section.
+type Updater struct {
+	CheckOnStartup bool     `toml:"check-on-startup"`
+	Channel        string   `toml:"channel"`
+	CheckInterval  Duration `toml:"check-interval"`
+}
+
+// AIProvider describes one named OpenAI-compatible provider.
+type AIProvider struct {
+	InheritedFrom    string         `toml:"inherited_from,omitempty"`
+	Endpoint         string         `toml:"endpoint,omitempty"`
+	APIKey           string         `toml:"api_key,omitempty"`
+	APIKeyEnv        string         `toml:"api_key_env,omitempty"`
+	Model            string         `toml:"model,omitempty"`
+	TimeoutMs        int            `toml:"timeout_ms,omitempty"`
+	ExtraRequestBody map[string]any `toml:"extra_request_body,omitempty"`
+}
+
+// Key returns the resolved API key from the direct value or environment.
+func (p AIProvider) Key() string {
+	if p.APIKey != "" {
+		return p.APIKey
+	}
+	if p.APIKeyEnv != "" {
+		return os.Getenv(p.APIKeyEnv)
+	}
+	return ""
+}
+
+// SuggestOnEmpty holds the [ai.suggest_on_empty] section.
+type SuggestOnEmpty struct {
+	Enabled       bool `toml:"enabled"`
+	DebounceMs    int  `toml:"debounce_ms"`
+	MinIntervalMs int  `toml:"min_interval_ms"`
+}
+
+// AI holds the [ai] section.
+type AI struct {
+	Enabled        bool                  `toml:"enabled"`
+	Provider       string                `toml:"provider"`
+	DebounceMs     int                   `toml:"debounce_ms"`
+	MinIntervalMs  int                   `toml:"min_interval_ms"`
+	SuggestOnEmpty SuggestOnEmpty        `toml:"suggest_on_empty"`
+	Providers      map[string]AIProvider `toml:"providers,omitempty"`
+}
 
 // Config is the fully resolved argmax configuration.
 type Config struct {
@@ -25,91 +189,24 @@ type Config struct {
 	AI          AI          `toml:"ai"`
 }
 
-// Core holds session-level settings.
-type Core struct {
-	Version     int    `toml:"version"`
-	Shell       string `toml:"shell"`
-	ShellLogin  bool   `toml:"shell-login"`
-	Mode        string `toml:"mode"`
-	Debug       bool   `toml:"debug"`
-	ExpandAlias bool   `toml:"expand-alias"`
-	AutoExecute bool   `toml:"auto-execute"`
-}
-
-// UI holds menu and ghost-text settings.
-type UI struct {
-	Style          string `toml:"style"`
-	GhostText      bool   `toml:"ghost-text"`
-	HiddenFiles    bool   `toml:"hidden-files"`
-	MaxSuggestions int    `toml:"max-suggestions"`
-	MaxHeight      int    `toml:"max-height"`
-	MaxWidth       int    `toml:"max-width"`
-	NerdFonts      bool   `toml:"nerd-fonts"`
-}
-
-// Keybindings holds the configurable key assignments.
-type Keybindings struct {
-	ToggleMode   string `toml:"toggle-mode"`
-	ToggleMenu   string `toml:"toggle-menu"`
-	Select       string `toml:"select"`
-	NavigateUp   string `toml:"navigate-up"`
-	NavigateDown string `toml:"navigate-down"`
-}
-
-// Git holds Git-specific completion policy.
-type Git struct {
-	FilterActiveBranch  bool `toml:"filter-active-branch"`
-	DeduplicateBranches bool `toml:"deduplicate-branches"`
-}
-
-// Updater holds release-check policy.
-type Updater struct {
-	CheckOnStartup bool   `toml:"check-on-startup"`
-	Channel        string `toml:"channel"`
-	CheckInterval  string `toml:"check-interval"`
-}
-
-// AI holds the optional completion-provider settings.
-type AI struct {
-	Enabled        bool                `toml:"enabled"`
-	Provider       string              `toml:"provider"`
-	DebounceMS     int                 `toml:"debounce_ms"`
-	MinIntervalMS  int                 `toml:"min_interval_ms"`
-	SuggestOnEmpty SuggestOnEmpty      `toml:"suggest_on_empty"`
-	Providers      map[string]Provider `toml:"providers"`
-}
-
-// SuggestOnEmpty controls empty-prompt prediction.
-type SuggestOnEmpty struct {
-	Enabled       bool `toml:"enabled"`
-	DebounceMS    int  `toml:"debounce_ms"`
-	MinIntervalMS int  `toml:"min_interval_ms"`
-}
-
-// Provider describes one named OpenAI-compatible endpoint.
-type Provider struct {
-	InheritedFrom    string         `toml:"inherited_from"`
-	Endpoint         string         `toml:"endpoint"`
-	APIKey           string         `toml:"api_key"`
-	APIKeyEnv        string         `toml:"api_key_env"`
-	Model            string         `toml:"model"`
-	TimeoutMS        int            `toml:"timeout_ms"`
-	ExtraRequestBody map[string]any `toml:"extra_request_body"`
-}
-
-// Default returns the compiled default configuration.
+// Default returns the compiled default configuration (PRD 9.13).
 func Default() *Config {
 	return &Config{
 		Core: Core{
-			Version:     1,
+			Version:     CurrentVersion,
+			Shell:       "",
+			ShellLogin:  false,
 			Mode:        "last",
+			Debug:       false,
 			ExpandAlias: true,
 		},
 		UI: UI{
 			Style:          "modern",
 			GhostText:      true,
+			HiddenFiles:    false,
 			MaxSuggestions: 100,
 			MaxHeight:      15,
+			MaxWidth:       0,
 			NerdFonts:      true,
 		},
 		Keybindings: Keybindings{
@@ -126,162 +223,19 @@ func Default() *Config {
 		Updater: Updater{
 			CheckOnStartup: true,
 			Channel:        "stable",
-			CheckInterval:  "24h",
+			CheckInterval:  Duration(24 * time.Hour),
 		},
 		AI: AI{
-			DebounceMS:    500,
-			MinIntervalMS: 1000,
+			Enabled:       false,
+			Provider:      "",
+			DebounceMs:    500,
+			MinIntervalMs: 1000,
 			SuggestOnEmpty: SuggestOnEmpty{
-				DebounceMS:    800,
-				MinIntervalMS: 5000,
+				Enabled:       false,
+				DebounceMs:    800,
+				MinIntervalMs: 5000,
 			},
-			Providers: map[string]Provider{},
+			Providers: map[string]AIProvider{},
 		},
 	}
-}
-
-// Load resolves the configuration from defaults, the TOML file at path,
-// and environment overrides. A missing file is not an error. Decoding
-// into the default-populated struct means absent keys keep their compiled
-// defaults.
-func Load(path string) (*Config, error) {
-	cfg := Default()
-	data, err := os.ReadFile(path)
-	switch {
-	case os.IsNotExist(err):
-	case err != nil:
-		return nil, fmt.Errorf("read config: %w", err)
-	default:
-		if err := toml.Unmarshal(data, cfg); err != nil {
-			return nil, fmt.Errorf("parse config: %w", err)
-		}
-		if err := migrate(cfg, path); err != nil {
-			return nil, err
-		}
-	}
-	applyEnv(cfg)
-	if err := resolveProviderInheritance(cfg); err != nil {
-		return nil, err
-	}
-	if err := Validate(cfg); err != nil {
-		return nil, err
-	}
-	return cfg, nil
-}
-
-func applyEnv(cfg *Config) {
-	setBool := func(key string, dst *bool) {
-		if v, ok := os.LookupEnv(key); ok {
-			if b, err := strconv.ParseBool(v); err == nil {
-				*dst = b
-			}
-		}
-	}
-	setInt := func(key string, dst *int) {
-		if v, ok := os.LookupEnv(key); ok {
-			if n, err := strconv.Atoi(v); err == nil {
-				*dst = n
-			}
-		}
-	}
-	setStr := func(key string, dst *string) {
-		if v, ok := os.LookupEnv(key); ok {
-			*dst = v
-		}
-	}
-	setBool("ARGMAX_CORE_DEBUG", &cfg.Core.Debug)
-	setStr("ARGMAX_CORE_SHELL", &cfg.Core.Shell)
-	setStr("ARGMAX_CORE_MODE", &cfg.Core.Mode)
-	setBool("ARGMAX_UI_GHOST_TEXT", &cfg.UI.GhostText)
-	setInt("ARGMAX_UI_MAX_SUGGESTIONS", &cfg.UI.MaxSuggestions)
-	setInt("ARGMAX_UI_MAX_HEIGHT", &cfg.UI.MaxHeight)
-	setStr("ARGMAX_UPDATER_CHANNEL", &cfg.Updater.Channel)
-	setStr("ARGMAX_UPDATER_INTERVAL", &cfg.Updater.CheckInterval)
-	setBool("ARGMAX_UPDATER_CHECK_ON_STARTUP", &cfg.Updater.CheckOnStartup)
-	setBool("ARGMAX_AI_ENABLED", &cfg.AI.Enabled)
-	setStr("ARGMAX_AI_PROVIDER", &cfg.AI.Provider)
-}
-
-// Path returns the configuration file location.
-func Path() string { return paths.Config() }
-
-// CheckInterval parses the updater interval, defaulting to 24h.
-func (c *Config) CheckInterval() time.Duration {
-	d, err := time.ParseDuration(c.Updater.CheckInterval)
-	if err != nil || d <= 0 {
-		return 24 * time.Hour
-	}
-	return d
-}
-
-// ActiveProvider resolves the enabled AI provider, or nil when AI is off.
-func (c *Config) ActiveProvider() *Provider {
-	if !c.AI.Enabled {
-		return nil
-	}
-	p, ok := c.AI.Providers[c.AI.Provider]
-	if !ok {
-		return nil
-	}
-	return &p
-}
-
-// ResolveAPIKey returns the provider credential, preferring api_key_env.
-func (p *Provider) ResolveAPIKey() string {
-	if p.APIKeyEnv != "" {
-		if v := os.Getenv(p.APIKeyEnv); v != "" {
-			return v
-		}
-	}
-	return p.APIKey
-}
-
-// Timeout returns the provider request timeout with the documented fallback.
-func (p *Provider) Timeout() time.Duration {
-	if p.TimeoutMS <= 0 {
-		return 2 * time.Second
-	}
-	return time.Duration(p.TimeoutMS) * time.Millisecond
-}
-
-// Redacted returns resolved TOML with direct API keys masked, for
-// `argmax config show`.
-func (c *Config) Redacted() (string, error) {
-	var b strings.Builder
-	enc := toml.NewEncoder(&b)
-	type redactedProvider struct {
-		InheritedFrom    string         `toml:"inherited_from,omitempty"`
-		Endpoint         string         `toml:"endpoint,omitempty"`
-		APIKey           string         `toml:"api_key,omitempty"`
-		APIKeyEnv        string         `toml:"api_key_env,omitempty"`
-		Model            string         `toml:"model,omitempty"`
-		TimeoutMS        int            `toml:"timeout_ms,omitempty"`
-		ExtraRequestBody map[string]any `toml:"extra_request_body,omitempty"`
-	}
-	out := struct {
-		Core        Core        `toml:"core"`
-		UI          UI          `toml:"ui"`
-		Keybindings Keybindings `toml:"keybindings"`
-		Git         Git         `toml:"git"`
-		Updater     Updater     `toml:"updater"`
-		AI          struct {
-			AI
-			Providers map[string]redactedProvider `toml:"providers,omitempty"`
-		} `toml:"ai"`
-	}{Core: c.Core, UI: c.UI, Keybindings: c.Keybindings, Git: c.Git, Updater: c.Updater}
-	out.AI.AI = c.AI
-	// The redacted map below replaces the embedded provider table.
-	out.AI.AI.Providers = nil
-	out.AI.Providers = make(map[string]redactedProvider, len(c.AI.Providers))
-	for name, p := range c.AI.Providers {
-		rp := redactedProvider(p)
-		if rp.APIKey != "" {
-			rp.APIKey = "<redacted>"
-		}
-		out.AI.Providers[name] = rp
-	}
-	if err := enc.Encode(out); err != nil {
-		return "", fmt.Errorf("encode config: %w", err)
-	}
-	return b.String(), nil
 }

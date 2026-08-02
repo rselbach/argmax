@@ -1,213 +1,361 @@
-// Package history lazily reads shell history files (Bash, Zsh extended,
-// Fish), merges in-session commands, and provides tiered fuzzy search.
+// Package history lazily loads shell history files (Bash, Zsh, Fish),
+// merges commands submitted during the current session, and provides
+// alias-aware ranked search over the merged history.
+//
+// It implements the history retrieval behavior from PRD sections 8.3 and
+// 9.10 (HIST-001..012): lazy loading with mtime-based cache invalidation,
+// session merge before the shell flushes its file, newest-first
+// de-duplication, and four-tier match ranking (exact, prefix,
+// substring/all-word, fuzzy subsequence).
 package history
 
 import (
 	"os"
-	"strconv"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Entry is one history command with its recency timestamp.
+// Entry is one history command.
 type Entry struct {
 	Command string
+	Time    time.Time // zero when unknown (bash without timestamps)
+}
+
+// Match is a ranked search result.
+type Match struct {
+	Command string
 	Time    time.Time
+	Tier    int // 0 exact, 1 prefix, 2 substring/all-word, 3 fuzzy subsequence
+	Score   int // fuzzy score (only meaningful in tier 3)
 }
 
-// Provider serves history for one shell session. The backing file is read
-// lazily on first request and re-read when its modification time advances.
-// A missing history file is an empty history, never a failure.
-type Provider struct {
-	path   string
-	format Format
-
-	mu      sync.Mutex
-	loaded  bool
-	modTime time.Time
-	entries []Entry // newest first, de-duplicated
-	session []Entry // newest first, commands from this session
-}
-
-// Format selects the history file dialect.
-type Format int
-
-// History formats.
+// Match tiers returned by Search, best first.
 const (
-	FormatBash Format = iota
-	FormatZsh
-	FormatFish
+	TierExact     = 0 // command equals the query
+	TierPrefix    = 1 // command starts with the query (case-insensitive)
+	TierSubstring = 2 // every query word appears in the command (case-insensitive)
+	TierFuzzy     = 3 // query is a subsequence of the command (case-insensitive)
 )
 
-// NewProvider returns a lazy provider for the given file and dialect.
-func NewProvider(path string, format Format) *Provider {
-	return &Provider{path: path, format: format}
+const (
+	// emptyQueryCap bounds the result of an empty query (HIST-007).
+	emptyQueryCap = 100
+	// strictCap bounds how many strict (tier 0-2) matches are retained
+	// before fuzzy lookup (HIST-009). When the cap is reached, no fuzzy
+	// tier is appended.
+	strictCap = 200
+	// fuzzyPerChar is the minimum acceptable fuzzy score per query
+	// character; see fuzzyMatch for the rule.
+	fuzzyPerChar = 8
+)
+
+// Provider lazily loads and caches one history file. The zero value is not
+// usable; create one with New. A Provider is safe for concurrent use.
+type Provider struct {
+	shell string // "bash" | "zsh" | "fish", selects the parser
+	path  string
+
+	once sync.Once
+	mu   sync.Mutex
+	mt   time.Time // mod time of the loaded file; zero when missing/unreadable
+	file []Entry   // parsed file entries, newest-first
+	sess []Entry   // session entries, newest-first
 }
 
-// AddSession records a command submitted during the current session,
-// visible immediately even before the shell flushes its history file.
-// Consecutive duplicates collapse into one row.
-func (p *Provider) AddSession(command string) {
-	command = strings.TrimSpace(command)
-	if command == "" {
+// New creates a provider for the given history file path (already resolved by
+// the caller, e.g. via the shell package). shell is "bash"|"zsh"|"fish" and
+// selects the parser; unknown values fall back to the Bash parser, which
+// treats the file as plain lines with optional timestamp markers.
+func New(shell, path string) *Provider {
+	return &Provider{shell: shell, path: path}
+}
+
+// AddSession merges a command submitted during the current session (HIST-004).
+// Consecutive duplicate submissions create one row (HIST-005).
+func (p *Provider) AddSession(cmd string) {
+	if cmd == "" {
 		return
 	}
+	p.once.Do(p.load)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.session) > 0 && p.session[0].Command == command {
-		p.session[0].Time = time.Now()
+	if len(p.sess) > 0 && p.sess[0].Command == cmd {
 		return
 	}
-	p.session = append([]Entry{{Command: command, Time: time.Now()}}, p.session...)
+	p.sess = append([]Entry{{Command: cmd, Time: time.Now()}}, p.sess...)
 }
 
-// Entries returns merged session and persistent history, newest first,
-// de-duplicated by exact command text keeping the newest occurrence.
+// Entries returns merged history (file + session), newest-first, exact
+// duplicates removed keeping the newest occurrence (HIST-005). It lazily
+// loads on first call (HIST-001); the cache is invalidated when the file
+// mtime advances (HIST-006); a missing file is an empty history, never an
+// error (HIST-012).
 func (p *Provider) Entries() []Entry {
+	p.once.Do(p.load)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.refresh()
-	merged := make([]Entry, 0, len(p.session)+len(p.entries))
-	seen := make(map[string]bool, len(p.session)+len(p.entries))
-	for _, e := range p.session {
-		if !seen[e.Command] {
-			seen[e.Command] = true
-			merged = append(merged, e)
+	p.refreshLocked()
+
+	// Session entries are newer than any file entry and both slices are
+	// newest-first, so the first occurrence of a command is the newest.
+	merged := make([]Entry, 0, len(p.sess)+len(p.file))
+	seen := make(map[string]struct{}, len(p.sess)+len(p.file))
+	for _, e := range p.sess {
+		if _, ok := seen[e.Command]; ok {
+			continue
 		}
+		seen[e.Command] = struct{}{}
+		merged = append(merged, e)
 	}
-	for _, e := range p.entries {
-		if !seen[e.Command] {
-			seen[e.Command] = true
-			merged = append(merged, e)
+	for _, e := range p.file {
+		if _, ok := seen[e.Command]; ok {
+			continue
 		}
+		seen[e.Command] = struct{}{}
+		merged = append(merged, e)
 	}
 	return merged
 }
 
-// refresh loads or reloads the backing file when stale. Callers hold p.mu.
-func (p *Provider) refresh() {
-	info, err := os.Stat(p.path)
+// load performs the initial parse; it runs exactly once via sync.Once.
+func (p *Provider) load() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.reloadLocked()
+}
+
+// refreshLocked reloads the file when its mtime has advanced (HIST-006).
+func (p *Provider) refreshLocked() {
+	fi, err := os.Stat(p.path)
 	if err != nil {
-		if !p.loaded {
-			p.loaded = true
-			p.entries = nil
-		}
+		return // missing file stays an empty history (HIST-012)
+	}
+	if !fi.ModTime().After(p.mt) {
 		return
 	}
-	if p.loaded && !info.ModTime().After(p.modTime) {
+	p.reloadLocked()
+}
+
+// reloadLocked re-reads and re-parses the history file. Callers hold p.mu.
+func (p *Provider) reloadLocked() {
+	p.file = nil
+	p.mt = time.Time{}
+	fi, err := os.Stat(p.path)
+	if err != nil {
 		return
 	}
 	data, err := os.ReadFile(p.path)
 	if err != nil {
-		p.loaded = true
 		return
 	}
-	p.loaded = true
-	p.modTime = info.ModTime()
-	p.entries = dedupeNewestFirst(Parse(string(data), p.format))
+	var ents []Entry
+	switch p.shell {
+	case "zsh":
+		ents = ParseZsh(data)
+	case "fish":
+		ents = ParseFish(data)
+	default: // "bash" and unknown shells
+		ents = ParseBash(data)
+	}
+	// Parsers return oldest->newest; the provider keeps newest-first.
+	for i, j := 0, len(ents)-1; i < j; i, j = i+1, j-1 {
+		ents[i], ents[j] = ents[j], ents[i]
+	}
+	p.file = ents
+	p.mt = fi.ModTime()
 }
 
-// dedupeNewestFirst reverses parse order (files are oldest-first) and
-// keeps the newest occurrence of each command.
-func dedupeNewestFirst(parsed []Entry) []Entry {
-	out := make([]Entry, 0, len(parsed))
-	seen := make(map[string]bool, len(parsed))
-	for i := len(parsed) - 1; i >= 0; i-- {
-		e := parsed[i]
-		if e.Command == "" || seen[e.Command] {
+// Search implements HIST-007..010:
+//   - empty query: up to 100 newest unique commands (tier 1)
+//   - non-empty: tier 0 exact, tier 1 prefix, tier 2 substring where ALL
+//     whitespace-separated query words appear (case-insensitive), tier 3
+//     fuzzy subsequence of the whole query; ordered by tier, then recency
+//     within tiers 0-2, then fuzzy score within tier 3
+//   - at most 200 strict (tier 0-2) matches are retained before fuzzy
+//     lookup; when the cap is reached no fuzzy tier is appended (HIST-009)
+//   - extremely weak fuzzy matches are rejected (see fuzzyMatch)
+//   - aliases maps alias name → expansion; when the query starts with an
+//     alias name it is also searched with the alias replaced by its
+//     expansion, and vice versa (HIST-010); results merge without duplicates
+//   - limit caps the final result count; limit<=0 means no cap
+func (p *Provider) Search(query string, aliases map[string]string, limit int) []Match {
+	entries := p.Entries()
+	q := strings.TrimSpace(query)
+	if q == "" {
+		n := min(emptyQueryCap, len(entries))
+		out := make([]Match, 0, n)
+		for _, e := range entries[:n] {
+			out = append(out, Match{Command: e.Command, Time: e.Time, Tier: TierPrefix})
+		}
+		return applyLimit(out, limit)
+	}
+
+	variants := queryVariants(q, aliases)
+
+	// Pass 1: strict tiers. entries is newest-first and unique, so each
+	// tier bucket stays newest-first with no duplicates.
+	var tiers [3][]Match
+	matched := make(map[string]struct{})
+	for _, e := range entries {
+		tier, ok := bestStrictTier(e.Command, variants)
+		if !ok {
 			continue
 		}
-		seen[e.Command] = true
-		out = append(out, e)
+		tiers[tier] = append(tiers[tier], Match{Command: e.Command, Time: e.Time, Tier: tier})
+		matched[e.Command] = struct{}{}
 	}
-	return out
-}
-
-// Parse reads history file content in the given dialect, oldest first.
-func Parse(content string, format Format) []Entry {
-	switch format {
-	case FormatZsh:
-		return parseZsh(content)
-	case FormatFish:
-		return parseFish(content)
-	default:
-		return parseBash(content)
+	strict := make([]Match, 0, len(entries))
+	for t := 0; t < 3; t++ {
+		strict = append(strict, tiers[t]...)
 	}
-}
+	if len(strict) >= strictCap {
+		return applyLimit(strict[:strictCap], limit)
+	}
 
-// parseBash handles plain lines and `#<epoch>` timestamp lines.
-func parseBash(content string) []Entry {
-	var (
-		out  []Entry
-		when time.Time
-	)
-	for _, ln := range strings.Split(content, "\n") {
-		if ts, ok := strings.CutPrefix(ln, "#"); ok {
-			if epoch, err := strconv.ParseInt(strings.TrimSpace(ts), 10, 64); err == nil {
-				when = time.Unix(epoch, 0)
-				continue
-			}
-		}
-		cmd := strings.TrimSpace(ln)
-		if cmd == "" {
+	// Pass 2: fuzzy over the commands not already matched strictly.
+	var fuzzy []Match
+	for _, e := range entries {
+		if _, ok := matched[e.Command]; ok {
 			continue
 		}
-		out = append(out, Entry{Command: cmd, Time: when})
-		when = time.Time{}
-	}
-	return out
-}
-
-// parseZsh handles extended-history metadata `: <start>:<elapsed>;cmd` and
-// backslash line continuations.
-func parseZsh(content string) []Entry {
-	var out []Entry
-	lines := strings.Split(content, "\n")
-	for i := 0; i < len(lines); i++ {
-		ln := lines[i]
-		for strings.HasSuffix(ln, "\\") && i+1 < len(lines) {
-			i++
-			ln = strings.TrimSuffix(ln, "\\") + "\n" + lines[i]
-		}
-		var when time.Time
-		if rest, ok := strings.CutPrefix(ln, ": "); ok {
-			meta, cmd, found := strings.Cut(rest, ";")
-			if found {
-				if start, _, ok := strings.Cut(meta, ":"); ok {
-					if epoch, err := strconv.ParseInt(start, 10, 64); err == nil {
-						when = time.Unix(epoch, 0)
-					}
-				}
-				ln = cmd
+		best := -1
+		for _, v := range variants {
+			if score, ok := fuzzyMatch(e.Command, v); ok && score > best {
+				best = score
 			}
 		}
-		cmd := strings.TrimSpace(ln)
-		if cmd == "" {
+		if best < 0 {
 			continue
 		}
-		out = append(out, Entry{Command: cmd, Time: when})
+		fuzzy = append(fuzzy, Match{Command: e.Command, Time: e.Time, Tier: TierFuzzy, Score: best})
 	}
-	return out
+	// Highest score first; stable so equal scores stay newest-first.
+	sort.SliceStable(fuzzy, func(i, j int) bool { return fuzzy[i].Score > fuzzy[j].Score })
+	return applyLimit(append(strict, fuzzy...), limit)
 }
 
-// parseFish handles the YAML-like `- cmd:` records with `when:` metadata.
-func parseFish(content string) []Entry {
-	var out []Entry
-	for _, ln := range strings.Split(content, "\n") {
-		if rest, ok := strings.CutPrefix(ln, "- cmd: "); ok {
-			cmd := strings.TrimSpace(strings.ReplaceAll(rest, `\n`, "\n"))
-			if cmd != "" {
-				out = append(out, Entry{Command: cmd})
-			}
+// queryVariants returns the query plus alias-expanded forms (HIST-010): for
+// every alias name → expansion, when the query starts with the name (as its
+// first word) the name is replaced by the expansion, and vice versa. The
+// original query is always first; variants are de-duplicated.
+func queryVariants(query string, aliases map[string]string) []string {
+	variants := []string{query}
+	seen := map[string]bool{query: true}
+	add := func(v string) {
+		if !seen[v] {
+			seen[v] = true
+			variants = append(variants, v)
+		}
+	}
+	for name, exp := range aliases {
+		if name == "" || exp == "" || name == exp {
 			continue
 		}
-		trimmed := strings.TrimSpace(ln)
-		if ts, ok := strings.CutPrefix(trimmed, "when: "); ok && len(out) > 0 {
-			if epoch, err := strconv.ParseInt(strings.TrimSpace(ts), 10, 64); err == nil {
-				out[len(out)-1].Time = time.Unix(epoch, 0)
+		for _, pair := range [][2]string{{name, exp}, {exp, name}} {
+			from, to := pair[0], pair[1]
+			switch {
+			case query == from:
+				add(to)
+			case strings.HasPrefix(query, from+" "):
+				add(to + query[len(from):])
 			}
 		}
 	}
-	return out
+	return variants
+}
+
+// bestStrictTier returns the best (lowest) strict tier at which cmd matches
+// any query variant, or ok=false when no variant matches strictly.
+func bestStrictTier(cmd string, variants []string) (tier int, ok bool) {
+	best := -1
+	for _, v := range variants {
+		if t, hit := strictTier(cmd, v); hit && (best < 0 || t < best) {
+			best = t
+		}
+	}
+	if best < 0 {
+		return 0, false
+	}
+	return best, true
+}
+
+// strictTier classifies cmd against a single query for tiers 0-2. Exact is
+// case-sensitive; prefix and all-word substring are case-insensitive.
+func strictTier(cmd, q string) (int, bool) {
+	if cmd == q {
+		return TierExact, true
+	}
+	lcmd, lq := strings.ToLower(cmd), strings.ToLower(q)
+	if strings.HasPrefix(lcmd, lq) {
+		return TierPrefix, true
+	}
+	for _, w := range strings.Fields(lq) {
+		if !strings.Contains(lcmd, w) {
+			return 0, false
+		}
+	}
+	return TierSubstring, true
+}
+
+// fuzzyMatch scores the whole query as a subsequence of cmd,
+// case-insensitive, and reports whether the match is strong enough to keep.
+//
+// Scoring: +10 per matched character, +15 when the match sits on a word
+// boundary (start of the command or after a space, '/', '-', '_' or '.'),
+// +5 when it directly follows the previous match (streak bonus), and -1 per
+// skipped command character between matches (gap penalty).
+//
+// A match is rejected when score < len(query)*8. Contiguous runs always
+// score at least +10 per character, so a score below 8 per character means
+// the characters are scattered across the command with wide gaps and weak
+// anchoring (HIST-009). For example "gco" matches "git commit -am \"x\""
+// (score 62 >= 24) while "gzz" never matches "git status" — it is not even
+// a subsequence.
+func fuzzyMatch(cmd, q string) (score int, ok bool) {
+	lcmd, lq := strings.ToLower(cmd), strings.ToLower(q)
+	score, prev, qi := 0, -1, 0
+	for ci := 0; ci < len(lcmd) && qi < len(lq); ci++ {
+		if lcmd[ci] != lq[qi] {
+			continue
+		}
+		score += 10
+		if ci == 0 || isBoundary(lcmd[ci-1]) {
+			score += 15
+		}
+		if prev >= 0 {
+			if ci == prev+1 {
+				score += 5
+			} else {
+				score -= ci - prev - 1
+			}
+		}
+		prev = ci
+		qi++
+	}
+	if qi < len(lq) {
+		return 0, false // query is not a subsequence of cmd
+	}
+	if score < len(q)*fuzzyPerChar {
+		return 0, false // too scattered
+	}
+	return score, true
+}
+
+// isBoundary reports whether c separates words inside a command line.
+func isBoundary(c byte) bool {
+	switch c {
+	case ' ', '/', '-', '_', '.':
+		return true
+	}
+	return false
+}
+
+// applyLimit truncates ms to limit entries; limit<=0 means no cap.
+func applyLimit(ms []Match, limit int) []Match {
+	if limit > 0 && len(ms) > limit {
+		return ms[:limit]
+	}
+	return ms
 }

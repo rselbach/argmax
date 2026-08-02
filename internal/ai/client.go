@@ -1,97 +1,101 @@
-// Package ai implements the optional OpenAI-compatible completion engine:
-// provider client, bounded context gathering, prompt construction, response
-// validation, caching, cancellation, and rate-limit cooldown. While AI is
-// disabled no endpoint is contacted and no context is gathered.
 package ai
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/rselbach/argmax/internal/config"
 )
 
-const maxResponseBody = 1 << 20
+// maxResponseBytes bounds provider response bodies at 1 MiB (AI-014).
+const maxResponseBytes = 1 << 20
 
-// Client speaks the OpenAI-compatible chat-completions protocol to one
-// named provider.
-type Client struct {
-	provider *config.Provider
-	http     *http.Client
+// errRateLimited marks an HTTP 429 from the provider (AI-013).
+var errRateLimited = errors.New("ai: provider rate limited (HTTP 429)")
+
+// chatResponse is the subset of the OpenAI chat-completions response we read.
+type chatResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
 }
 
-// NewClient returns a client for the given provider.
-func NewClient(p *config.Provider) *Client {
-	return &Client{provider: p, http: &http.Client{Timeout: p.Timeout()}}
-}
-
-// ErrRateLimited marks HTTP 429 responses so callers can enter cooldown.
-var ErrRateLimited = fmt.Errorf("provider rate limited")
-
-// Complete sends the prompt pair and returns the raw model output.
-func (c *Client) Complete(ctx context.Context, system, user string) (string, error) {
-	endpoint := strings.TrimRight(c.provider.Endpoint, "/")
+// chat performs one chat-completions request and returns the raw content of
+// the first choice. The caller's ctx already carries the provider timeout;
+// chat re-applies it so the call is bounded even when invoked directly.
+//
+// The API key and header values are never logged or included in errors
+// (DIAG-008).
+func (e *Engine) chat(ctx context.Context, p config.AIProvider, messages []Message) (string, error) {
+	// Append /chat/completions unless the endpoint already carries it (AI-004).
+	endpoint := strings.TrimRight(p.Endpoint, "/")
 	if !strings.HasSuffix(endpoint, "/chat/completions") {
 		endpoint += "/chat/completions"
 	}
+
+	// Defaults first, then overlay extra request-body fields so they may
+	// override model parameters intentionally (AI-002, AI-014).
 	body := map[string]any{
-		"model": c.provider.Model,
-		"messages": []map[string]string{
-			{"role": "system", "content": system},
-			{"role": "user", "content": user},
-		},
-		"temperature": 0.2,
-		"max_tokens":  120,
-		"stream":      false,
+		"model":    p.Model,
+		"messages": messages,
+		"stream":   false,
 	}
-	// Extra fields may intentionally override default model parameters.
-	for k, v := range c.provider.ExtraRequestBody {
+	for k, v := range p.ExtraRequestBody {
 		body[k] = v
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return "", fmt.Errorf("encode request: %w", err)
+		return "", err
 	}
+
+	timeout := time.Duration(p.TimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = defaultTimeoutMs * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := c.provider.ResolveAPIKey(); key != "" {
+	if key := p.Key(); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
-	resp, err := c.http.Do(req)
+
+	resp, err := e.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("provider request: %w", err)
+		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
+
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return "", ErrRateLimited
+		return "", errRateLimited
 	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("provider returned HTTP %d", resp.StatusCode)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("ai: unexpected provider status %d", resp.StatusCode)
 	}
-	var parsed struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return "", err
 	}
+	var parsed chatResponse
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+		return "", err
 	}
 	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("provider returned no choices")
+		return "", errors.New("ai: provider returned no choices")
 	}
 	return parsed.Choices[0].Message.Content, nil
 }

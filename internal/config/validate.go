@@ -3,93 +3,94 @@ package config
 import (
 	"fmt"
 	"strings"
-	"time"
-
-	"github.com/rselbach/argmax/internal/keymap"
 )
 
-// Validate checks enums, numeric bounds, durations, key names, and the
-// active AI provider reference. Errors name the exact invalid key and the
-// accepted range.
-func Validate(cfg *Config) error {
-	if cfg.Core.Version < 1 {
-		return keyError("core.version", "positive supported schema version")
+// Validate checks the resolved configuration, naming the exact invalid key
+// and the accepted range (PRD CFG-004).
+func (c *Config) Validate() error {
+	if c.Core.Version < 1 || c.Core.Version > CurrentVersion {
+		return fmt.Errorf("core.version: must be a supported schema version between 1 and %d, got %d", CurrentVersion, c.Core.Version)
 	}
-	switch cfg.Core.Shell {
+	switch c.Core.Shell {
 	case "", "bash", "zsh", "fish":
 	default:
-		return keyError("core.shell", `empty, "bash", "zsh", or "fish"`)
+		return fmt.Errorf("core.shell: must be empty, bash, zsh, or fish, got %q", c.Core.Shell)
 	}
-	switch cfg.Core.Mode {
+	switch c.Core.Mode {
 	case "last", "spec", "history":
 	default:
-		return keyError("core.mode", `"last", "spec", or "history"`)
+		return fmt.Errorf("core.mode: must be last, spec, or history, got %q", c.Core.Mode)
 	}
-	switch strings.ToLower(cfg.UI.Style) {
+	switch c.UI.Style {
 	case "modern", "classic":
-	case "minimal", "minimalist":
-		cfg.UI.Style = "classic"
 	default:
-		return keyError("ui.style", `"modern" or "classic"`)
+		return fmt.Errorf("ui.style: must be modern or classic, got %q", c.UI.Style)
 	}
-	if cfg.UI.MaxSuggestions < 1 || cfg.UI.MaxSuggestions > 500 {
-		return keyError("ui.max-suggestions", "1-500")
+	if c.UI.MaxSuggestions < 1 || c.UI.MaxSuggestions > 500 {
+		return fmt.Errorf("ui.max-suggestions: must be between 1 and 500, got %d", c.UI.MaxSuggestions)
 	}
-	if cfg.UI.MaxHeight < 3 || cfg.UI.MaxHeight > 50 {
-		return keyError("ui.max-height", "3-50")
+	if c.UI.MaxHeight < 3 || c.UI.MaxHeight > 50 {
+		return fmt.Errorf("ui.max-height: must be between 3 and 50, got %d", c.UI.MaxHeight)
 	}
-	if cfg.UI.MaxWidth < 0 {
-		return keyError("ui.max-width", "0 or a positive value")
+	if c.UI.MaxWidth < 0 {
+		return fmt.Errorf("ui.max-width: must be 0 or a positive value, got %d", c.UI.MaxWidth)
 	}
-	switch cfg.Updater.Channel {
+
+	keys := map[string]string{
+		"keybindings.toggle-mode":   c.Keybindings.ToggleMode,
+		"keybindings.toggle-menu":   c.Keybindings.ToggleMenu,
+		"keybindings.select":        c.Keybindings.Select,
+		"keybindings.navigate-up":   c.Keybindings.NavigateUp,
+		"keybindings.navigate-down": c.Keybindings.NavigateDown,
+	}
+	for name, value := range keys {
+		if _, err := ParseKey(value); err != nil {
+			return fmt.Errorf("%s: %v", name, err)
+		}
+	}
+
+	switch c.Updater.Channel {
 	case "stable", "nightly":
 	default:
-		return keyError("updater.channel", `"stable" or "nightly"`)
+		return fmt.Errorf("updater.channel: must be stable or nightly, got %q", c.Updater.Channel)
 	}
-	if d, err := time.ParseDuration(cfg.Updater.CheckInterval); err != nil || d <= 0 {
-		return keyError("updater.check-interval", `positive Go duration such as "30m", "6h", or "24h"`)
+	if c.Updater.CheckInterval.D() <= 0 {
+		return fmt.Errorf("updater.check-interval: must be a positive Go-style duration such as 30m, 6h, or 24h, got %q", c.Updater.CheckInterval.D().String())
 	}
-	for key, v := range map[string]int{
-		"ai.debounce_ms":                      cfg.AI.DebounceMS,
-		"ai.min_interval_ms":                  cfg.AI.MinIntervalMS,
-		"ai.suggest_on_empty.debounce_ms":     cfg.AI.SuggestOnEmpty.DebounceMS,
-		"ai.suggest_on_empty.min_interval_ms": cfg.AI.SuggestOnEmpty.MinIntervalMS,
+
+	for key, val := range map[string]int{
+		"ai.debounce_ms":                      c.AI.DebounceMs,
+		"ai.min_interval_ms":                  c.AI.MinIntervalMs,
+		"ai.suggest_on_empty.debounce_ms":     c.AI.SuggestOnEmpty.DebounceMs,
+		"ai.suggest_on_empty.min_interval_ms": c.AI.SuggestOnEmpty.MinIntervalMs,
 	} {
-		if v < 0 {
-			return keyError(key, "non-negative integer")
+		if val < 0 {
+			return fmt.Errorf("%s: must be a non-negative integer, got %d", key, val)
 		}
 	}
-	for key, raw := range map[string]string{
-		"keybindings.toggle-mode":   cfg.Keybindings.ToggleMode,
-		"keybindings.toggle-menu":   cfg.Keybindings.ToggleMenu,
-		"keybindings.select":        cfg.Keybindings.Select,
-		"keybindings.navigate-up":   cfg.Keybindings.NavigateUp,
-		"keybindings.navigate-down": cfg.Keybindings.NavigateDown,
-	} {
-		k, err := keymap.Parse(raw)
-		if err != nil {
-			return keyError(key, err.Error())
+	for name, p := range c.AI.Providers {
+		if p.TimeoutMs < 0 {
+			return fmt.Errorf("ai.providers.%s.timeout_ms: must be a non-negative integer, got %d", name, p.TimeoutMs)
 		}
-		if k.IsEnter() {
-			return keyError(key, "must not shadow Enter/command submission")
+		if p.Endpoint != "" && !strings.HasPrefix(p.Endpoint, "http://") && !strings.HasPrefix(p.Endpoint, "https://") {
+			return fmt.Errorf("ai.providers.%s.endpoint: must start with http:// or https://, got %q", name, p.Endpoint)
 		}
 	}
-	if cfg.AI.Enabled {
-		if cfg.AI.Provider == "" {
-			return keyError("ai.provider", "must name a configured provider while AI is enabled")
+	if c.AI.Enabled {
+		if c.AI.Provider == "" {
+			return fmt.Errorf("ai.provider: must name a configured provider while ai.enabled is true")
 		}
-		if _, ok := cfg.AI.Providers[cfg.AI.Provider]; !ok {
-			return keyError("ai.provider", fmt.Sprintf("provider %q is not configured under [ai.providers.*]", cfg.AI.Provider))
-		}
-	}
-	for name, p := range cfg.AI.Providers {
-		if p.TimeoutMS < 0 {
-			return keyError("ai.providers."+name+".timeout_ms", "non-negative integer")
+		if _, ok := c.AI.Providers[c.AI.Provider]; !ok {
+			return fmt.Errorf("ai.provider: provider %q is not defined in ai.providers", c.AI.Provider)
 		}
 	}
 	return nil
 }
 
-func keyError(key, accepted string) error {
-	return fmt.Errorf("invalid configuration key %s: accepted: %s", key, accepted)
+// Normalize applies accepted aliases (e.g. minimal/minimalist for ui.style).
+func (c *Config) Normalize() {
+	switch strings.ToLower(c.UI.Style) {
+	case "minimal", "minimalist":
+		c.UI.Style = "classic"
+	}
 }

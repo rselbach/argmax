@@ -8,7 +8,7 @@ are load-bearing: `argmax update` downloads and verifies them.
 | Channel | Source | Status |
 | --- | --- | --- |
 | GitHub releases (tar.gz + checksums) | goreleaser on tag push | automated |
-| Homebrew tap | `brews` section, pushes to `rselbach/homebrew-tap` | automated (needs `HOMEBREW_TAP_GITHUB_TOKEN`) |
+| Homebrew tap | `homebrew_casks` section, pushes to `rselbach/homebrew-tap` | automated (needs `HOMEBREW_TAP_GITHUB_TOKEN`) |
 | Debian/Ubuntu `.deb`, Fedora/RHEL `.rpm` | goreleaser `nfpms` | automated |
 | Install script | `scripts/install.sh` (checksum-verified) | in repo |
 | AUR | `packaging/aur/PKGBUILD` | manual publish per release |

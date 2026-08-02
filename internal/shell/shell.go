@@ -1,182 +1,194 @@
-// Package shell knows the supported shells: detection, executable paths,
-// integration hooks, alias sources, and history locations for Bash, Zsh,
-// and Fish.
+// Package shell implements shell detection (RUN-014, RUN-015), the
+// dual-purpose integration scripts printed by `argmax init` (SH-001..005),
+// the hook event protocol (SH-006), alias/history/rc file locations
+// (SH-007, HIST-002), and idempotent setup/removal of the managed autostart
+// block (SH-008, UN-001).
 package shell
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 )
 
-// Kind identifies a supported shell.
-type Kind string
+// Shell is one of the supported interactive shells (RUN-015).
+type Shell string
 
-// Supported shells.
 const (
-	Bash Kind = "bash"
-	Zsh  Kind = "zsh"
-	Fish Kind = "fish"
+	Bash Shell = "bash"
+	Zsh  Shell = "zsh"
+	Fish Shell = "fish"
 )
 
-// Supported reports whether name is a supported shell.
-func Supported(name string) bool {
-	switch Kind(name) {
+// markerEnv is exported by the autostart branch of the integration script
+// just before it execs argmax, so the new process knows which shell it
+// replaced (RUN-014).
+const markerEnv = "ARGMAX_SHELL"
+
+// Valid reports whether s is one of the supported shells.
+func (s Shell) Valid() bool {
+	switch s {
 	case Bash, Zsh, Fish:
 		return true
 	}
 	return false
 }
 
-// Detect resolves the shell to wrap using the documented precedence:
-// explicit CLI flag, resolved configuration, autostart hook marker,
-// parent-process inspection, $SHELL, then Bash.
-func Detect(flag, configured string) (Kind, error) {
-	if flag != "" {
-		if !Supported(flag) {
-			return "", fmt.Errorf("unsupported shell %q: supported shells are bash, zsh, and fish", flag)
+// normalize maps a shell reference — bare name ("zsh"), path
+// ("/usr/bin/fish"), or login argv[0] ("-bash") — to its canonical form.
+func normalize(value string) Shell {
+	v := strings.TrimSpace(value)
+	if i := strings.LastIndexByte(v, '/'); i >= 0 {
+		v = v[i+1:]
+	}
+	v = strings.TrimPrefix(v, "-")
+	return Shell(strings.ToLower(v))
+}
+
+// Detect resolves the shell using the RUN-014 precedence: explicit CLI flag,
+// resolved configuration value, ARGMAX_SHELL marker from an autostart hook,
+// parent-process inspection, SHELL, then Bash fallback. Unsupported explicit
+// values (flag, config, marker) return an error before any session starts
+// (RUN-015); implicit fallbacks degrade to Bash.
+func Detect(cliFlag, cfgValue string) (Shell, error) {
+	explicit := []struct{ source, value string }{
+		{"--shell flag", cliFlag},
+		{"configuration", cfgValue},
+		{markerEnv + " marker", os.Getenv(markerEnv)},
+	}
+	for _, e := range explicit {
+		if e.value == "" {
+			continue
 		}
-		return Kind(flag), nil
-	}
-	if configured != "" {
-		if !Supported(configured) {
-			return "", fmt.Errorf("unsupported configured shell %q: supported shells are bash, zsh, and fish", configured)
+		s := normalize(e.value)
+		if !s.Valid() {
+			return "", fmt.Errorf("unsupported shell %q from %s: supported shells are bash, zsh, fish", e.value, e.source)
 		}
-		return Kind(configured), nil
+		return s, nil
 	}
-	if marker := os.Getenv("ARGMAX_SHELL"); Supported(marker) {
-		return Kind(marker), nil
+	if s, ok := detectFromParent(os.Getppid(), parentLookup); ok {
+		return s, nil
 	}
-	if k, ok := parentShell(); ok {
-		return k, nil
-	}
-	if base := filepath.Base(os.Getenv("SHELL")); Supported(base) {
-		return Kind(base), nil
+	if s := normalize(os.Getenv("SHELL")); s.Valid() {
+		return s, nil
 	}
 	return Bash, nil
 }
 
-// parentShell inspects the parent process name where the platform allows.
-func parentShell() (Kind, bool) {
-	ppid := os.Getppid()
-	var name string
-	switch runtime.GOOS {
-	case "linux":
-		data, err := os.ReadFile("/proc/" + strconv.Itoa(ppid) + "/comm")
-		if err != nil {
+// procInfo describes one process on the ancestor chain: its command name (or
+// path) and its parent PID.
+type procInfo struct {
+	name string
+	ppid int
+}
+
+// parentLookup resolves a PID to its procInfo. It is a package-level
+// variable so tests can stub the OS lookup; production uses procInfoOf.
+var parentLookup = procInfoOf
+
+// detectFromParent walks the ancestor chain (bounded) looking for a
+// supported shell. The lookup function is injected for testing.
+func detectFromParent(pid int, lookup func(pid int) (procInfo, bool)) (Shell, bool) {
+	for depth := 0; depth < 10 && pid > 1; depth++ {
+		info, ok := lookup(pid)
+		if !ok {
 			return "", false
 		}
-		name = strings.TrimSpace(string(data))
-	case "darwin":
-		out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(ppid)).Output()
-		if err != nil {
-			return "", false
+		if s := normalize(info.name); s.Valid() {
+			return s, true
 		}
-		name = filepath.Base(strings.TrimSpace(string(out)))
-	default:
-		return "", false
-	}
-	name = strings.TrimPrefix(name, "-") // login shells
-	if Supported(name) {
-		return Kind(name), true
+		pid = info.ppid
 	}
 	return "", false
 }
 
-// Path resolves the shell executable on PATH.
-func (k Kind) Path() (string, error) {
-	p, err := exec.LookPath(string(k))
-	if err != nil {
-		return "", fmt.Errorf("shell %s not found on PATH: %w", k, err)
+// procInfoOf resolves a process's command name and parent PID, preferring
+// /proc on Linux with a ps(1) fallback everywhere.
+func procInfoOf(pid int) (procInfo, bool) {
+	if runtime.GOOS == "linux" {
+		if info, ok := procInfoFromProcFS(pid); ok {
+			return info, true
+		}
 	}
-	return p, nil
+	return procInfoFromPS(pid)
 }
 
-// HistoryPath returns the shell's history file, honoring $HISTFILE and
-// XDG-aware defaults.
-func (k Kind) HistoryPath() string {
-	if hf := os.Getenv("HISTFILE"); hf != "" {
-		return hf
-	}
-	home, err := os.UserHomeDir()
+// procInfoFromProcFS parses /proc/<pid>/stat. The comm field may contain
+// spaces and parentheses, so it is taken between the first '(' and the last
+// ')'; the fields after it are "state ppid ...".
+func procInfoFromProcFS(pid int) (procInfo, bool) {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
-		return ""
+		return procInfo{}, false
 	}
-	switch k {
-	case Bash:
-		return filepath.Join(home, ".bash_history")
-	case Zsh:
-		if zdot := os.Getenv("ZDOTDIR"); zdot != "" {
-			return filepath.Join(zdot, ".zsh_history")
-		}
-		return filepath.Join(home, ".zsh_history")
-	case Fish:
-		if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
-			return filepath.Join(xdg, "fish", "fish_history")
-		}
-		return filepath.Join(home, ".local", "share", "fish", "fish_history")
+	s := string(b)
+	open := strings.IndexByte(s, '(')
+	close := strings.LastIndexByte(s, ')')
+	if open < 0 || close <= open+1 || close+1 >= len(s) {
+		return procInfo{}, false
 	}
-	return ""
+	fields := strings.Fields(s[close+1:])
+	if len(fields) < 2 {
+		return procInfo{}, false
+	}
+	ppid, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return procInfo{}, false
+	}
+	return procInfo{name: s[open+1 : close], ppid: ppid}, true
 }
 
-// AliasFiles returns the configuration files scanned for alias definitions.
-func (k Kind) AliasFiles() []string {
-	home, err := os.UserHomeDir()
+// procInfoFromPS uses `ps -p <pid> -o comm= -o ppid=`, which works on Linux
+// and macOS. comm may contain spaces, so the last field is taken as ppid and
+// everything before it as the command.
+func procInfoFromPS(pid int) (procInfo, bool) {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=", "-o", "ppid=").Output()
 	if err != nil {
-		return nil
+		return procInfo{}, false
 	}
-	switch k {
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 {
+		return procInfo{}, false
+	}
+	ppid, err := strconv.Atoi(fields[len(fields)-1])
+	if err != nil {
+		return procInfo{}, false
+	}
+	return procInfo{name: strings.Join(fields[:len(fields)-1], " "), ppid: ppid}, true
+}
+
+// Executable resolves the shell binary: PATH lookup first, then the
+// /bin/<name> fallback.
+func (s Shell) Executable() string {
+	if path, err := exec.LookPath(string(s)); err == nil {
+		return path
+	}
+	return "/bin/" + string(s)
+}
+
+// Args returns the argv used to launch the wrapped shell (RUN-012 covers the
+// login variant). Bash and Zsh always run interactively; Fish is interactive
+// by default and only needs the login flag.
+func (s Shell) Args(login bool) []string {
+	switch s {
 	case Bash:
-		return []string{
-			filepath.Join(home, ".bashrc"),
-			filepath.Join(home, ".bash_profile"),
-			filepath.Join(home, ".bash_aliases"),
+		if login {
+			return []string{"--login", "-i"}
 		}
+		return []string{"-i"}
 	case Zsh:
-		zdot := os.Getenv("ZDOTDIR")
-		if zdot == "" {
-			zdot = home
+		if login {
+			return []string{"-l", "-i"}
 		}
-		return []string{
-			filepath.Join(zdot, ".zshrc"),
-			filepath.Join(zdot, ".zshenv"),
-			filepath.Join(zdot, ".zprofile"),
-		}
+		return []string{"-i"}
 	case Fish:
-		cfg := os.Getenv("XDG_CONFIG_HOME")
-		if cfg == "" {
-			cfg = filepath.Join(home, ".config")
+		if login {
+			return []string{"--login"}
 		}
-		return []string{filepath.Join(cfg, "fish", "config.fish")}
+		return []string{}
 	}
 	return nil
-}
-
-// RCFile returns the file that receives the autostart block for setup.
-func (k Kind) RCFile() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	switch k {
-	case Bash:
-		return filepath.Join(home, ".bashrc")
-	case Zsh:
-		zdot := os.Getenv("ZDOTDIR")
-		if zdot == "" {
-			zdot = home
-		}
-		return filepath.Join(zdot, ".zshrc")
-	case Fish:
-		cfg := os.Getenv("XDG_CONFIG_HOME")
-		if cfg == "" {
-			cfg = filepath.Join(home, ".config")
-		}
-		return filepath.Join(cfg, "fish", "config.fish")
-	}
-	return ""
 }

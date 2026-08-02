@@ -1,26 +1,582 @@
 package ai
 
 import (
-	"fmt"
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Caps on gathered context, per the privacy contract.
+// Context budgets and caps (PRD 9.12 universal context, PERF-005, PERF-007).
 const (
-	capStatus     = 1000
-	capStagedDiff = 1500
-	capHelp       = 600
-	capGeneric    = 1000
-	maxDirEntries = 30
-	maxSubdirs    = 15
+	contextCacheTTL = 4 * time.Second // AI-012
+	contextCacheMax = 50              // PERF-007
+
+	specializedBudget = 1 * time.Second         // specialized provider commands
+	universalBudget   = 1200 * time.Millisecond // universal workspace provider
+	gitProbeBudget    = 900 * time.Millisecond  // per independent git probe
+	helpBudget        = 900 * time.Millisecond
+
+	maxDirEntries    = 30
+	maxGitBranches   = 10
+	maxRecentCommits = 5
+	maxScripts       = 50
+	maxStatusChars   = 1000
+	maxStagedChars   = 1500
+	maxSpecialChars  = 1000
+	maxHelpChars     = 600
+
+	maxPackageJSONBytes = 1 << 18 // 256 KiB guard for package.json
+	maxBuildFileBytes   = 1 << 18 // 256 KiB guard for Makefile/justfile
 )
 
-// helpAllowlist restricts --help gathering to common developer tools.
+// Context is the bounded environment snapshot sent to the provider (AI-007).
+// Every field is empty when its probe failed or did not apply; failures never
+// produce errors.
+type Context struct {
+	Ecosystems    []string
+	Scripts       []string // "name: command"
+	DirEntries    []string // ≤30
+	GitBranch     string
+	GitPrevBranch string
+	GitBranches   []string // ≤10
+	GitStatus     string   // ≤1000 chars
+	StagedDiff    string   // ≤1500 chars
+	RecentCommits []string // ≤5 subjects
+	MergeState    string   // "merging"|"rebasing"|""
+	Specialized   string   // output of the matched specialized provider, ≤1000 chars
+	Help          string   // bounded --help output for allowlisted root cmd, ≤600 chars
+}
+
+// Specialized provider names, chosen by the typed buffer root+subcommand.
+const (
+	providerUniversal   = "universal"
+	providerDocker      = "docker-containers"
+	providerCompose     = "compose-services"
+	providerPods        = "kubectl-pods"
+	providerGitBranches = "git-branches"
+	providerProcesses   = "processes"
+	providerSystemd     = "systemd-services"
+)
+
+// selectProvider picks the FIRST matching specialized provider, otherwise the
+// universal workspace provider.
+func selectProvider(tokens []string) string {
+	if len(tokens) == 0 {
+		return providerUniversal
+	}
+	sub := func(i int) string {
+		if i < len(tokens) {
+			return tokens[i]
+		}
+		return ""
+	}
+	switch tokens[0] {
+	case "docker":
+		switch sub(1) {
+		case "exec", "logs", "stop", "restart", "rm":
+			return providerDocker
+		case "compose":
+			if sub(2) == "exec" || sub(2) == "logs" {
+				return providerCompose
+			}
+		}
+	case "docker-compose":
+		if sub(1) == "exec" || sub(1) == "logs" {
+			return providerCompose
+		}
+	case "kubectl":
+		switch sub(1) {
+		case "exec", "logs":
+			return providerPods
+		case "describe", "delete":
+			if sub(2) == "pod" || sub(2) == "pods" {
+				return providerPods
+			}
+		}
+	case "git":
+		switch sub(1) {
+		case "checkout", "switch", "merge", "rebase":
+			return providerGitBranches
+		case "branch":
+			if sub(2) == "-d" || sub(2) == "-D" {
+				return providerGitBranches
+			}
+		}
+	case "kill":
+		return providerProcesses
+	case "systemctl":
+		switch sub(1) {
+		case "restart", "stop", "status":
+			return providerSystemd
+		}
+	}
+	return providerUniversal
+}
+
+// contextCacheEntry is one cached snapshot. The provider is recorded so a
+// cache-key collision between buffers mapping to different providers (e.g.
+// "docker exec" vs "docker compose logs") never serves the wrong context.
+type contextCacheEntry struct {
+	provider string
+	at       time.Time
+	value    Context
+}
+
+// contextCache is the package-level 4s/50-entry context cache (AI-012,
+// PERF-007).
+var contextCache = struct {
+	sync.Mutex
+	entries map[string]contextCacheEntry
+}{entries: make(map[string]contextCacheEntry)}
+
+func contextCacheGet(key, provider string) (Context, bool) {
+	contextCache.Lock()
+	defer contextCache.Unlock()
+	e, ok := contextCache.entries[key]
+	if !ok || e.provider != provider || time.Since(e.at) >= contextCacheTTL {
+		return Context{}, false
+	}
+	return e.value, true
+}
+
+func contextCacheSet(key, provider string, value Context) {
+	contextCache.Lock()
+	defer contextCache.Unlock()
+	now := time.Now()
+	if len(contextCache.entries) >= contextCacheMax {
+		for k, e := range contextCache.entries {
+			if now.Sub(e.at) >= contextCacheTTL {
+				delete(contextCache.entries, k)
+			}
+		}
+	}
+	if len(contextCache.entries) >= contextCacheMax {
+		var oldestKey string
+		var oldest time.Time
+		for k, e := range contextCache.entries {
+			if oldestKey == "" || e.at.Before(oldest) {
+				oldestKey, oldest = k, e.at
+			}
+		}
+		delete(contextCache.entries, oldestKey)
+	}
+	contextCache.entries[key] = contextCacheEntry{provider: provider, at: now, value: value}
+}
+
+// resetContextCache empties the context cache. Used by tests.
+func resetContextCache() {
+	contextCache.Lock()
+	defer contextCache.Unlock()
+	contextCache.entries = make(map[string]contextCacheEntry)
+}
+
+// GatherContext builds the bounded environment snapshot (AI-007) choosing the
+// first matching specialized provider, else the universal workspace provider.
+// Specialized commands get a 1s budget; the universal provider 1.2s;
+// independent git probes run concurrently with sub-second budgets. Results are
+// cached 4s with ≤50 entries keyed by (buffer-root + cwd) (AI-012, PERF-007).
+func GatherContext(ctx context.Context, req Request) Context {
+	tokens := strings.Fields(req.Buffer)
+	provider := selectProvider(tokens)
+	root := ""
+	if len(tokens) > 0 {
+		root = tokens[0]
+	}
+	key := root + "\x00" + req.CWD
+	if cached, ok := contextCacheGet(key, provider); ok {
+		return cached
+	}
+
+	var c Context
+	if provider == providerUniversal {
+		c = gatherUniversal(ctx, req, tokens)
+	} else {
+		c.Specialized = gatherSpecialized(ctx, provider, req.CWD)
+	}
+	contextCacheSet(key, provider, c)
+	return c
+}
+
+// gatherSpecialized runs the matched specialized provider with a 1s budget
+// and caps its output at 1000 chars.
+func gatherSpecialized(ctx context.Context, provider, dir string) string {
+	ctx, cancel := context.WithTimeout(ctx, specializedBudget)
+	defer cancel()
+
+	var out string
+	switch provider {
+	case providerDocker:
+		out = dockerResources(ctx, dir)
+	case providerCompose:
+		out = composeServices(ctx, dir)
+	case providerPods:
+		out, _ = runProbe(ctx, dir, maxSpecialChars, "kubectl", "get", "pods", "--no-headers")
+	case providerGitBranches:
+		out, _ = runProbe(ctx, dir, maxSpecialChars, "git", "branch", "-a")
+	case providerProcesses:
+		out = topProcesses(ctx, dir)
+	case providerSystemd:
+		out = systemdServices(ctx, dir)
+	}
+	return capString(out, maxSpecialChars)
+}
+
+// dockerResources lists running containers and images.
+func dockerResources(ctx context.Context, dir string) string {
+	var ps, images string
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if out, err := runProbe(ctx, dir, 600, "docker", "ps"); err == nil {
+			ps = out
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if out, err := runProbe(ctx, dir, 400, "docker", "images", "--format", "{{.Repository}}:{{.Tag}}"); err == nil {
+			images = out
+		}
+	}()
+	wg.Wait()
+
+	var b strings.Builder
+	if ps != "" {
+		b.WriteString("containers:\n")
+		b.WriteString(ps)
+	}
+	if images != "" {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString("images:\n")
+		b.WriteString(images)
+	}
+	return b.String()
+}
+
+// composeServices lists compose services, preferring the plugin form and
+// falling back to the legacy docker-compose binary.
+func composeServices(ctx context.Context, dir string) string {
+	out, err := runProbe(ctx, dir, maxSpecialChars, "docker", "compose", "ps", "--services")
+	if err != nil {
+		out, err = runProbe(ctx, dir, maxSpecialChars, "docker-compose", "ps", "--services")
+	}
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
+// topProcesses lists the top processes with PID, CPU, and memory columns.
+// The -r sort flag is not portable, so fall back to a plain listing.
+func topProcesses(ctx context.Context, dir string) string {
+	out, err := runProbe(ctx, dir, 4096, "ps", "-eo", "pid,pcpu,pmem,comm", "-r")
+	if err != nil {
+		out, err = runProbe(ctx, dir, 4096, "ps", "-eo", "pid,pcpu,pmem,comm")
+	}
+	if err != nil {
+		return ""
+	}
+	return headLines(out, 10)
+}
+
+// systemdServices lists service units.
+func systemdServices(ctx context.Context, dir string) string {
+	out, err := runProbe(ctx, dir, 8192, "systemctl", "list-units", "--type=service", "--no-pager", "--no-legend")
+	if err != nil {
+		return ""
+	}
+	return headLines(out, 30)
+}
+
+// ecosystemMarkers maps workspace signature files to ecosystem names.
+var ecosystemMarkers = []struct {
+	file string
+	name string
+}{
+	{"package.json", "node"},
+	{"go.mod", "go"},
+	{"Cargo.toml", "rust"},
+	{"pyproject.toml", "python"},
+	{"requirements.txt", "python"},
+	{"justfile", "just"},
+	{"Justfile", "just"},
+	{"Makefile", "make"},
+	{"makefile", "make"},
+	{"Dockerfile", "docker"},
+	{"Chart.yaml", "helm"},
+}
+
+// gatherUniversal is the universal workspace provider: detected ecosystems,
+// scripts/tasks, a bounded directory listing, git state, and allowlisted
+// command help. Total budget 1.2s (PERF-005).
+func gatherUniversal(ctx context.Context, req Request, tokens []string) Context {
+	ctx, cancel := context.WithTimeout(ctx, universalBudget)
+	defer cancel()
+
+	c := Context{
+		Ecosystems: detectEcosystems(req.CWD),
+		Scripts:    gatherScripts(req.CWD),
+		DirEntries: listDirEntries(req.CWD, maxDirEntries),
+	}
+
+	// Independent probes run concurrently; each writes its own Context field
+	// and the WaitGroup establishes happens-before for the reads below.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		gatherGit(ctx, req.CWD, &c)
+	}()
+	go func() {
+		defer wg.Done()
+		c.Help = gatherHelp(ctx, req.CWD, tokens)
+	}()
+	wg.Wait()
+	return c
+}
+
+// detectEcosystems reports the workspace signatures present in dir, in a
+// stable order without duplicates.
+func detectEcosystems(dir string) []string {
+	seen := make(map[string]bool, len(ecosystemMarkers))
+	var out []string
+	for _, m := range ecosystemMarkers {
+		if seen[m.name] {
+			continue
+		}
+		if st, err := os.Stat(filepath.Join(dir, m.file)); err == nil && !st.IsDir() {
+			seen[m.name] = true
+			out = append(out, m.name)
+		}
+	}
+	return out
+}
+
+// makeTargetRe matches simple Make targets ("build: deps"), capturing the
+// text after the colon so assignments ("X := 1") can be excluded.
+var makeTargetRe = regexp.MustCompile(`^([A-Za-z0-9_][A-Za-z0-9_.%-]*)\s*:(.*)$`)
+
+// justTargetRe matches just recipes ("build:" or "build target: deps"),
+// capturing the text after the colon so assignments can be excluded.
+var justTargetRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_-]*)(?:\s[^:=]*)?:(.*)$`)
+
+// gatherScripts extracts package.json scripts and Make/Just targets from dir
+// and up to 15 visible immediate subdirectories, excluding node_modules.
+// Entries from subdirectories are prefixed with the directory name.
+func gatherScripts(dir string) []string {
+	var scripts []string
+	collectDirScripts(dir, "", &scripts)
+
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		n := 0
+		for _, e := range entries {
+			if n >= 15 {
+				break
+			}
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "node_modules" {
+				continue
+			}
+			n++
+			collectDirScripts(filepath.Join(dir, e.Name()), e.Name(), &scripts)
+		}
+	}
+	if len(scripts) > maxScripts {
+		scripts = scripts[:maxScripts]
+	}
+	return scripts
+}
+
+// collectDirScripts appends the scripts/targets of a single directory.
+// prefix qualifies names from subdirectories ("web/build").
+func collectDirScripts(dir, prefix string, out *[]string) {
+	qualify := func(name string) string {
+		if prefix == "" {
+			return name
+		}
+		return prefix + "/" + name
+	}
+
+	if data, err := readBounded(filepath.Join(dir, "package.json"), maxPackageJSONBytes); err == nil {
+		var pkg struct {
+			Scripts map[string]string `json:"scripts"`
+		}
+		if json.Unmarshal(data, &pkg) == nil && len(pkg.Scripts) > 0 {
+			names := make([]string, 0, len(pkg.Scripts))
+			for name := range pkg.Scripts {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				*out = append(*out, qualify(name)+": "+pkg.Scripts[name])
+			}
+		}
+	}
+
+	for _, names := range []struct {
+		files []string
+		re    *regexp.Regexp
+	}{
+		{[]string{"Makefile", "makefile"}, makeTargetRe},
+		{[]string{"justfile", "Justfile"}, justTargetRe},
+	} {
+		for _, file := range names.files {
+			data, err := readBounded(filepath.Join(dir, file), maxBuildFileBytes)
+			if err != nil {
+				continue
+			}
+			seen := map[string]bool{}
+			for _, line := range strings.Split(string(data), "\n") {
+				m := names.re.FindStringSubmatch(line)
+				if m == nil {
+					continue
+				}
+				target := m[1]
+				if strings.HasPrefix(m[2], "=") {
+					continue // assignment, not a target
+				}
+				if strings.HasPrefix(target, ".") || strings.Contains(target, "%") || seen[target] {
+					continue
+				}
+				seen[target] = true
+				*out = append(*out, qualify(target))
+			}
+			break // first matching build file wins
+		}
+	}
+}
+
+// listDirEntries returns up to max visible entry names of dir; directories
+// carry a trailing slash. Hidden entries are excluded: only visible file and
+// directory names may be disclosed (PRD 11.2).
+func listDirEntries(dir string, max int) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, max)
+	for _, e := range entries {
+		if len(out) >= max {
+			break
+		}
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		name := e.Name()
+		if e.IsDir() {
+			name += "/"
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// gatherGit fills the git fields of c from independent concurrent probes,
+// each with a sub-second budget. Outside a git workspace every probe fails
+// and the fields stay empty.
+func gatherGit(ctx context.Context, dir string, c *Context) {
+	var wg sync.WaitGroup
+	probe := func(dst *string, maxOut int, args ...string) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			*dst = gitProbe(ctx, dir, maxOut, args...)
+		}()
+	}
+
+	var branches, commits, gitDir string
+	probe(&c.GitBranch, 200, "rev-parse", "--abbrev-ref", "HEAD")
+	probe(&c.GitPrevBranch, 200, "rev-parse", "--abbrev-ref", "@{-1}")
+	probe(&c.GitStatus, maxStatusChars, "status", "--short")
+	probe(&c.StagedDiff, maxStagedChars, "diff", "--staged")
+	probe(&branches, maxSpecialChars, "for-each-ref", "--sort=-committerdate", "--count=10", "--format=%(refname:short)", "refs/heads/")
+	probe(&commits, maxSpecialChars, "log", "-5", "--format=%s")
+	probe(&gitDir, 1000, "rev-parse", "--absolute-git-dir")
+	wg.Wait()
+
+	if c.GitBranch == "" {
+		// Unborn HEAD (fresh repository without commits).
+		c.GitBranch = gitProbe(ctx, dir, 200, "symbolic-ref", "--short", "HEAD")
+	}
+	if branches != "" {
+		c.GitBranches = splitLines(branches, maxGitBranches)
+	}
+	if commits != "" {
+		c.RecentCommits = splitLines(commits, maxRecentCommits)
+	}
+	if gitDir == "" {
+		gitDir = resolveGitDir(dir)
+	}
+	c.MergeState = mergeState(gitDir)
+}
+
+// gitProbe runs one git probe with a sub-second budget; failure yields "".
+func gitProbe(ctx context.Context, dir string, maxOut int, args ...string) string {
+	ctx, cancel := context.WithTimeout(ctx, gitProbeBudget)
+	defer cancel()
+	out, err := runProbe(ctx, dir, maxOut, "git", args...)
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
+// resolveGitDir returns the git directory for cwd when it is directly
+// present, following a "gitdir:" file for worktrees and submodules.
+func resolveGitDir(cwd string) string {
+	dot := filepath.Join(cwd, ".git")
+	st, err := os.Stat(dot)
+	if err != nil {
+		return ""
+	}
+	if st.IsDir() {
+		return dot
+	}
+	data, err := readBounded(dot, 4096)
+	if err != nil {
+		return ""
+	}
+	p, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+	if !ok {
+		return ""
+	}
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(cwd, p)
+	}
+	return p
+}
+
+// mergeState reports "merging", "rebasing", or "" for a git directory.
+func mergeState(gitDir string) string {
+	if gitDir == "" {
+		return ""
+	}
+	if isFile(filepath.Join(gitDir, "MERGE_HEAD")) {
+		return "merging"
+	}
+	if isDir(filepath.Join(gitDir, "rebase-merge")) || isDir(filepath.Join(gitDir, "rebase-apply")) {
+		return "rebasing"
+	}
+	return ""
+}
+
+// helpAllowlist is the 1.0 set of commands for which bounded --help output
+// may be gathered.
 var helpAllowlist = map[string]bool{
 	"git": true, "docker": true, "kubectl": true, "npm": true, "yarn": true,
 	"pnpm": true, "cargo": true, "go": true, "systemctl": true, "helm": true,
@@ -30,306 +586,118 @@ var helpAllowlist = map[string]bool{
 	"podman": true, "tofu": true, "ansible": true, "gh": true, "nix": true,
 }
 
-// Snapshot is the bounded environment context sent with an AI request.
-type Snapshot struct {
-	CWD            string
-	PrevCommand    string
-	PrevExitStatus int
-	RecentCommands []string // up to three
-	Sections       []Section
+// helpAllowed reports whether --help may be gathered for root: it must be on
+// the explicit allowlist and contain no path separators (PRD 11.3).
+func helpAllowed(root string) bool {
+	if root == "" || strings.ContainsAny(root, `/\`) {
+		return false
+	}
+	return helpAllowlist[root]
 }
 
-// Section is one labeled block of untrusted context.
-type Section struct {
-	Label   string
-	Content string
-}
-
-// Hash returns a stable digest of the snapshot for caching.
-func (s Snapshot) Hash() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s|%s|%d|%s|", s.CWD, s.PrevCommand, s.PrevExitStatus, strings.Join(s.RecentCommands, ";"))
-	for _, sec := range s.Sections {
-		fmt.Fprintf(&b, "%s=%d;", sec.Label, len(sec.Content))
-	}
-	return b.String()
-}
-
-// Prober runs one bounded external probe; injected so context gathering
-// reuses the generators' safe execution path.
-type Prober func(timeout time.Duration, name string, args ...string) string
-
-// Gatherer builds environment snapshots with a small TTL cache for
-// dynamic provider context.
-type Gatherer struct {
-	Probe Prober
-
-	mu    sync.Mutex
-	cache map[string]cacheEntry
-}
-
-type cacheEntry struct {
-	content string
-	expires time.Time
-}
-
-const (
-	contextTTL      = 4 * time.Second
-	maxCacheEntries = 50
-)
-
-// cached memoizes one probe result for the context TTL.
-func (g *Gatherer) cached(key string, fn func() string) string {
-	g.mu.Lock()
-	if e, ok := g.cache[key]; ok && time.Now().Before(e.expires) {
-		g.mu.Unlock()
-		return e.content
-	}
-	g.mu.Unlock()
-	content := fn()
-	g.mu.Lock()
-	if g.cache == nil || len(g.cache) >= maxCacheEntries {
-		g.cache = map[string]cacheEntry{}
-	}
-	g.cache[key] = cacheEntry{content: content, expires: time.Now().Add(contextTTL)}
-	g.mu.Unlock()
-	return content
-}
-
-// Gather builds the snapshot for the typed buffer, choosing the first
-// matching specialized provider and otherwise the universal workspace
-// provider.
-func (g *Gatherer) Gather(cwd, buffer, prevCommand string, prevExit int, recent []string) Snapshot {
-	snap := Snapshot{
-		CWD:            cwd,
-		PrevCommand:    prevCommand,
-		PrevExitStatus: prevExit,
-		RecentCommands: lastN(recent, 3),
-	}
-	if sec, ok := g.specialized(cwd, buffer); ok {
-		snap.Sections = sec
-		return snap
-	}
-	snap.Sections = g.universal(cwd, buffer)
-	return snap
-}
-
-// specialized returns provider context for recognized command shapes.
-func (g *Gatherer) specialized(cwd, buffer string) ([]Section, bool) {
-	fields := strings.Fields(buffer)
-	if len(fields) == 0 {
-		return nil, false
-	}
-	probe := func(label, key string, timeout time.Duration, name string, args ...string) []Section {
-		out := g.cached(key, func() string { return g.Probe(timeout, name, args...) })
-		return []Section{{Label: label, Content: truncate(out, capGeneric)}}
-	}
-	head := fields[0]
-	sub := ""
-	if len(fields) > 1 {
-		sub = fields[1]
-	}
-	switch {
-	case head == "docker" && sub == "compose" && len(fields) > 2 && isOneOf(fields[2], "exec", "logs"),
-		head == "docker-compose" && isOneOf(sub, "exec", "logs"):
-		return probe("running compose services", "compose-ps", time.Second, "docker", "compose", "ps", "--format", "{{.Name}}\t{{.Status}}"), true
-	case head == "docker" && isOneOf(sub, "exec", "logs", "stop", "restart", "rm"):
-		sections := probe("running containers", "docker-ps", time.Second, "docker", "ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}")
-		images := g.cached("docker-images", func() string {
-			return g.Probe(time.Second, "docker", "images", "--format", "{{.Repository}}:{{.Tag}}")
-		})
-		return append(sections, Section{Label: "local images", Content: truncate(images, capGeneric)}), true
-	case head == "kubectl" && (isOneOf(sub, "exec", "logs") ||
-		(len(fields) > 2 && isOneOf(sub, "describe", "delete") && strings.HasPrefix(fields[2], "pod"))):
-		return probe("current pods", "kubectl-pods", time.Second, "kubectl", "get", "pods", "-o", "name"), true
-	case head == "git" && isOneOf(sub, "checkout", "switch", "merge", "rebase") ||
-		(head == "git" && sub == "branch" && strings.Contains(buffer, "-d")):
-		return probe("local and remote branches", "git-branches", time.Second, "git", "branch", "-a", "--format=%(refname:short)"), true
-	case head == "kill":
-		return probe("top processes", "top-procs", time.Second, "ps", "-arxo", "pid=,pcpu=,pmem=,comm="), true
-	case head == "systemctl" && isOneOf(sub, "restart", "stop", "status"):
-		return probe("service units", "systemd-units", time.Second, "systemctl", "list-units", "--type=service", "--no-legend", "--no-pager"), true
-	}
-	return nil, false
-}
-
-// universal gathers ecosystem, script, directory, and Git context with
-// sub-second budgets per probe.
-func (g *Gatherer) universal(cwd, buffer string) []Section {
-	var sections []Section
-	if eco := detectEcosystems(cwd); eco != "" {
-		sections = append(sections, Section{Label: "detected ecosystems", Content: eco})
-	}
-	if scripts := workspaceScripts(cwd); scripts != "" {
-		sections = append(sections, Section{Label: "package scripts and tasks", Content: truncate(scripts, capGeneric)})
-	}
-	if listing := dirListing(cwd); listing != "" {
-		sections = append(sections, Section{Label: "directory entries", Content: listing})
-	}
-	sections = append(sections, g.gitSections(cwd)...)
-	if help := g.helpFor(buffer); help != "" {
-		sections = append(sections, Section{Label: "command help", Content: help})
-	}
-	return sections
-}
-
-// gitSections gathers independent Git probes; each has a sub-second
-// budget.
-func (g *Gatherer) gitSections(cwd string) []Section {
-	if _, err := os.Stat(filepath.Join(cwd, ".git")); err != nil {
-		return nil
-	}
-	type result struct {
-		label   string
-		content string
-		order   int
-	}
-	probes := []struct {
-		label string
-		limit int
-		args  []string
-	}{
-		{"current branch", capGeneric, []string{"rev-parse", "--abbrev-ref", "HEAD"}},
-		{"recent branches", capGeneric, []string{"branch", "--sort=-committerdate", "--format=%(refname:short)", "-l"}},
-		{"git status", capStatus, []string{"status", "--short", "--branch"}},
-		{"staged diff", capStagedDiff, []string{"diff", "--staged", "--stat"}},
-		{"recent commits", capGeneric, []string{"log", "-5", "--format=%s"}},
-	}
-	results := make(chan result, len(probes))
-	for i, p := range probes {
-		go func() {
-			out := g.cached("git-"+p.label, func() string {
-				return g.Probe(900*time.Millisecond, "git", append([]string{"-C", cwd}, p.args...)...)
-			})
-			results <- result{label: p.label, content: truncate(out, p.limit), order: i}
-		}()
-	}
-	collected := make([]result, 0, len(probes))
-	for range probes {
-		collected = append(collected, <-results)
-	}
-	sort.Slice(collected, func(i, j int) bool { return collected[i].order < collected[j].order })
-	var sections []Section
-	for _, r := range collected {
-		if r.content != "" {
-			sections = append(sections, Section{Label: r.label, Content: r.content})
-		}
-	}
-	if _, err := os.Stat(filepath.Join(cwd, ".git", "MERGE_HEAD")); err == nil {
-		sections = append(sections, Section{Label: "repository state", Content: "merge in progress"})
-	}
-	if _, err := os.Stat(filepath.Join(cwd, ".git", "rebase-merge")); err == nil {
-		sections = append(sections, Section{Label: "repository state", Content: "rebase in progress"})
-	}
-	return sections
-}
-
-// helpFor gathers --help output for allowlisted tools only, rejecting
-// names containing path separators.
-func (g *Gatherer) helpFor(buffer string) string {
-	fields := strings.Fields(buffer)
-	if len(fields) == 0 {
+// gatherHelp runs "<root> --help" capped at 600 chars within 900ms, only when
+// the buffer is a bare allowlisted root or root+partial-subcommand
+// (len(tokens)<=2 keeps it cheap).
+func gatherHelp(ctx context.Context, dir string, tokens []string) string {
+	if len(tokens) == 0 || len(tokens) > 2 || !helpAllowed(tokens[0]) {
 		return ""
 	}
-	name := fields[0]
-	if strings.ContainsAny(name, `/\`) || !helpAllowlist[name] {
-		return ""
-	}
-	out := g.cached("help-"+name, func() string {
-		return g.Probe(time.Second, name, "--help")
-	})
-	return truncate(out, capHelp)
-}
-
-func detectEcosystems(cwd string) string {
-	markers := map[string]string{
-		"package.json": "node", "go.mod": "go", "Cargo.toml": "rust",
-		"pyproject.toml": "python", "requirements.txt": "python",
-		"Dockerfile": "docker", "Makefile": "make", "justfile": "just",
-		"Justfile": "just", ".git": "git",
-	}
-	var found []string
-	for marker, name := range markers {
-		if _, err := os.Stat(filepath.Join(cwd, marker)); err == nil {
-			found = append(found, name)
-		}
-	}
-	sort.Strings(found)
-	return strings.Join(found, ", ")
-}
-
-// workspaceScripts extracts package scripts and Make/Just target names
-// from the current directory and up to 15 visible immediate
-// subdirectories, excluding node_modules.
-func workspaceScripts(cwd string) string {
-	var b strings.Builder
-	appendDir := func(dir, prefix string) {
-		for _, f := range []string{"package.json", "Makefile", "justfile", "Justfile"} {
-			if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
-				fmt.Fprintf(&b, "%s%s\n", prefix, f)
-			}
-		}
-	}
-	appendDir(cwd, "")
-	entries, err := os.ReadDir(cwd)
-	if err != nil {
-		return b.String()
-	}
-	count := 0
-	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "node_modules" {
-			continue
-		}
-		if count++; count > maxSubdirs {
-			break
-		}
-		appendDir(filepath.Join(cwd, e.Name()), e.Name()+"/")
-	}
-	return b.String()
-}
-
-// dirListing lists at most 30 current-directory entries.
-func dirListing(cwd string) string {
-	entries, err := os.ReadDir(cwd)
+	ctx, cancel := context.WithTimeout(ctx, helpBudget)
+	defer cancel()
+	out, err := runProbe(ctx, dir, maxHelpChars, tokens[0], "--help")
 	if err != nil {
 		return ""
 	}
-	var names []string
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		name := e.Name()
-		if e.IsDir() {
-			name += "/"
-		}
-		names = append(names, name)
-		if len(names) >= maxDirEntries {
-			break
-		}
-	}
-	return strings.Join(names, "\n")
+	return out
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
+// boundedWriter discards everything past n bytes while reporting full writes
+// so the producing process never blocks or dies on a full buffer.
+type boundedWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (b *boundedWriter) Write(p []byte) (int, error) {
+	if b.n > 0 {
+		chunk := p
+		if int64(len(chunk)) > b.n {
+			chunk = chunk[:b.n]
+		}
+		if _, err := b.w.Write(chunk); err != nil {
+			return 0, err
+		}
+		b.n -= int64(len(chunk))
+	}
+	return len(p), nil
+}
+
+// runProbe executes one external probe: argument array (never a shell
+// string), working directory set to dir, ctx deadline, stdout bounded at
+// maxOut bytes (PRD 11.3). Stderr is discarded. Errors are returned so
+// callers can fall back; gathering code turns them into empty fields.
+func runProbe(ctx context.Context, dir string, maxOut int, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	var buf bytes.Buffer
+	cmd.Stdout = &boundedWriter{w: &buf, n: int64(maxOut + 1)}
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return capString(strings.TrimSpace(buf.String()), maxOut), nil
+}
+
+// readBounded reads a file capped at max bytes.
+func readBounded(path string, max int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(io.LimitReader(f, max))
+}
+
+// capString hard-caps s at max bytes without splitting a UTF-8 rune at the
+// cut point.
+func capString(s string, max int) string {
+	if len(s) <= max {
 		return s
 	}
-	return s[:n]
+	if max < 0 {
+		max = 0
+	}
+	return strings.ToValidUTF8(s[:max], "")
 }
 
-func lastN(items []string, n int) []string {
-	if len(items) <= n {
-		return items
+// headLines keeps the first max lines of s.
+func headLines(s string, max int) string {
+	if max <= 0 {
+		return ""
 	}
-	return items[len(items)-n:]
+	lines := strings.Split(s, "\n")
+	if len(lines) <= max {
+		return s
+	}
+	return strings.Join(lines[:max], "\n")
 }
 
-func isOneOf(s string, options ...string) bool {
-	for _, o := range options {
-		if s == o {
-			return true
-		}
+// splitLines splits probe output into at most max lines.
+func splitLines(s string, max int) []string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > max {
+		lines = lines[:max]
 	}
-	return false
+	return lines
+}
+
+func isFile(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
+}
+
+func isDir(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.IsDir()
 }

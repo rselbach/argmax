@@ -1,7 +1,5 @@
 # Development tasks for argmax.
 
-scratch := `mktemp -d 2>/dev/null || echo /tmp`
-
 # Build the binary.
 build:
     go build -o argmax ./cmd/argmax
@@ -10,7 +8,7 @@ build:
 check: fmt lint test
 
 fmt:
-    goimports -w .
+    gofmt -w .
 
 lint:
     go vet ./...
@@ -22,15 +20,13 @@ test:
 bench:
     go test -run NONE -bench . -benchtime 10x ./...
 
-# Regenerate the catalog data bundle and documentation from a Fig corpus
-# dump directory (see tools/figexport).
-generate figjson:
-    go run ./tools/cataloggen -prd argmax-prd.md -fig {{figjson}} -out internal/catalog/data
-    go run ./tools/docgen
-
-# Regenerate the generated docs only.
+# Regenerate the catalog documentation (docs/commands.md).
 docs:
     go run ./tools/docgen
+
+# Verify the catalog documentation is current (CI drift gate).
+docs-check:
+    go run ./tools/docgen -check
 
 # Build and run a wrapped session with the local binary.
 run: build

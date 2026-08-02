@@ -1,47 +1,85 @@
 package ai
 
 import (
-	"os"
+	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/rselbach/argmax/internal/core"
 )
 
-// Prediction is one empty-prompt suggestion.
-type Prediction struct {
-	Command    string
-	Reason     string
-	Confidence int
-}
+// EmptyPromptSuggestions implements the deterministic local rules (EMPTY-002):
+// in-progress merge → "git commit"; in-progress rebase →
+// "git rebase --continue"; last command failed → retry it; after
+// "git status" → "git diff"; dirty repo → "git status"; Node workspace →
+// "npm run dev". Only rules with confidence ≥70 are returned (EMPTY-003), in
+// rule-evaluation order. All checks are local and bounded; failures skip the
+// rule.
+func EmptyPromptSuggestions(ctx context.Context, cwd, prevCommand string, prevExit int) []core.Suggestion {
+	if ctx.Err() != nil {
+		return nil
+	}
 
-// PredictEmpty evaluates the local deterministic rules for an empty
-// prompt. Only rules with confidence at least 70 are returned; an AI
-// fallback runs separately when nothing qualifies.
-func PredictEmpty(cwd, prevCommand string, prevExit int, probe Prober) (Prediction, bool) {
-	gitDir := filepath.Join(cwd, ".git")
-	if _, err := os.Stat(filepath.Join(gitDir, "MERGE_HEAD")); err == nil {
-		return Prediction{Command: "git commit", Reason: "finish the in-progress merge", Confidence: 90}, true
+	var out []core.Suggestion
+	add := func(text, description string, confidence int) {
+		out = append(out, core.Suggestion{
+			Text:        text,
+			Description: description,
+			Icon:        "ai",
+			Source:      core.SourceDynamic,
+			Confidence:  confidence,
+			Priority:    -1,
+		})
 	}
-	if _, err := os.Stat(filepath.Join(gitDir, "rebase-merge")); err == nil {
-		return Prediction{Command: "git rebase --continue", Reason: "continue the rebase", Confidence: 90}, true
-	}
-	if _, err := os.Stat(filepath.Join(gitDir, "rebase-apply")); err == nil {
-		return Prediction{Command: "git rebase --continue", Reason: "continue the rebase", Confidence: 90}, true
-	}
-	if prevExit != 0 && prevCommand != "" {
-		return Prediction{Command: prevCommand, Reason: "retry the failed command", Confidence: 75}, true
-	}
-	if strings.TrimSpace(prevCommand) == "git status" {
-		return Prediction{Command: "git diff", Reason: "inspect the reported changes", Confidence: 74}, true
-	}
-	if _, err := os.Stat(gitDir); err == nil && probe != nil {
-		status := probe(800*time.Millisecond, "git", "-C", cwd, "status", "--porcelain")
-		if strings.TrimSpace(status) != "" {
-			return Prediction{Command: "git status", Reason: "the repository has uncommitted changes", Confidence: 72}, true
+
+	gitDir := resolveGitDir(cwd)
+	if gitDir != "" {
+		if isFile(filepath.Join(gitDir, "MERGE_HEAD")) {
+			add("git commit", "finish merge", 90)
+		}
+		if isDir(filepath.Join(gitDir, "rebase-merge")) || isDir(filepath.Join(gitDir, "rebase-apply")) {
+			add("git rebase --continue", "continue rebase", 90)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(cwd, "package.json")); err == nil {
-		return Prediction{Command: "npm run dev", Reason: "start the Node dev server", Confidence: 70}, true
+
+	prev := strings.TrimSpace(prevCommand)
+	if prevExit != 0 && prev != "" {
+		add(prev, "retry failed command", 75)
 	}
-	return Prediction{}, false
+	if prev == "git status" {
+		add("git diff", "git diff after git status", 70)
+	}
+	if gitDir != "" && repoDirty(ctx, cwd) {
+		add("git status", "dirty repository", 75)
+	}
+	if hasNodeDevScript(cwd) {
+		add("npm run dev", "node workspace", 70)
+	}
+	return out
+}
+
+// repoDirty reports whether the repository at cwd has staged, unstaged, or
+// untracked changes. The probe is bounded; any failure means "not dirty".
+func repoDirty(ctx context.Context, cwd string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+	defer cancel()
+	out, err := runProbe(ctx, cwd, 4096, "git", "status", "--porcelain")
+	return err == nil && out != ""
+}
+
+// hasNodeDevScript reports whether cwd is a Node workspace with a dev script.
+func hasNodeDevScript(cwd string) bool {
+	data, err := readBounded(filepath.Join(cwd, "package.json"), maxPackageJSONBytes)
+	if err != nil {
+		return false
+	}
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return false
+	}
+	return pkg.Scripts["dev"] != ""
 }

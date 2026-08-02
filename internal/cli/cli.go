@@ -1,37 +1,45 @@
-// Package cli implements the argmax command surface: session launch,
-// init, setup, config, reload, version, update, crash-log, and uninstall.
+// Package cli implements the argmax command-line surface and subcommand
+// dispatch (PRD 9.14): session launch, init/setup/config/reload/version/
+// update/crash-log/uninstall.
 package cli
 
 import (
-	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
-	"sort"
-	"strconv"
-	"syscall"
-	"time"
+	"strings"
 
 	"github.com/rselbach/argmax/internal/config"
-	"github.com/rselbach/argmax/internal/logging"
-	"github.com/rselbach/argmax/internal/paths"
+	"github.com/rselbach/argmax/internal/logs"
 	"github.com/rselbach/argmax/internal/session"
-	"github.com/rselbach/argmax/internal/shell"
-	"github.com/rselbach/argmax/internal/state"
-	"github.com/rselbach/argmax/internal/update"
-	"github.com/rselbach/argmax/internal/watchdog"
 )
 
-// Version is injected at build time; development builds report "dev".
-var Version = "dev"
+// Exit codes: 0 success, 1 command failure, 2 usage error.
 
-// Main dispatches the CLI and returns the process exit code.
-func Main(args []string) int {
-	if len(args) > 0 && args[0] == watchdog.SessionArg {
-		return runSession(args[1:])
+const usageText = `usage: argmax [command] [flags]
+
+Start an interactive session:
+  argmax [--shell <bash|zsh|fish>] [--shell-login] [--debug]
+
+Commands:
+  init <bash|zsh|fish>   print the shell integration script
+  setup [shell]          install the binary, shell hook, and default config
+  config init            create the commented default config when absent
+  config show            print the resolved (redacted) configuration
+  reload                 validate config and signal the active session
+  version                print the version
+  update                 check the configured channel and self-update
+  crash-log [--clear]    show the newest crash report, or remove all
+  uninstall              remove hooks, state, config, and the local binary
+`
+
+// Main dispatches the CLI. version is the build-injected version ("dev" when
+// unset). Returns the process exit code.
+func Main(args []string, version string) int {
+	if version == "" {
+		version = "dev"
 	}
 	if len(args) == 0 {
-		return watchdog.Run(Version)
+		return runSession(nil, version, false)
 	}
 	switch args[0] {
 	case "init":
@@ -41,270 +49,96 @@ func Main(args []string) int {
 	case "config":
 		return cmdConfig(args[1:])
 	case "reload":
-		return cmdReload()
+		return cmdReload(args[1:])
 	case "version":
-		fmt.Println("argmax " + Version)
+		if len(args) > 1 {
+			return usageError("usage: argmax version")
+		}
+		fmt.Printf("argmax %s\n", version)
 		return 0
 	case "update":
-		return cmdUpdate()
+		return cmdUpdate(args[1:], version)
 	case "crash-log":
 		return cmdCrashLog(args[1:])
 	case "uninstall":
-		return cmdUninstall()
-	case "help", "--help", "-h":
-		usage(os.Stdout)
+		return cmdUninstall(args[1:])
+	case "__session":
+		// Hidden entry point of the watchdog's interactive child.
+		return runSession(args[1:], version, true)
+	case "-h", "--help", "help":
+		fmt.Print(usageText)
 		return 0
 	default:
-		if args[0][0] == '-' {
-			// Flags without a subcommand start a session.
-			return watchdog.Run(Version)
+		if strings.HasPrefix(args[0], "-") {
+			return runSession(args, version, false)
 		}
-		fmt.Fprintf(os.Stderr, "argmax: unknown command %q\n", args[0])
-		usage(os.Stderr)
-		return 1
-	}
-}
-
-func usage(w *os.File) {
-	_, _ = fmt.Fprint(w, `argmax — terminal-resident command completion
-
-Usage:
-  argmax [--shell <bash|zsh|fish>] [--shell-login] [--debug]
-  argmax init <bash|zsh|fish>   Print sourceable shell integration
-  argmax setup [shell]          Install autostart hooks and configuration
-  argmax config init            Create the default configuration
-  argmax config show            Print the resolved configuration
-  argmax reload                 Reload configuration in the active session
-  argmax update                 Check for and install a newer release
-  argmax crash-log [--clear]    Show or clear crash reports
-  argmax uninstall              Remove hooks, state, and binaries
-  argmax version                Print the version
-`)
-}
-
-// sessionFlags parses the session launch flags.
-func sessionFlags(args []string) (shellFlag string, login, debug bool, err error) {
-	fs := flag.NewFlagSet("argmax", flag.ContinueOnError)
-	fs.StringVar(&shellFlag, "shell", "", "shell to wrap: bash, zsh, or fish")
-	fs.StringVar(&shellFlag, "s", "", "shell to wrap (shorthand)")
-	fs.BoolVar(&login, "shell-login", false, "start the shell as a login shell")
-	fs.BoolVar(&debug, "debug", false, "enable debug diagnostics")
-	fs.BoolVar(&debug, "d", false, "enable debug diagnostics (shorthand)")
-	fs.SetOutput(os.Stderr)
-	err = fs.Parse(args)
-	return shellFlag, login, debug, err
-}
-
-// runSession is the watchdog-monitored interactive child.
-func runSession(args []string) int {
-	shellFlag, login, debug, err := sessionFlags(args)
-	if err != nil {
+		fmt.Fprintf(os.Stderr, "argmax: unknown command %q\n\n%s", args[0], usageText)
 		return 2
 	}
-	cfg, err := config.Load(config.Path())
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "argmax:", err)
-		return 1
-	}
-	if debug {
-		cfg.Core.Debug = true
-	}
-	if err := logging.Setup(cfg.Core.Debug); err != nil {
-		fmt.Fprintln(os.Stderr, "argmax: logging unavailable:", err)
-	}
-	defer logging.Close()
-	if cfg.Core.Debug {
-		logging.L().Warn("debug logging enabled: logs may contain everything typed at the prompt")
-	}
+}
 
-	kind, err := shell.Detect(shellFlag, cfg.Core.Shell)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "argmax:", err)
-		return 1
-	}
-	loginFlag := login
-	login = login || cfg.Core.ShellLogin
+// usageError reports a malformed invocation.
+func usageError(msg string) int {
+	fmt.Fprintln(os.Stderr, msg)
+	return 2
+}
 
-	watcher := config.NewWatcher(config.Path(), cfg)
-	go checkForUpdates(cfg)
-	code, err := session.Run(session.Options{
-		Watcher:   watcher,
-		Shell:     kind,
-		Login:     login,
-		ShellFlag: shellFlag,
-		LoginFlag: loginFlag,
-		Version:   Version,
-	})
+// commandError reports a failed command (PRD 9.14: concise stderr, non-zero).
+func commandError(cmd string, err error) int {
+	fmt.Fprintf(os.Stderr, "argmax %s: %v\n", cmd, err)
+	return 1
+}
+
+// runSession starts the wrapped shell session, either as the watchdog parent
+// or as the hidden __session child (PRD 9.14, 9.19).
+func runSession(args []string, version string, child bool) int {
+	opts, err := parseSessionFlags(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "argmax:", err)
-		if code == 0 {
-			code = 1
+		fmt.Fprintf(os.Stderr, "argmax: %v\n", err)
+		return 2
+	}
+	// Best-effort diagnostics; the session initializes its own logging too.
+	paths := config.ResolvePaths()
+	_ = logs.Init(paths.LogFile, opts.Debug)
+	defer logs.Close()
+	if child {
+		return session.Run(opts, version)
+	}
+	return session.RunWatchdog(opts, version)
+}
+
+// parseSessionFlags parses the launch flags --shell/-s, --shell-login, and
+// --debug/-d, accepting both "--flag value" and "--flag=value" forms.
+func parseSessionFlags(args []string) (session.Options, error) {
+	var opts session.Options
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		name, value, hasValue := arg, "", false
+		if j := strings.IndexByte(arg, '='); j >= 0 {
+			name, value, hasValue = arg[:j], arg[j+1:], true
+		}
+		switch name {
+		case "--shell", "-s":
+			if !hasValue {
+				i++
+				if i >= len(args) {
+					return opts, fmt.Errorf("%s requires a shell name", name)
+				}
+				value = args[i]
+			}
+			opts.ShellFlag = value
+		case "--shell-login", "--debug", "-d":
+			if hasValue {
+				return opts, fmt.Errorf("%s does not take a value", name)
+			}
+			if name == "--shell-login" {
+				opts.Login = true
+			} else {
+				opts.Debug = true
+			}
+		default:
+			return opts, fmt.Errorf("unknown flag %q", arg)
 		}
 	}
-	return code
-}
-
-// checkForUpdates runs the asynchronous startup release check; failures
-// are silent outside debug logs and never delay the first prompt.
-func checkForUpdates(cfg *config.Config) {
-	if !cfg.Updater.CheckOnStartup || Version == "dev" {
-		return
-	}
-	st := state.Load()
-	if time.Since(st.Updater.LastCheckTime) < cfg.CheckInterval() {
-		return
-	}
-	rel, ok, err := update.Latest(cfg.Updater.Channel)
-	st.Updater.LastCheckTime = time.Now().UTC()
-	if err != nil {
-		logging.L().Debug("update check failed", "error", err)
-	} else if ok && update.IsNewer(Version, rel.Version) && st.Updater.SeenVersion != rel.Version {
-		// Discovery is cached across sessions; each new version notifies
-		// once, after a command completes, so the prompt stays stable.
-		st.Updater.SeenVersion = rel.Version
-		logging.L().Info("new version available", "version", rel.Version)
-	}
-	if err := state.Save(st); err != nil {
-		logging.L().Debug("updater state save failed", "error", err)
-	}
-}
-
-func cmdInit(args []string) int {
-	if len(args) != 1 || !shell.Supported(args[0]) {
-		fmt.Fprintln(os.Stderr, "argmax: init requires exactly one of: bash, zsh, fish")
-		return 1
-	}
-	fmt.Print(shell.InitScript(shell.Kind(args[0])))
-	return 0
-}
-
-func cmdConfig(args []string) int {
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "argmax: config requires a subcommand: init or show")
-		return 1
-	}
-	switch args[0] {
-	case "init":
-		return cmdConfigInit()
-	case "show":
-		return cmdConfigShow()
-	default:
-		fmt.Fprintf(os.Stderr, "argmax: unknown config subcommand %q\n", args[0])
-		return 1
-	}
-}
-
-func cmdConfigInit() int {
-	path := config.Path()
-	if _, err := os.Stat(path); err == nil {
-		fmt.Printf("configuration already exists at %s\n", path)
-		return 0
-	}
-	if err := paths.EnsureDir(filepath.Dir(path)); err != nil {
-		fmt.Fprintln(os.Stderr, "argmax:", err)
-		return 1
-	}
-	if err := os.WriteFile(path, []byte(config.DefaultTemplate), 0o600); err != nil {
-		fmt.Fprintln(os.Stderr, "argmax:", err)
-		return 1
-	}
-	fmt.Printf("created %s\n", path)
-	return 0
-}
-
-func cmdConfigShow() int {
-	cfg, err := config.Load(config.Path())
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "argmax:", err)
-		return 1
-	}
-	out, err := cfg.Redacted()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "argmax:", err)
-		return 1
-	}
-	fmt.Print(out)
-	return 0
-}
-
-// cmdReload validates the configuration, then signals the active parent
-// session to apply it (its watcher also picks changes up within a second).
-func cmdReload() int {
-	if _, err := config.Load(config.Path()); err != nil {
-		fmt.Fprintln(os.Stderr, "argmax:", err)
-		return 1
-	}
-	pidStr := os.Getenv("ARGMAX_SESSION_PID")
-	if pidStr == "" {
-		fmt.Println("configuration is valid; no active argmax session to signal")
-		return 0
-	}
-	pid, err := strconv.Atoi(pidStr)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "argmax: invalid ARGMAX_SESSION_PID")
-		return 1
-	}
-	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
-		fmt.Fprintln(os.Stderr, "argmax: signal session:", err)
-		return 1
-	}
-	fmt.Println("reload signaled to the active session")
-	return 0
-}
-
-func cmdUpdate() int {
-	cfg, err := config.Load(config.Path())
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "argmax:", err)
-		return 1
-	}
-	rel, ok, err := update.Latest(cfg.Updater.Channel)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "argmax:", err)
-		return 1
-	}
-	if !ok {
-		fmt.Printf("no releases found on the %s channel\n", cfg.Updater.Channel)
-		return 0
-	}
-	fmt.Printf("current version: %s\nlatest %s release: %s\n", Version, cfg.Updater.Channel, rel.Version)
-	if !update.IsNewer(Version, rel.Version) {
-		fmt.Println("argmax is up to date")
-		return 0
-	}
-	if err := update.Apply(rel); err != nil {
-		fmt.Fprintln(os.Stderr, "argmax: update failed, current binary left intact:", err)
-		return 1
-	}
-	fmt.Printf("updated to %s\n", rel.Version)
-	return 0
-}
-
-func cmdCrashLog(args []string) int {
-	clear := len(args) == 1 && args[0] == "--clear"
-	dir := paths.CrashDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) == 0 {
-		if clear {
-			fmt.Println("no crash reports to remove")
-			return 0
-		}
-		fmt.Println("no crash reports found")
-		return 0
-	}
-	if clear {
-		if err := os.RemoveAll(dir); err != nil {
-			fmt.Fprintln(os.Stderr, "argmax:", err)
-			return 1
-		}
-		fmt.Printf("removed %d crash report(s)\n", len(entries))
-		return 0
-	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	sort.Strings(names)
-	fmt.Println(filepath.Join(dir, names[len(names)-1]))
-	return 0
+	return opts, nil
 }

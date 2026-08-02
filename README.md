@@ -1,141 +1,107 @@
 # argmax
 
-Editor-style command completion for your real terminal.
+`argmax` is a native, terminal-resident command completion and prediction
+tool. It wraps your interactive shell (Bash, Zsh, or Fish) in a lightweight
+PTY and gives you an editor-style completion menu, inline ghost text,
+searchable history, and context-aware ranking — without leaving your real
+terminal. It works in local terminals, SSH sessions, tmux, and Linux virtual
+terminals, with no account, no daemon, and no telemetry.
 
-`argmax` wraps your interactive shell — Bash, Zsh, or Fish — in a lightweight
-PTY session and gives it an inline completion menu, ghost-text suggestions,
-fuzzy history search, and context-aware ranking. Suggestions appear while you
-type; nothing runs until you press Enter. It works in local terminals, SSH,
-tmux, and Linux virtual terminals, with no account, no daemon, and no
-telemetry.
-
-```
-% git che
-    ❯  checkout    switch branches or restore files
-       cherry-pick apply existing commits
-    tab insert · ctrl+r mode · shift+tab hide
-```
-
-- **One ranked surface** — commands, subcommands, flags, files, shell and
-  Git/Cargo aliases, history, and live values (branches, containers, SSH
-  hosts, package scripts, processes) in a single menu.
-- **567-command catalog** — bundled specifications with nested subcommands
-  and options, plus automatic [Cobra](https://cobra.dev) `__complete`
-  inference for CLIs it doesn't know.
-- **Learns your workflow** — successful commands earn frecency in a local
-  SQLite database, command sequences learn transitions (`git add` →
-  `git commit`), and workspace signatures (go.mod, package.json, …) boost
-  what's relevant to the repository you're in.
-- **Local by default** — completion, history, ranking, and learning all work
-  offline. AI completion exists but is off until you configure a provider,
-  local (Ollama) or remote (any OpenAI-compatible endpoint).
+The core experience is local and offline. AI completion is optional, disabled
+by default, and works with any OpenAI-compatible endpoint (remote providers
+such as Groq, or local ones such as Ollama).
 
 ## Install
 
-From a published release:
+With Go 1.25+ installed:
 
 ```sh
-# verified install script (checksum-checked)
-curl -fsSL https://raw.githubusercontent.com/rselbach/argmax/main/scripts/install.sh | bash
-
-# Homebrew
-brew install rselbach/tap/argmax
-
-# Go toolchain
 go install github.com/rselbach/argmax/cmd/argmax@latest
+argmax setup          # hooks your shell, creates config
 ```
 
-`.deb` and `.rpm` packages ship with each release, and `packaging/` carries
-an AUR PKGBUILD and a Nix flake. From source:
+Or build from source:
 
 ```sh
-git clone https://github.com/rselbach/argmax && cd argmax
-go build -o argmax ./cmd/argmax   # Go 1.26+
+go build -ldflags "-X main.version=$(git describe --tags --always)" -o argmax ./cmd/argmax
+./argmax setup        # installs to ~/.local/bin, hooks your shell, creates config
 ```
 
-## Quick start
+Other channels — GitHub release tarballs, Homebrew tap, AUR, Nix flake,
+deb/rpm, and the checksum-verified install script — are documented in
+`packaging/README.md`.
 
-```sh
-argmax setup
-```
+Restart your terminal (or `source` the file `setup` reports). Your shell now
+starts inside an `argmax` session.
 
-Setup detects your shell, installs a clearly marked autostart block in its
-configuration file, and creates a commented config. Restart the terminal (or
-source the reported file) and your shell now runs inside an argmax session.
-
-You can also try it without installing anything: running `argmax` directly
-wraps a shell for just that session (with slightly reduced accuracy until
-the shell hooks are installed).
+Other commands: `argmax init <bash|zsh|fish>` prints the shell integration,
+`argmax config init|show` manages configuration, `argmax update` self-updates,
+`argmax reload` hot-reloads, `argmax crash-log` shows diagnostics, and
+`argmax uninstall` removes everything cleanly.
 
 ## Using it
 
-| Key | Action |
-| --- | --- |
-| type | suggestions appear; ghost text shows the best completion's suffix |
-| `Tab` | insert the highlighted suggestion |
-| `→` (at end of line) | accept just the ghost suffix |
-| `↑` / `↓` | navigate the menu; on an empty prompt, open recent history |
-| `Ctrl+R` | toggle between spec and history mode |
-| `Shift+Tab` | hide/show suggestions for this session |
-| `Esc` | dismiss the menu until you edit again |
-| `Enter` | run the line (or a deliberately selected suggestion) |
+- Type a command and suggestions appear below the prompt, with ghost text
+  for the top candidate: `git che` → `git checkout` + ghost `ckout`.
+- **Tab** inserts the highlighted suggestion (adds a space, except after `/`
+  so you can keep traversing paths).
+- **Right Arrow** accepts only the ghost-text suffix.
+- **Up/Down** navigates the menu (on an empty buffer, opens recent history).
+- **Enter** submits exactly what you typed — it never inserts a suggestion.
+  (In history mode the buffer already contains the entry you previewed with
+  Up/Down, so Enter runs that.)
+- **Ctrl+R** toggles spec/history mode (persisted when `core.mode = "last"`).
+- **Shift+Tab** turns the suggestion menu off/on for the session.
+- **Esc** hides the menu until your next edit.
+- `Ctrl+A/E/W/U/C/L` behave exactly like your shell.
 
-History mode searches your shell history plus everything typed this session,
-with exact, prefix, substring, and fuzzy tiers — and it finds commands by
-alias or expansion interchangeably (`gco` matches `git checkout` history).
+Completion sources: the bundled catalog of 566 commands with nested
+subcommands and flags, executables on `PATH`, shell aliases, Git/Cargo
+aliases, files and directories, live values (branches, containers, images,
+SSH hosts, package scripts, make/just targets, processes, env vars, installed
+packages), Cobra `__complete` inference for unknown CLIs, and your shell
+history with fuzzy, alias-aware search. Ranking adapts to your workspace and
+your successful workflows via a local SQLite database (frecency + command
+transitions) — all stored on your machine.
 
 ## Configuration
 
-Config lives at `~/.config/argmax/config.toml` (XDG-aware), fully commented
-by `argmax config init`. Most settings — style, limits, keybindings, AI —
-apply live when the file changes; `argmax config show` prints the resolved
-values. Keybindings accept `ctrl+<letter>`, `tab`, `shift+tab`, arrows, or a
-single character.
+One commented TOML file (`$XDG_CONFIG_HOME/argmax/config.toml`, on macOS
+`~/Library/Application Support/argmax/config.toml` when XDG is unset).
+Everything has a compiled default; environment variables (`ARGMAX_*`) and CLI
+flags override the file. The file is watched and most settings apply live.
+Run `argmax config show` to see the fully resolved, redacted configuration.
 
-### AI completion (opt-in)
+AI is off by default. Enabling it means a bounded, documented context
+snapshot (your buffer, cwd, recent commands, visible file names, workspace
+signatures, bounded git state, and allowlisted `--help` output) may be sent
+to the configured provider — see the disclosure block in the generated
+config. No context is ever gathered or sent while AI is disabled.
 
-```toml
-[ai]
-enabled = true
-provider = "ollama"
+## Notes and limitations
 
-[ai.providers.ollama]
-inherited_from = "openai"
-endpoint = "http://localhost:11434/v1"
-model = "qwen2.5-coder"
-```
-
-Any OpenAI-compatible endpoint works; `api_key_env` is the recommended
-credential mechanism for cloud providers. Requests are debounced,
-rate-limited, and canceled the moment you keep typing. A suggestion is never
-executed automatically. Before enabling a cloud provider, know what a
-request may contain: your current command line and working directory, recent
-commands and exit status, visible file names, workspace signatures, Git
-branch names/short status/staged diff, and bounded `--help` output — never
-environment-variable values, file contents, unstaged diffs, or credentials.
-
-## Privacy
-
-Everything argmax learns stays on your machine: `~/.local/share/argmax`
-holds the ranking database and state (mode 0600/0700), and caches are
-disposable. There is no telemetry, no account, and no network traffic except
-the release check (configurable in `[updater]`) and AI when you enable it.
-`argmax uninstall` removes hooks, state, and binaries.
+- **Reload:** `argmax reload` re-executes the session in place, retaining
+  your launch arguments, the selected shell, and the working directory. State
+  that lives inside the inner shell process — shell variables, jobs, traps —
+  cannot survive replacement and is lost; the inner shell is restarted.
+- The completion parser is intentionally shell-like, not a full POSIX parser.
+- Fish integration is implemented and unit-tested against the fish 4.x event
+  model; validate on your fish version with `argmax init fish | source`.
+- No Windows/PowerShell/Nushell, no GUI, no cloud accounts, no telemetry.
 
 ## Development
 
 ```sh
-just check          # fmt + lint + race tests
-just bench          # performance benchmarks
-just docs           # regenerate docs/commands.md from the registry
+make build      # version-injected build into ./bin
+make test       # full test suite with -race
+make vet        # go vet
+make fmt        # gofmt check
 ```
 
-The bundled catalog is generated from the MIT-licensed
-[Fig autocomplete](https://github.com/withfig/autocomplete) corpus by
-`tools/figexport` and `tools/cataloggen`; see `docs/commands.md` for the full
-command list and `packaging/README.md` for release channels.
-
-## License
-
-MIT — see [LICENSE](LICENSE). Bundled completion data derived from Fig
-autocomplete is used under its MIT license; see [NOTICE](NOTICE).
+Layout: `cmd/argmax` (entry point), `internal/session` (PTY wrapper, input,
+watchdog), `internal/engine` (orchestrator), `internal/spec` (catalog +
+resolver), `internal/sources` (PATH/aliases/files/live generators/Cobra),
+`internal/history`, `internal/rank` (SQLite frecency/transitions + workspace
+detection), `internal/overlay` (menu/ghost rendering), `internal/shell`
+(init scripts + hooks), `internal/ai`, `internal/config`, `internal/updater`,
+`internal/cli`, `internal/logs`, `internal/core`.

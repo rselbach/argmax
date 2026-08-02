@@ -9,635 +9,635 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `amplify` | A set of tools and services to help front-end web and mobile developers build scalable full stack applications | 28 | 0 |
-| `ampx` | CLI for Amplify Gen 2 | 4 | 3 |
-| `ansible` | Define and run a single Ansible task 'playbook' against a set of hosts | 0 | 37 |
-| `ansible-config` | View ansible configuration | 4 | 2 |
-| `ansible-doc` | Displays information on modules installed in Ansible libraries | 0 | 14 |
-| `ansible-galaxy` | Perform various Role and Collection related operations | 2 | 4 |
-| `ansible-lint` | Ansible static code analysis | 0 | 23 |
-| `ansible-playbook` | Runs Ansible playbooks, executing the defined tasks on the targeted hosts | 0 | 38 |
-| `appwrite` | Appwrite - Open-Source End-to-End Backend Server | 15 | 4 |
-| `arch` | Print architecture type or run select architecture | 0 | 12 |
-| `arduino-cli` | Arduino Command Line Interface | 18 | 9 |
-| `argo` |  | 26 | 30 |
-| `asdf` | Extendable version manager with support for Ruby, Node.js, Elixir, Erlang & more | 26 | 2 |
-| `atlas` | CLI tool to manage MongoDB Atlas | 36 | 2 |
-| `aws` |  | 409 | 1 |
-| `aws-vault` | A vault for securely storing and accessing AWS credentials in development environments | 9 | 3 |
-| `bit` | Bit documentation: https://bit.dev/docs | 75 | 2 |
-| `bosh` | Bosh cli to managed your bosh deployment | 89 | 14 |
-| `capacitor` | The Capacitor command-line interface (CLI) tool is used to develop Capacitor apps | 7 | 2 |
-| `cdk` | AWS CDK CLI | 15 | 2 |
-| `cf` | Cloudfoundry cli | 109 | 2 |
-| `checkov` | Checkov scans cloud infrastructure configurations to find misconfigurations before they're deployed | 0 | 61 |
-| `circleci` | CircleCI CLI | 15 | 2 |
-| `cloudflared` | Cloudflared connects your machine or user identity to Cloudflare's global network | 7 | 4 |
-| `coda` | Coda Local development CLI tool. It comes bundled with the Pack SDK and makes it easy to build and manage Packs from the CLI | 13 | 2 |
-| `command` | Run an external command | 0 | 1 |
-| `copilot` | 👩‍✈️ Launch and manage containerized applications on AWS | 14 | 1 |
-| `cosign` |  | 29 | 4 |
-| `dapr` | Dapr CLI | 19 | 4 |
-| `datree` | Datree can be used on the command line to run policies against Kubernetes manifests YAML files or Helm charts | 7 | 1 |
-| `deployctl` | Command line tool for Deno Deploy | 2 | 2 |
-| `direnv` | Unclutter your .profile | 21 | 2 |
-| `docker` | container runtime | 18 | 0 |
-| `docker-compose` | Define and run multi-container applications with Docker | 25 | 10 |
-| `doctl` | The official DigitalOcean command line interface (CLI) | 16 | 8 |
-| `doppler` | The official Doppler CLI | 18 | 20 |
-| `eas` | EAS CLI is the command-line app that you will use to interact with EAS services from your terminal | 49 | 0 |
-| `fastly` | A CLI for interacting with the Fastly platform | 24 | 7 |
-| `firebase` |  | 68 | 0 |
-| `flyctl` | The flyctl is a command-line interface for fly.io | 49 | 5 |
-| `fnm` | Fast Node Manager | 13 | 7 |
-| `gcloud` | Manage Google Cloud Platform resources and developer workflow | 70 | 0 |
-| `gh` | GitHub's CLI tool | 19 | 1 |
-| `gpg` | Encryption and signing tool | 39 | 92 |
-| `hasura` | Hasura GraphQL engine command line tool | 11 | 6 |
-| `helm` | The Helm package manager for Kubernetes | 28 | 29 |
-| `helmfile` | Deploy helm charts | 21 | 19 |
-| `hugo` | Hugo builds your site | 13 | 41 |
-| `k3d` | K3d is a lightweight wrapper to run k3s in Docker | 8 | 5 |
-| `k6` | Grafana k6 is an open-source load testing tool that makes performance testing easy | 14 | 8 |
-| `k9s` | K9s is a terminal based UI to interact with your Kubernetes clusters | 3 | 23 |
-| `kind` | Kubernetes IN Docker - local clusters for testing Kubernetes | 8 | 3 |
-| `knex` | SQL query builder for JavaScript | 12 | 14 |
-| `kubectl` | Kubernetes CLI | 11 | 2 |
-| `kubectx` | Switch between Kubernetes-contexts | 0 | 4 |
-| `kubens` | Switch between Kubernetes-namespaces | 0 | 2 |
-| `limactl` | Control the Lima(Linux virtual machines) | 13 | 3 |
-| `locust` | Locust is an easy to use, scriptable and scalable Python-based performance testing tool | 0 | 42 |
-| `lpass` | Command line interface for LastPass | 16 | 2 |
-| `minikube` | Minikube provisions and manages local Kubernetes clusters optimized for development workflows | 28 | 0 |
-| `mongocli` | CLI tool to manage your MongoDB Cloud | 11 | 2 |
-| `mongoimport` | Import data from a JSON, CSV, or TSV file into a MongoDB instance | 0 | 43 |
-| `mongosh` | The MongoDB Shell, mongosh is a fully functional JavaScript and Node.js 14.x REPL environment for interacting with MongoDB deployments | 0 | 23 |
-| `multipass` | Create, control and connect to Ubuntu instances | 24 | 3 |
-| `mysql` | Mysql is a terminal-based front-end to MySQL | 0 | 96 |
-| `netlify` | Netlify command line tool | 43 | 2 |
-| `newman` | Newman is a command-line collection runner for Postman | 2 | 2 |
-| `nginx` | Nginx (pronounced ``engine x'') is an HTTP and reverse proxy server, a mail proxy server, and a generic TCP/UDP proxy server. It is known… | 0 | 11 |
-| `ngrok` | Tunnel local ports to public URLs and inspect traffic | 9 | 0 |
-| `nvm` | Node Package Manager | 19 | 3 |
-| `oci` | Oracle Cloud Infrastructure CLI | 8 | 14 |
-| `okteto` | Okteto - Remote Development Environments powered by Kubernetes | 20 | 3 |
-| `op` | Official 1Password CLI | 16 | 11 |
-| `opa` | Open Policy Agent (OPA) | 15 | 1 |
-| `osqueryi` | Your OS as a high-performance relational database | 0 | 184 |
-| `pass` | Pass - stores, retrieves, generates, and synchronizes passwords securely | 14 | 3 |
-| `pg_dump` | Dumps a database as a text file or to other formats | 0 | 58 |
-| `pgcli` |  | 0 | 21 |
-| `pm2` | Daemon process manager | 67 | 36 |
-| `pod` | CocoaPods, the Cocoa library package manager | 17 | 4 |
-| `podman` | Manage containers, pods, and images with Podman | 56 | 9 |
-| `pscale` | Pscale is a CLI library for communicating with PlanetScale's API | 15 | 10 |
-| `psql` | Psql is a terminal-based front-end to PostgreSQL | 0 | 35 |
-| `pulumi` | Pulumi's open source infrastructure as code SDK enables you to create, deploy, and manage infrastructure on any cloud, using your favorite… | 22 | 1 |
-| `qodana` | Run Qodana as fast as possible, with minimum effort required | 4 | 2 |
-| `railway` | CLI for managing Railway Apps | 23 | 3 |
-| `rbenv` | Pick a Ruby version for your application and guarantee that your development environment matches production | 10 | 0 |
-| `robot` | CLI for running Robot Framework automation tests | 0 | 60 |
-| `rsync` | fast incremental transfer | 0 | 4 |
-| `scp` | secure copy | 0 | 2 |
-| `serverless` | Zero-friction serverless development | 21 | 1 |
-| `sfdx` |  | 134 | 0 |
-| `sftp` | OpenSSH secure file transfer | 0 | 25 |
-| `space` | Deta Space CLI for mananging Deta Space projects | 10 | 1 |
-| `sqlite3` | A command line interface for SQLite version 3 | 0 | 29 |
-| `src` | Interact with Sourcegraph from the command line | 12 | 1 |
-| `ssh` | remote login | 0 | 3 |
-| `ssh-keygen` | Generates, manages and converts authentication keys for ssh | 0 | 42 |
-| `stripe` | CLI interface for Stripe.com | 16 | 7 |
-| `supabase` | Supabase CLI | 15 | 2 |
-| `surreal` | SurrealDB is the ultimate cloud database for tomorrow's applications - https://surrealdb.com/ | 7 | 1 |
-| `tailscale` |  | 15 | 1 |
-| `terraform` | Terraform CLI | 23 | 3 |
-| `terragrunt` | Terragrunt CLI | 28 | 31 |
-| `tfenv` | Terraform version manager | 7 | 2 |
-| `tfsec` | Tfsec is a simple tool to detect potential security vulnerabilities in your terraformed infrastructure | 0 | 32 |
-| `tkn` | CLI for tekton pipelines | 16 | 1 |
-| `trivy` | A simple and comprehensive vulnerability scanner | 11 | 5 |
-| `tsuru` | Tsuru is the command line utility used by application developers, that will allow users to create, list, bind and manage apps | 6 | 1 |
-| `vault` | Interact with HashiCorp Vault | 24 | 1 |
-| `vela` | A Highly Extensible Platform Engine based on Kubernetes and Open Application Model | 17 | 1 |
-| `vercel` | CLI Interface for Vercel.com | 23 | 18 |
-| `volta` | The JavaScript Launcher | 10 | 4 |
-| `watson` | A wonderful CLI to track your time | 19 | 4 |
-| `whois` | Query a database for information about a domain registrant | 0 | 18 |
-| `wrangler` | Wrangler CLI for Cloudflare Workers | 18 | 3 |
-| `xc` | List tasks from an xc-compatible markdown file | 0 | 7 |
-| `xcodes` | Manage the Xcode versions installed on your Mac | 10 | 1 |
+| `amplify` | AWS Amplify CLI | 0 | 0 |
+| `ampx` | Amplify code-first DX CLI | 0 | 0 |
+| `ansible` | Automation and configuration management | 0 | 0 |
+| `ansible-config` | View Ansible configuration | 0 | 0 |
+| `ansible-doc` | Show Ansible module documentation | 0 | 0 |
+| `ansible-galaxy` | Manage Ansible roles and collections | 0 | 0 |
+| `ansible-lint` | Lint Ansible playbooks | 0 | 0 |
+| `ansible-playbook` | Run Ansible playbooks | 0 | 0 |
+| `appwrite` | Appwrite backend server CLI | 0 | 0 |
+| `arch` | Print the machine architecture | 0 | 0 |
+| `arduino-cli` | Arduino command-line interface | 0 | 0 |
+| `argo` | Argo Workflows CLI | 0 | 0 |
+| `asdf` | Extendable version manager | 13 | 0 |
+| `atlas` | Database schema management | 0 | 0 |
+| `aws` | Amazon Web Services CLI | 67 | 6 |
+| `aws-vault` | Store AWS credentials securely | 0 | 0 |
+| `bit` | Component-based development CLI | 0 | 0 |
+| `bosh` | BOSH deployment CLI | 0 | 0 |
+| `capacitor` | Cross-platform native runtime CLI | 0 | 0 |
+| `cdk` | AWS Cloud Development Kit | 0 | 0 |
+| `cf` | Cloud Foundry CLI | 0 | 0 |
+| `checkov` | Infrastructure as code scanner | 0 | 0 |
+| `circleci` | CircleCI CLI | 0 | 0 |
+| `cloudflared` | Cloudflare Tunnel client | 0 | 0 |
+| `coda` | Coda CLI | 0 | 0 |
+| `command` | Run a command bypassing shell functions | 0 | 0 |
+| `copilot` | AWS Copilot for containers | 0 | 0 |
+| `cosign` | Sign and verify containers | 0 | 0 |
+| `dapr` | Distributed application runtime CLI | 0 | 0 |
+| `datree` | Kubernetes configuration policy check | 0 | 0 |
+| `deployctl` | Deno Deploy CLI | 0 | 0 |
+| `direnv` | Per-directory environment variables | 0 | 0 |
+| `docker` | Container platform | 46 | 54 |
+| `docker-compose` | Define and run multi-container applications | 10 | 9 |
+| `doctl` | DigitalOcean CLI | 0 | 0 |
+| `doppler` | Secrets management CLI | 0 | 0 |
+| `eas` | Expo Application Services CLI | 0 | 0 |
+| `fastly` | Fastly edge cloud CLI | 0 | 0 |
+| `firebase` | Firebase CLI | 0 | 0 |
+| `flyctl` | Fly.io CLI | 0 | 0 |
+| `fnm` | Fast Node.js version manager | 0 | 0 |
+| `gcloud` | Google Cloud CLI | 47 | 3 |
+| `gh` | GitHub CLI | 37 | 0 |
+| `gpg` | GNU Privacy Guard encryption | 0 | 0 |
+| `hasura` | Hasura GraphQL engine CLI | 0 | 0 |
+| `helm` | Kubernetes package manager | 22 | 11 |
+| `helmfile` | Declarative Helm chart management | 0 | 0 |
+| `hugo` | Static site generator | 0 | 0 |
+| `k3d` | Run k3s clusters in Docker | 0 | 0 |
+| `k6` | Load testing tool | 0 | 0 |
+| `k9s` | Terminal UI for Kubernetes | 0 | 0 |
+| `kind` | Kubernetes in Docker | 0 | 0 |
+| `knex` | SQL query builder CLI | 0 | 0 |
+| `kubectl` | Kubernetes command-line tool | 32 | 20 |
+| `kubectx` | Switch Kubernetes contexts | 0 | 0 |
+| `kubens` | Switch Kubernetes namespaces | 0 | 0 |
+| `limactl` | Linux virtual machines on macOS | 0 | 0 |
+| `locust` | Load testing tool | 0 | 0 |
+| `lpass` | LastPass CLI | 0 | 0 |
+| `minikube` | Local Kubernetes cluster | 0 | 0 |
+| `mongocli` | MongoDB management CLI | 0 | 0 |
+| `mongoimport` | Import data into MongoDB | 0 | 0 |
+| `mongosh` | MongoDB shell | 0 | 0 |
+| `multipass` | Ubuntu virtual machines | 0 | 0 |
+| `mysql` | MySQL client | 0 | 0 |
+| `netlify` | Netlify CLI | 0 | 0 |
+| `newman` | Postman collection runner | 0 | 0 |
+| `nginx` | Web server and reverse proxy | 0 | 0 |
+| `ngrok` | Expose local servers publicly | 0 | 0 |
+| `nvm` | Node.js version manager | 8 | 0 |
+| `oci` | Oracle Cloud Infrastructure CLI | 0 | 0 |
+| `okteto` | Kubernetes development environments | 0 | 0 |
+| `op` | 1Password CLI | 0 | 0 |
+| `opa` | Open Policy Agent | 0 | 0 |
+| `osqueryi` | Interactive osquery SQL shell | 0 | 0 |
+| `pass` | Standard Unix password manager | 0 | 0 |
+| `pg_dump` | Back up a PostgreSQL database | 0 | 0 |
+| `pgcli` | PostgreSQL client with completion | 0 | 0 |
+| `pm2` | Node.js process manager | 0 | 0 |
+| `pod` | CocoaPods dependency manager | 0 | 0 |
+| `podman` | Daemonless container engine | 35 | 45 |
+| `pscale` | PlanetScale CLI | 0 | 0 |
+| `psql` | PostgreSQL client | 0 | 0 |
+| `pulumi` | Infrastructure as code | 0 | 0 |
+| `qodana` | JetBrains code quality platform | 0 | 0 |
+| `railway` | Railway deployment CLI | 0 | 0 |
+| `rbenv` | Ruby version manager | 7 | 0 |
+| `robot` | Robot Framework test runner | 0 | 0 |
+| `rsync` | Fast incremental file transfer | 0 | 9 |
+| `scp` | Secure copy over SSH | 0 | 6 |
+| `serverless` | Serverless Framework | 0 | 0 |
+| `sfdx` | Salesforce DX CLI | 0 | 0 |
+| `sftp` | Secure file transfer over SSH | 0 | 3 |
+| `space` | Deta Space CLI | 0 | 0 |
+| `sqlite3` | SQLite database shell | 0 | 0 |
+| `src` | Sourcegraph CLI | 0 | 0 |
+| `ssh` | OpenSSH remote login client | 0 | 18 |
+| `ssh-keygen` | Generate and manage SSH keys | 0 | 8 |
+| `stripe` | Stripe CLI | 0 | 0 |
+| `supabase` | Supabase CLI | 0 | 0 |
+| `surreal` | SurrealDB CLI | 0 | 0 |
+| `tailscale` | WireGuard mesh VPN CLI | 0 | 0 |
+| `terraform` | Infrastructure as code | 22 | 10 |
+| `terragrunt` | Terraform wrapper for DRY configurations | 22 | 10 |
+| `tfenv` | Terraform version manager | 0 | 0 |
+| `tfsec` | Terraform security scanner | 0 | 0 |
+| `tkn` | Tekton CLI | 0 | 0 |
+| `trivy` | Container vulnerability scanner | 0 | 0 |
+| `tsuru` | Tsuru platform as a service CLI | 0 | 0 |
+| `vault` | HashiCorp Vault secrets management | 0 | 0 |
+| `vela` | KubeVela application CLI | 0 | 0 |
+| `vercel` | Vercel deployment CLI | 0 | 0 |
+| `volta` | JavaScript toolchain manager | 5 | 0 |
+| `watson` | Time tracking CLI | 0 | 0 |
+| `whois` | Query domain registration records | 0 | 0 |
+| `wrangler` | Cloudflare Workers CLI | 0 | 0 |
+| `xc` | Markdown-based task runner | 0 | 0 |
+| `xcodes` | Manage Xcode versions | 0 | 0 |
 
 ## JavaScript, TypeScript, frontend, and Node.js (82)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `asar` | A simple extensive tar-like archive format with indexing | 4 | 2 |
-| `astro` | CLI provided by Astro to develop, build, and preview your project from a terminal window | 8 | 8 |
-| `babel` |  | 0 | 37 |
-| `blitz` | Blitz.js CLI is your single access point for interacting with your app, from database management to code generation | 14 | 0 |
-| `browser-sync` | Keep multiple browsers & devices in sync when building websites | 4 | 2 |
-| `build-storybook` | Storybook build CLI tools | 0 | 19 |
-| `bun` | JavaScript package manager | 12 | 0 |
-| `bunx` |  | 0 | 0 |
-| `cordova` | Manage your Cordova application | 14 | 5 |
-| `create-completion-spec` | Setup fig folder and create spec with the given name | 1 | 2 |
-| `create-next-app` |  | 0 | 7 |
-| `create-nx-workspace` | Create a new Nx workspace | 0 | 9 |
-| `create-react-app` | Creates a new React project | 0 | 7 |
-| `create-react-native-app` | Creates a new React Native project | 0 | 7 |
-| `create-redwood-app` |  | 0 | 9 |
-| `create-remix` |  | 0 | 2 |
-| `create-t3-app` | A CLI for creating web applications with the t3 stack | 0 | 11 |
-| `create-video` | CLI used to create remotion video project | 0 | 0 |
-| `create-vite` | Create a new project powered by Vite | 0 | 1 |
-| `create-web3-frontend` | Quickly create a Next.js project with wagmi and TailwindCSS ready to go | 0 | 4 |
-| `deno` | A modern JavaScript and TypeScript runtime | 24 | 5 |
-| `dotenv` | Loads environment variables from .env | 0 | 4 |
-| `electron` | Build cross platform desktop apps with JavaScript, HTML and CSS | 0 | 4 |
-| `elm` | Fig spec for the Elm language cli | 8 | 1 |
-| `elm-format` | Format your code in the Elm idiomatic way | 0 | 6 |
-| `elm-json` | Deal with your elm.json | 6 | 4 |
-| `elm-review` |  | 4 | 22 |
-| `esbuild` | An extremely fast JavaScript bundler | 0 | 60 |
-| `eslint` | Pluggable JavaScript linter | 0 | 37 |
-| `expo` | Tools for creating, running, and deploying Universal Expo and React Native apps | 50 | 2 |
-| `expo-cli` | Tools for creating, running, and deploying Universal Expo and React Native apps | 50 | 2 |
-| `ganache-cli` | Fast Ethereum RPC client | 1 | 29 |
-| `gatsby` | Gatsby CLI | 7 | 1 |
-| `hardhat` | Ethereum development environment | 10 | 8 |
-| `ionic` | The Ionic command-line interface (CLI) is the go-to tool for developing Ionic apps | 23 | 0 |
-| `jest` | A delightful JavaScript Testing Framework with a focus on simplicity | 0 | 57 |
-| `lerna` | A tool for managing JavaScript projects with multiple packages | 18 | 0 |
-| `meteor` | Run the meteor command-line tool | 32 | 0 |
-| `ncu` | Upgrade your npm package.json dependencies to the latest versions, ignoring specified versions | 0 | 52 |
-| `nest` | Nest CLI | 6 | 1 |
-| `next` | Next.js CLI to start, build and export your application | 5 | 2 |
-| `ng` | CLI interface for Angular | 3 | 1 |
-| `node` | JavaScript runtime | 0 | 0 |
-| `npm` | JavaScript package manager | 12 | 0 |
-| `npx` | run a package binary | 0 | 0 |
-| `nuxi` | Nuxt 3 CLI | 14 | 1 |
-| `nuxt` |  | 5 | 0 |
-| `nx` | Fig completions for Nx by Nrwl | 22 | 0 |
-| `oxlint` | A high performance linter for the Oxidation Compiler | 0 | 29 |
-| `playwright` |  | 2 | 2 |
-| `pnpm` | JavaScript package manager | 12 | 0 |
-| `pnpx` | Execute binaries from npm packages | 6 | 14 |
-| `prettier` | Run Prettier from the command line | 0 | 44 |
-| `quasar` | Quasar Framework CLI | 4 | 1 |
-| `react-native` | Command line tools that ship with react-native in form of the @react-native-community/cli package | 17 | 3 |
-| `redwood` | Redwood provides a first-class CLI that helps you at every stage of development, from your first commit to your first deploy | 19 | 1 |
-| `remix` | Remix CLI to start, build and export your application | 4 | 2 |
-| `remotion` | Create videos programmatically in React | 11 | 1 |
-| `rollup` | Next-generation ES module bundler | 0 | 68 |
-| `rome` | Rome CLI | 10 | 4 |
-| `rush` | Multi-Project Build Tool | 22 | 2 |
-| `sequelize` | The Sequelize Command Line Interface | 19 | 2 |
-| `serve` | Static file serving and directory listing | 0 | 16 |
-| `shadcn-ui` | Shadcn UI CLI | 3 | 0 |
-| `start-storybook` | Storybook start CLI tools | 0 | 18 |
-| `stencil` | CLI to build Stencil projects and generate components | 4 | 2 |
-| `swagger-typescript-api` | Generate api via swagger scheme | 1 | 38 |
-| `swc` | SWC is a super-fast compiler written in rust; producing widely-supported javascript from modern standards and typescript | 0 | 20 |
-| `truffle` | A world class development environment, testing framework and asset pipeline for blockchains using the Ethereum Virtual Machine (EVM),… | 23 | 0 |
-| `ts-node` | Run the TypeScript interpreter for Node.JS | 0 | 26 |
-| `tsc` | CLI tool for TypeScript compiler | 0 | 118 |
-| `tsx` | Run TypeScript file using tsx | 1 | 5 |
-| `turbo` | Turborepo is a high-performance build system for JavaScript and TypeScript codebases | 7 | 2 |
-| `typeorm` | TypeORM CLI | 14 | 2 |
-| `vite` | Native ESM-powered web dev build tool | 3 | 16 |
-| `vr` | The npm-style script runner for Deno | 3 | 2 |
-| `vsce` | The Visual Studio Code Extension Manager | 12 | 2 |
-| `vue` | Vue cli tools | 13 | 2 |
-| `watchman` | A file watching service | 23 | 21 |
-| `webpack` |  | 10 | 951 |
-| `yalc` | Work with yarn/npm packages locally like a boss | 11 | 3 |
-| `yarn` | JavaScript package manager | 12 | 0 |
+| `asar` | Electron archive tool | 0 | 0 |
+| `astro` | Astro site builder | 3 | 0 |
+| `babel` | JavaScript compiler | 0 | 0 |
+| `blitz` | Blitz.js framework CLI | 0 | 0 |
+| `browser-sync` | Synchronized browser testing | 0 | 0 |
+| `build-storybook` | Build a Storybook | 0 | 0 |
+| `bun` | Fast JavaScript runtime and toolkit | 11 | 3 |
+| `bunx` | Execute a package binary with Bun | 0 | 2 |
+| `cordova` | Mobile hybrid app framework | 0 | 0 |
+| `create-completion-spec` | Scaffold a completion spec | 0 | 0 |
+| `create-next-app` | Scaffold a Next.js app | 0 | 0 |
+| `create-nx-workspace` | Scaffold an Nx workspace | 0 | 0 |
+| `create-react-app` | Scaffold a React app | 0 | 0 |
+| `create-react-native-app` | Scaffold a React Native app | 0 | 0 |
+| `create-redwood-app` | Scaffold a Redwood app | 0 | 0 |
+| `create-remix` | Scaffold a Remix app | 0 | 0 |
+| `create-t3-app` | Scaffold a T3 stack app | 0 | 0 |
+| `create-video` | Scaffold a Remotion video | 0 | 0 |
+| `create-vite` | Scaffold a Vite app | 0 | 0 |
+| `create-web3-frontend` | Scaffold a web3 frontend | 0 | 0 |
+| `deno` | Secure JavaScript and TypeScript runtime | 8 | 4 |
+| `dotenv` | Run commands with .env loaded | 0 | 0 |
+| `electron` | Cross-platform desktop apps | 0 | 0 |
+| `elm` | Elm language compiler | 0 | 0 |
+| `elm-format` | Format Elm source code | 0 | 0 |
+| `elm-json` | Manage elm.json files | 0 | 0 |
+| `elm-review` | Review Elm code | 0 | 0 |
+| `esbuild` | Fast JavaScript bundler | 0 | 0 |
+| `eslint` | Lint JavaScript and TypeScript | 0 | 3 |
+| `expo` | Expo React Native CLI | 0 | 0 |
+| `expo-cli` | Legacy Expo CLI | 0 | 0 |
+| `ganache-cli` | Local Ethereum blockchain | 0 | 0 |
+| `gatsby` | Gatsby site framework | 3 | 0 |
+| `hardhat` | Ethereum development environment | 0 | 0 |
+| `ionic` | Ionic framework CLI | 0 | 0 |
+| `jest` | JavaScript test runner | 0 | 3 |
+| `lerna` | Monorepo management tool | 0 | 0 |
+| `meteor` | Meteor JavaScript platform | 0 | 0 |
+| `ncu` | Upgrade package.json dependencies | 0 | 0 |
+| `nest` | NestJS framework CLI | 4 | 0 |
+| `next` | Next.js framework CLI | 4 | 0 |
+| `ng` | Angular CLI | 5 | 0 |
+| `node` | Node.js JavaScript runtime | 0 | 4 |
+| `npm` | Node package manager | 16 | 3 |
+| `npx` | Execute a package binary with npm | 0 | 2 |
+| `nuxi` | Nuxt CLI | 4 | 0 |
+| `nuxt` | Nuxt framework CLI | 0 | 0 |
+| `nx` | Nx monorepo CLI | 0 | 0 |
+| `oxlint` | Fast JavaScript linter | 0 | 0 |
+| `playwright` | Browser automation and testing | 4 | 0 |
+| `pnpm` | Fast, disk space efficient package manager | 12 | 3 |
+| `pnpx` | Execute a package binary with pnpm | 0 | 1 |
+| `prettier` | Opinionated code formatter | 0 | 3 |
+| `quasar` | Quasar framework CLI | 0 | 0 |
+| `react-native` | React Native CLI | 0 | 0 |
+| `redwood` | RedwoodJS framework CLI | 0 | 0 |
+| `remix` | Remix framework CLI | 2 | 0 |
+| `remotion` | Programmatic video creation | 0 | 0 |
+| `rollup` | JavaScript module bundler | 0 | 0 |
+| `rome` | Unified web toolchain | 0 | 0 |
+| `rush` | Monorepo build orchestrator | 0 | 0 |
+| `sequelize` | Sequelize ORM CLI | 0 | 0 |
+| `serve` | Static file server | 0 | 0 |
+| `shadcn-ui` | shadcn/ui component CLI | 0 | 0 |
+| `start-storybook` | Start a Storybook | 0 | 0 |
+| `stencil` | Web component compiler | 0 | 0 |
+| `swagger-typescript-api` | Generate API clients from Swagger | 0 | 0 |
+| `swc` | Fast JavaScript/TypeScript compiler | 0 | 0 |
+| `truffle` | Ethereum development framework | 0 | 0 |
+| `ts-node` | Run TypeScript directly | 0 | 0 |
+| `tsc` | TypeScript compiler | 0 | 4 |
+| `tsx` | Run TypeScript with esbuild | 0 | 0 |
+| `turbo` | Monorepo task runner | 5 | 0 |
+| `typeorm` | TypeORM CLI | 0 | 0 |
+| `vite` | Vite build tool | 3 | 0 |
+| `vr` | Deno task runner | 0 | 0 |
+| `vsce` | VS Code extension manager | 0 | 0 |
+| `vue` | Vue.js CLI | 0 | 0 |
+| `watchman` | File watching service | 0 | 0 |
+| `webpack` | JavaScript module bundler | 0 | 3 |
+| `yalc` | Local package publishing | 0 | 0 |
+| `yarn` | Yarn package manager | 14 | 2 |
 
 ## Python and data science (19)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `black` | Python code formatter | 0 | 27 |
-| `conda` | Conda package manager | 30 | 2 |
-| `django-admin` | Utility script for the Django Web framework | 32 | 0 |
-| `googler` | Google from the command-line | 0 | 31 |
-| `jupyter` | An interactive computing environment for notebook programming | 11 | 8 |
-| `mamba` | Mamba is a reimplementation of the conda package manager in C++ | 18 | 2 |
-| `mypy` | Mypy is a static type checker for Python | 0 | 84 |
-| `pipenv` | Python package manager | 12 | 19 |
-| `pipx` | Install and Run Python Applications in Isolated Environments | 14 | 1 |
-| `poetry` | Poetry is a tool for dependency management and packaging in Python | 22 | 12 |
-| `pre-commit` | Pre-commit | 11 | 2 |
-| `pyenv` | Pyenv | 11 | 1 |
-| `pytest` |  | 0 | 83 |
-| `ruff` | Ruff: An extremely fast Python linter | 10 | 6 |
-| `sqlfluff` | A dialect-flexible and configurable SQL linter | 6 | 2 |
-| `sqlmesh` | SQLMesh command line tool | 17 | 7 |
-| `streamlit` | Streamlit | 8 | 3 |
-| `uv` | An extremely fast Python package manager | 18 | 13 |
-| `youtube-dl` | Download videos from YouTube | 0 | 155 |
+| `black` | Uncompromising Python code formatter | 0 | 3 |
+| `conda` | Cross-platform package and environment manager | 13 | 2 |
+| `django-admin` | Django administration utility | 10 | 0 |
+| `googler` | Google from the command line | 0 | 0 |
+| `jupyter` | Jupyter interactive computing | 5 | 0 |
+| `mamba` | Fast conda-compatible package manager | 13 | 2 |
+| `mypy` | Static type checker for Python | 0 | 3 |
+| `pipenv` | Python virtualenv and package manager | 6 | 0 |
+| `pipx` | Install and run Python applications in isolation | 6 | 0 |
+| `poetry` | Python dependency management and packaging | 9 | 0 |
+| `pre-commit` | Manage git pre-commit hooks | 5 | 0 |
+| `pyenv` | Python version manager | 7 | 0 |
+| `pytest` | Python testing framework | 0 | 6 |
+| `ruff` | Extremely fast Python linter and formatter | 2 | 2 |
+| `sqlfluff` | SQL linter and formatter | 4 | 0 |
+| `sqlmesh` | SQL transformation framework | 4 | 0 |
+| `streamlit` | Data app framework | 3 | 0 |
+| `uv` | Fast Python package manager | 16 | 0 |
+| `youtube-dl` | Download videos from the web | 0 | 3 |
 
 ## Rust and modern CLI tools (11)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `cargo` | Rust package manager | 15 | 0 |
-| `dprint` | A pluggable and configurable code formatting platform written in Rust | 11 | 4 |
-| `pijul` | A distributed version control system that is at the same time theoretically sound, fast and easy to learn and use | 20 | 0 |
-| `rustc` | CLI for rustc | 0 | 29 |
-| `rustup` | The Rust toolchain installer | 16 | 4 |
-| `taplo` | Tool for validation, formatting, and querying TOML documents with a jq-like fashion | 6 | 5 |
-| `tokei` | Count your code, quickly | 0 | 16 |
-| `trunk` | An all-in-one tool for scalably checking, formatting, and monitoring code | 8 | 9 |
-| `wasm-bindgen` | Generate bindings between WebAssembly and JavaScript | 0 | 22 |
-| `wasm-pack` |  | 7 | 5 |
-| `zellij` | A terminal workspace with batteries included | 18 | 10 |
+| `cargo` | Rust package manager | 17 | 36 |
+| `dprint` | Pluggable code formatting platform | 3 | 0 |
+| `pijul` | Patch-based version control | 6 | 0 |
+| `rustc` | Rust compiler | 0 | 6 |
+| `rustup` | Rust toolchain installer | 15 | 0 |
+| `taplo` | TOML toolkit | 2 | 0 |
+| `tokei` | Count lines of code | 0 | 0 |
+| `trunk` | Web application bundler for Rust/WASM | 5 | 0 |
+| `wasm-bindgen` | Generate JavaScript bindings for Rust/WASM | 0 | 2 |
+| `wasm-pack` | Build and publish Rust/WASM packages | 4 | 0 |
+| `zellij` | Terminal multiplexer | 5 | 0 |
 
 ## Go development (3)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `go` | Go toolchain | 15 | 0 |
-| `goctl` | A cli tool to generate go-zero code | 13 | 1 |
-| `goreleaser` | Deliver Go binaries as fast and easily as possible | 8 | 3 |
+| `go` | Go programming language toolchain | 27 | 18 |
+| `goctl` | go-zero code generation tool | 5 | 0 |
+| `goreleaser` | Release Go projects | 4 | 0 |
 
 ## Java, Kotlin, and JVM build tools (14)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `clojure` | Use the Clojure tools to run Clojure programs on the JVM, start a REPL, or invoke a specific function with data | 0 | 24 |
-| `dart` | A command-line utility for Dart development | 9 | 5 |
-| `flutter` | Run flutter command | 24 | 4 |
-| `fvm` | Flutter Version Management: A cli to manage Flutter SDK versions | 12 | 3 |
-| `gradle` | Gradle is an open-source build automation tool that is designed to be flexible enough to build almost any type of software | 16 | 49 |
-| `java` | Launch a Java application | 0 | 7 |
-| `javac` | Java compiler | 0 | 5 |
-| `jenv` | Manage your Java environment | 33 | 2 |
-| `jmeter` | Apache JMeter - 100% Java Load Testing Tool | 0 | 29 |
-| `kdoctor` | Tool that helps to set up the environment for Kotlin Multiplatform Mobile app development | 0 | 5 |
-| `keytool` | Key and Certificate Management Tool | 16 | 2 |
-| `kotlinc` | Kotlin compiler for JVM | 24 | 0 |
-| `mvn` | Maven - a Java based project management and comprehension tool | 0 | 39 |
-| `spring` | The Spring Boot CLI is a command line tool that you can use to bootstrap a new project from start.spring.io or encode a password | 4 | 3 |
+| `clojure` | Clojure CLI | 0 | 3 |
+| `dart` | Dart language SDK | 7 | 0 |
+| `flutter` | Flutter SDK | 10 | 0 |
+| `fvm` | Flutter version manager | 5 | 0 |
+| `gradle` | Gradle build tool | 0 | 4 |
+| `java` | Java runtime launcher | 0 | 3 |
+| `javac` | Java compiler | 0 | 3 |
+| `jenv` | Java version manager | 5 | 0 |
+| `jmeter` | Load testing tool | 0 | 3 |
+| `kdoctor` | Kotlin Multiplatform environment diagnostics | 0 | 0 |
+| `keytool` | Manage keys and certificates | 0 | 6 |
+| `kotlinc` | Kotlin compiler | 0 | 3 |
+| `mvn` | Maven build tool | 0 | 6 |
+| `spring` | Spring Boot CLI | 2 | 0 |
 
 ## C/C++ compilers and build systems (16)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `bazel` | Bazel the build system! | 3 | 42 |
-| `c++` | C++ compiler | 0 | 896 |
-| `cc` | The default compiler for most linux distributions | 0 | 800 |
-| `clang` | Clang LLVM compiler | 0 | 896 |
-| `clang++` | Clang LLVM compiler for C++ | 0 | 896 |
-| `cmake` | Command-line interface of the cross-platform buildsystem generator CMake | 5 | 37 |
-| `g++` | The default C++ compiler for most linux distributions | 0 | 800 |
-| `gcc` | The default compiler for most linux distributions | 0 | 800 |
-| `premake` | Premake CLI | 14 | 2 |
-| `swift` | Swift compiler | 4 | 108 |
-| `typst` | The Typst compiler | 6 | 4 |
-| `xcode-select` | Active developer directory for Xcode tools | 0 | 6 |
-| `xcodebuild` | Build Xcode projects | 0 | 82 |
-| `xcodeproj` | Xcodeproj lets you create and modify Xcode projects | 5 | 4 |
-| `xcrun` | Find and execute the named command line tool from the active xCode developer directory | 3 | 15 |
-| `zig` | Zig is a general-purpose programming language and toolchain for maintaining robust, optimal, and reusable software | 23 | 1 |
+| `bazel` | Bazel build system | 6 | 0 |
+| `c++` | Compile C++ source files | 0 | 9 |
+| `cc` | Compile C source files | 0 | 9 |
+| `clang` | Clang C compiler | 0 | 9 |
+| `clang++` | Clang C++ compiler | 0 | 9 |
+| `cmake` | Cross-platform build system generator | 0 | 6 |
+| `g++` | GNU C++ compiler | 0 | 9 |
+| `gcc` | GNU C compiler | 0 | 9 |
+| `premake` | Generate project build files | 0 | 0 |
+| `swift` | Swift language toolchain | 8 | 0 |
+| `typst` | Markup-based typesetting system | 5 | 0 |
+| `xcode-select` | Manage the active developer directory | 0 | 4 |
+| `xcodebuild` | Build Xcode projects | 0 | 6 |
+| `xcodeproj` | Manage Xcode projects from Ruby | 0 | 0 |
+| `xcrun` | Run developer tools | 0 | 3 |
+| `zig` | Zig language toolchain | 6 | 0 |
 
 ## Git and GitHub tools (8)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `ghq` | 'ghq' provides a way to organize remote repository clones, like go get does. When you clone a remote repository by ghq get, ghq makes a… | 4 | 2 |
-| `git` | distributed version control | 27 | 3 |
-| `git-cliff` | A highly customizable changelog generator ⛰️ | 0 | 21 |
-| `git-flow` | A collection of Git extensions to provide high-level repository operations for Vincent Driessen's branching model | 5 | 0 |
-| `git-profile` | Switch profiles | 1 | 2 |
-| `git-quick-stats` | Git quick statistics is a simple and efficient way to access various statistics in git repository | 0 | 21 |
-| `github` | Open a git repository in GitHub Desktop | 3 | 1 |
-| `svn` | The first content tracker | 5 | 3 |
+| `ghq` | Manage remote repository clones | 4 | 0 |
+| `git` | Distributed version control | 59 | 127 |
+| `git-cliff` | Changelog generator | 0 | 4 |
+| `git-flow` | Git branching model extensions | 17 | 0 |
+| `git-profile` | Switch between git profiles | 4 | 0 |
+| `git-quick-stats` | Git repository statistics | 0 | 0 |
+| `github` | GitHub command-line helper | 0 | 0 |
+| `svn` | Apache Subversion client | 11 | 0 |
 
 ## System package managers (12)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `apt` | Debian package manager | 5 | 0 |
-| `apt-get` | Debian package manager | 5 | 0 |
-| `brew` | Homebrew package manager | 8 | 0 |
-| `dnf` | Fedora package manager | 5 | 0 |
-| `dpkg` | Debian package management system | 10 | 1 |
-| `flatpak` | application sandboxing and distribution | 9 | 0 |
-| `pacman` | Arch package manager | 0 | 4 |
-| `paru` | AUR helper | 0 | 4 |
-| `pkgutil` | Query and manipulate for macOS Installer packages and receipts | 21 | 9 |
-| `snap` | package management for snaps | 9 | 0 |
-| `yay` | AUR helper | 0 | 4 |
-| `yum` | RPM package manager | 5 | 0 |
+| `apt` | Debian package manager | 8 | 2 |
+| `apt-get` | Debian package handling utility | 8 | 2 |
+| `brew` | Homebrew package manager | 16 | 16 |
+| `dnf` | Fedora package manager | 6 | 1 |
+| `dpkg` | Debian package manager (low level) | 0 | 6 |
+| `flatpak` | Linux application sandboxing and distribution | 7 | 0 |
+| `pacman` | Arch Linux package manager | 0 | 10 |
+| `paru` | AUR helper (paru) | 0 | 10 |
+| `pkgutil` | macOS package installer receipts tool | 0 | 3 |
+| `snap` | Ubuntu snap package manager | 6 | 0 |
+| `yay` | AUR helper (yay) | 0 | 10 |
+| `yum` | Yellowdog Updater package manager | 6 | 1 |
 
 ## Filesystem, directory, and archive utilities (30)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `broot` | Broot lets you explore file hierarchies with a tree-like view, manipulate files, launch actions, and define your own shortcuts. broot is… | 0 | 37 |
-| `cd` | change directory | 0 | 0 |
-| `chmod` | change file modes | 0 | 1 |
-| `chown` | Change the user and/or group ownership of a given file, directory, or symbolic link | 0 | 8 |
-| `cp` | copy files | 0 | 0 |
-| `df` | Display free disk space | 0 | 11 |
-| `dust` | Like du but more intuitive | 0 | 20 |
-| `exa` | A modern replacement for ls | 0 | 37 |
-| `eza` | modern ls | 0 | 0 |
-| `find` | Walk a file hierarchy | 0 | 24 |
-| `fold` | Fold long lines for finite width output device | 0 | 3 |
-| `ln` | Create (default hard) symbolic links to files | 0 | 7 |
-| `ls` | list directory contents | 0 | 0 |
-| `lsd` | An ls command with a lot of pretty colors and some other stuff | 0 | 32 |
-| `mkdir` | create directories | 0 | 0 |
-| `mv` | move files | 0 | 0 |
-| `paper` | The Paper CLI | 15 | 1 |
-| `rclone` | The Swiss army knife of cloud storage | 49 | 2 |
-| `readlink` | Display file status | 0 | 2 |
-| `rm` | remove files | 0 | 0 |
-| `rmdir` | remove empty directories | 0 | 0 |
-| `stow` | Manage farms of symbolic links | 0 | 15 |
-| `tar` | archive files | 0 | 0 |
-| `touch` | update file timestamps | 0 | 0 |
-| `trash` | Trash, move files/folders to the trash | 0 | 6 |
-| `tree` | directory tree | 0 | 0 |
-| `unzip` | extract zip archives | 0 | 0 |
-| `z` | zoxide jump | 0 | 0 |
-| `zi` | zoxide interactive jump | 0 | 0 |
-| `zip` | create zip archives | 0 | 0 |
+| `broot` | Interactive directory tree navigator | 0 | 2 |
+| `cd` | Change the working directory | 0 | 0 |
+| `chmod` | Change file mode bits | 0 | 3 |
+| `chown` | Change file ownership | 0 | 3 |
+| `cp` | Copy files and directories | 0 | 7 |
+| `df` | Report file system disk space usage | 0 | 3 |
+| `dust` | Intuitive disk usage tool | 0 | 3 |
+| `exa` | Modern replacement for ls | 0 | 5 |
+| `eza` | Modern replacement for ls (exa fork) | 0 | 5 |
+| `find` | Search for files in a directory hierarchy | 0 | 5 |
+| `fold` | Wrap input lines to a width | 0 | 3 |
+| `ln` | Create links between files | 0 | 4 |
+| `ls` | List directory contents | 0 | 6 |
+| `lsd` | Next-generation ls | 0 | 4 |
+| `mkdir` | Create directories | 0 | 2 |
+| `mv` | Move or rename files | 0 | 4 |
+| `paper` | Paper document CLI | 0 | 0 |
+| `rclone` | Sync files with cloud storage | 7 | 0 |
+| `readlink` | Print resolved symbolic links | 0 | 2 |
+| `rm` | Remove files and directories | 0 | 5 |
+| `rmdir` | Remove empty directories | 0 | 1 |
+| `stow` | Symlink farm manager | 0 | 7 |
+| `tar` | Archive files | 0 | 8 |
+| `touch` | Update file timestamps | 0 | 3 |
+| `trash` | Move files to the trash | 0 | 0 |
+| `tree` | List directories as a tree | 0 | 5 |
+| `unzip` | Extract ZIP archives | 0 | 4 |
+| `z` | Jump to a frecent directory | 0 | 0 |
+| `zi` | Interactively pick a frecent directory | 0 | 0 |
+| `zip` | Create ZIP archives | 0 | 4 |
 
 ## Editors, pagers, and file viewers (27)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `bat` | cat with wings | 0 | 0 |
-| `cat` | concatenate files | 0 | 0 |
-| `code` | Visual Studio Code | 0 | 0 |
-| `cot` | Command-line utility for CotEditor | 0 | 7 |
-| `du` | disk usage | 0 | 0 |
-| `emacs` | An extensible, customizable, free/libre text editor — and more | 0 | 16 |
-| `file` | file type | 0 | 0 |
-| `glow` | Render markdown on the CLI, with pizzazz! | 3 | 8 |
-| `head` | output file start | 0 | 0 |
-| `idea` | InteliJ IDEA cli | 5 | 4 |
-| `less` | pager | 0 | 0 |
-| `lvim` | Hyperextensible Vim-based text editor | 0 | 30 |
-| `micro` | A modern and intuitive terminal-based text editor | 1 | 62 |
-| `more` | Opposite of less | 0 | 10 |
-| `nano` | text editor | 0 | 0 |
-| `nvim` | text editor | 0 | 0 |
-| `rich` | Rich text and formatting in the terminal | 0 | 43 |
-| `stat` | file status | 0 | 0 |
-| `subl` | Sublime Text | 0 | 11 |
-| `tail` | output file end | 0 | 0 |
-| `vi` | Vi[m] is an one of two powerhouse text editors in the Unix world, the other being EMACS | 0 | 1 |
-| `vim` | text editor | 0 | 0 |
-| `vimr` | VimR — Neovim GUI for macOS in Swift | 0 | 9 |
-| `wc` | count lines and words | 0 | 0 |
-| `xed` | Xcode text editor invocation tool | 0 | 7 |
-| `xxd` | Make a hexdump or do the reverse | 0 | 17 |
-| `zed` | A lightning-fast, collaborative code editor written in Rust | 0 | 4 |
+| `bat` | Cat clone with syntax highlighting | 0 | 5 |
+| `cat` | Concatenate and print files | 0 | 3 |
+| `code` | Visual Studio Code | 0 | 6 |
+| `cot` | CotEditor | 0 | 0 |
+| `du` | Estimate file space usage | 0 | 4 |
+| `emacs` | GNU Emacs editor | 0 | 2 |
+| `file` | Determine file types | 0 | 2 |
+| `glow` | Render markdown in the terminal | 0 | 2 |
+| `head` | Print the first lines of files | 0 | 3 |
+| `idea` | IntelliJ IDEA | 0 | 0 |
+| `less` | Page through files | 0 | 5 |
+| `lvim` | LunarVim editor | 0 | 2 |
+| `micro` | Micro terminal editor | 0 | 0 |
+| `more` | Page through files | 0 | 0 |
+| `nano` | Nano terminal editor | 0 | 3 |
+| `nvim` | Neovim editor | 0 | 4 |
+| `rich` | Rich text and formatting in the terminal | 0 | 0 |
+| `stat` | Show file status | 0 | 1 |
+| `subl` | Sublime Text | 0 | 2 |
+| `tail` | Print the last lines of files | 0 | 4 |
+| `vi` | Vi editor | 0 | 1 |
+| `vim` | Vi IMproved editor | 0 | 4 |
+| `vimr` | MacVim-based Vim GUI | 0 | 0 |
+| `wc` | Count lines, words, and bytes | 0 | 4 |
+| `xed` | Xcode text editor | 0 | 0 |
+| `xxd` | Hex dump and reverse | 0 | 4 |
+| `zed` | Zed editor | 0 | 0 |
 
 ## Text, JSON, and stream processing (28)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `awk` | pattern scanning and processing | 0 | 3 |
-| `cut` | Cut out selected portions of each line of a file | 0 | 7 |
-| `diff` | compare files | 0 | 0 |
-| `dos2unix` | DOS to Unix file format converter | 0 | 37 |
-| `egrep` | search file contents | 0 | 7 |
-| `fd` | find entries | 0 | 0 |
-| `find` | Walk a file hierarchy | 0 | 24 |
-| `gawk` | pattern scanning and processing | 0 | 3 |
-| `grep` | search file contents | 0 | 7 |
-| `iconv` | Character set conversion | 0 | 9 |
-| `jq` | JSON processor | 0 | 0 |
-| `pandoc` | A universal document converter | 0 | 89 |
-| `rg` | ripgrep search | 0 | 0 |
-| `sed` | stream editor | 0 | 0 |
-| `seq` | Print sequences of numbers. (Defaults to increments of 1) | 0 | 4 |
-| `sha1sum` | Print or check SHA1 (160-bit) checksums | 0 | 12 |
-| `shasum` | Print or Check SHA Checksums | 0 | 14 |
-| `shred` | Overwrite a file to hide its contents, and optionally delete it | 0 | 10 |
-| `sort` | sort lines | 0 | 0 |
-| `split` | The split utility reads the given file and breaks it up into files of 1000 lines each (if no options are specified), leaving the file… | 0 | 5 |
+| `awk` | Pattern scanning and processing language | 0 | 3 |
+| `cut` | Cut out selected fields of lines | 0 | 3 |
+| `diff` | Compare files line by line | 0 | 6 |
+| `dos2unix` | Convert DOS line endings to Unix | 0 | 0 |
+| `egrep` | Search with extended regular expressions | 0 | 10 |
+| `fd` | Fast alternative to find | 0 | 7 |
+| `find` | Search for files in a directory hierarchy | 0 | 4 |
+| `gawk` | GNU awk | 0 | 3 |
+| `grep` | Search for patterns in files | 0 | 10 |
+| `iconv` | Convert text between encodings | 0 | 3 |
+| `jq` | JSON processor | 0 | 6 |
+| `pandoc` | Universal document converter | 0 | 4 |
+| `rg` | Recursively search with ripgrep | 0 | 14 |
+| `sed` | Stream editor | 0 | 4 |
+| `seq` | Print sequences of numbers | 0 | 2 |
+| `sha1sum` | Compute SHA-1 checksums | 0 | 1 |
+| `shasum` | Compute SHA checksums | 0 | 2 |
+| `shred` | Securely delete files | 0 | 4 |
+| `sort` | Sort lines of text | 0 | 6 |
+| `split` | Split files into pieces | 0 | 3 |
 | `tee` | Duplicate standard input | 0 | 2 |
-| `tr` | Translate characters | 0 | 5 |
-| `truncate` | Shrink or extend the size of a file to the specified size | 0 | 6 |
-| `typos` | Source code spelling correction | 0 | 28 |
-| `uniq` | filter duplicate lines | 0 | 0 |
-| `unix2dos` | Unix to DOS text file format convertor | 0 | 37 |
-| `vale` | A syntax-aware linter for prose built with speed and extensibility in mind | 2 | 10 |
-| `xargs` | Execute a command with whitespace-delimited strings (from stdin) as arguments | 0 | 15 |
+| `tr` | Translate or delete characters | 0 | 3 |
+| `truncate` | Shrink or extend the size of files | 0 | 1 |
+| `typos` | Source code spell checker | 0 | 1 |
+| `uniq` | Filter adjacent duplicate lines | 0 | 4 |
+| `unix2dos` | Convert Unix line endings to DOS | 0 | 0 |
+| `vale` | Prose linter | 0 | 1 |
+| `xargs` | Build and execute command lines from input | 0 | 6 |
 
 ## Task runners and build automation (24)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `ant` | A software tool for automating software build processes | 0 | 27 |
-| `composer` | Composer Command | 0 | 0 |
-| `dbt` | CLI for dbt - Data Build Tool | 16 | 11 |
-| `drush` | Drush is a command line shell and Unix scripting interface for Drupal | 0 | 0 |
-| `elixir` | Elixir Language | 0 | 24 |
-| `gem` | Ruby package manager | 34 | 10 |
-| `hexo` | Command line interface for Hexo, a static site generator | 13 | 6 |
-| `just` | command runner | 0 | 3 |
-| `laravel` | Laravel Installer | 3 | 7 |
-| `magento` | Open-source E-commerce | 0 | 0 |
-| `make` | build automation | 0 | 4 |
-| `mix` | Build tool for Elixir | 3 | 2 |
-| `php` | Run the PHP interpreter | 0 | 0 |
-| `phpunit` | The PHPUnit is a command-line test runner that can be invoked through the phpunit command | 0 | 38 |
-| `phpunit-watcher` | Automatically rerun PHPUnit tests when source code changes | 1 | 0 |
-| `rails` | Ruby on Rails CLI | 0 | 0 |
-| `rake` | A ruby build program with capabilities similar to make | 0 | 12 |
-| `rubocop` | A Ruby static code analyzer and formatter, based on the community Ruby style guide | 0 | 59 |
-| `ruby` | Interpreted object-oriented scripting language | 0 | 24 |
-| `rvm` | Ruby version manager | 19 | 1 |
-| `sidekiq` | Background job framework for Ruby | 0 | 10 |
-| `symfony` | Symfony Binary | 153 | 7 |
-| `valet` | Valet is a Laravel development environment for macOS minimalists | 42 | 7 |
-| `vapor` | Vapor Toolbox (Server-side Swift web framework) | 7 | 1 |
+| `ant` | Apache Ant build tool | 0 | 3 |
+| `composer` | PHP dependency manager | 8 | 0 |
+| `dbt` | Data build tool | 9 | 0 |
+| `drush` | Drupal shell | 6 | 0 |
+| `elixir` | Elixir language runtime | 0 | 3 |
+| `gem` | RubyGems package manager | 7 | 0 |
+| `hexo` | Static site generator | 5 | 0 |
+| `just` | Command runner | 0 | 4 |
+| `laravel` | Laravel installer | 1 | 0 |
+| `magento` | Magento CLI | 4 | 0 |
+| `make` | Build automation tool | 0 | 6 |
+| `mix` | Elixir build tool | 9 | 0 |
+| `php` | PHP interpreter | 0 | 5 |
+| `phpunit` | PHP testing framework | 0 | 3 |
+| `phpunit-watcher` | Re-run PHPUnit on file changes | 0 | 0 |
+| `rails` | Ruby on Rails | 7 | 0 |
+| `rake` | Ruby make | 0 | 3 |
+| `rubocop` | Ruby linter and formatter | 0 | 3 |
+| `ruby` | Ruby interpreter | 0 | 4 |
+| `rvm` | Ruby version manager | 5 | 0 |
+| `sidekiq` | Background job processor for Ruby | 0 | 3 |
+| `symfony` | Symfony CLI | 5 | 0 |
+| `valet` | Laravel Valet development environment | 8 | 0 |
+| `vapor` | Vapor Swift framework CLI | 4 | 0 |
 
 ## System administration, network, and process management (175)
 
 | Command | Description | Subcommands | Options |
 | --- | --- | ---: | ---: |
-| `adb` | Android Debug Bridge | 62 | 8 |
-| `ag` | Recursively search for PATTERN in PATH. Like grep or ack, but faster | 0 | 68 |
-| `airflow` | Subcommand | 25 | 1 |
-| `aliases` | Bash aliases on steroids, dynamic alias functions for bash | 11 | 2 |
-| `asciinema` | Terminal session recorder | 5 | 2 |
-| `asr` | Asr efficiently copies disk images onto volumes, either directly or via a multicast network stream | 7 | 6 |
-| `atuin` | Magical shell history | 17 | 2 |
-| `basename` | Return filename portion of pathname | 0 | 2 |
-| `bc` | An arbitrary precision calculator language | 0 | 7 |
-| `btop` | Beautifuler htop (interactive process viewer) | 0 | 8 |
-| `bundle` | Ruby Dependency Management | 20 | 3 |
-| `cal` | Displays a calendar and the date of Easter | 0 | 4 |
-| `cci` | CumulusCI command line interface | 10 | 1 |
-| `cdk8s` | CDK for K8s | 3 | 3 |
-| `chezmoi` | Manage your dotfiles across multiple diverse machines, securely | 39 | 26 |
-| `chsh` | Change your login shell | 0 | 4 |
-| `codesign` | Create and manipulate code signatures | 0 | 27 |
-| `croc` | Croc is a tool that allows any two computers to simply and securely transfer files and folders | 3 | 20 |
-| `crontab` | Maintain crontab file for individual users | 0 | 4 |
-| `curl` | transfer data from URLs | 0 | 0 |
-| `date` | Display or set date and time | 0 | 9 |
-| `dateseq` | Nifty command line date and time utilities; fast date calculations and conversion in the shell | 0 | 11 |
-| `dcli` | Dashlane CLI | 14 | 3 |
-| `dd` | Convert and copy a file | 0 | 13 |
-| `ddev` | DDEV-Local local development environment | 29 | 2 |
-| `defaults` | Command line interface to a user's defaults | 8 | 0 |
-| `degit` | Straightforward project scaffolding | 0 | 5 |
-| `deta` | Deta CLI for managing Deta Micros | 14 | 1 |
-| `dig` | Domain Information Groper | 7 | 0 |
-| `dirname` | Return directory portion of pathname | 0 | 0 |
-| `do-release-upgrade` | Upgrade Ubuntu to latest release | 0 | 7 |
-| `dog` | A command-line DNS client | 7 | 16 |
-| `dotnet` | The dotnet cli | 19 | 13 |
-| `dscacheutil` | Utility for managing the Directory Service cache | 6 | 0 |
-| `dscl` | Directory Service command line utility | 18 | 8 |
-| `dtm` | DevStream is an open-source DevOps toolchain manager | 12 | 2 |
-| `echo` | Write arguments to the standard output | 0 | 3 |
-| `eleventy` | Eleventy is a simpler static site generator | 0 | 12 |
-| `env` | print the environment | 0 | 0 |
-| `exec` | Replace the current shell with a program | 0 | 0 |
-| `export` | set environment variables | 0 | 0 |
-| `fastlane` | Fastlane is an open source platform aimed at simplifying Android and iOS deployment | 19 | 7 |
-| `fdisk` | Manipulate disk partition table | 0 | 19 |
-| `ffmpeg` | Play, record, convert, and stream audio and video | 0 | 182 |
-| `firefox` | Free open-source web browser developer by Mozilla | 0 | 38 |
-| `fisher` | A plugin manager for Fish | 4 | 2 |
-| `fmt` | Simple text formatter | 0 | 8 |
-| `forc` | Fuel Orchestrator | 22 | 4 |
-| `forge` | A command line interface for managing Atlassian-hosted apps | 18 | 3 |
-| `fzf` | A general-purpose command-line fuzzy finder | 0 | 53 |
-| `fzf-tmux` | Opens a fuzzy finder in a tmux pane | 0 | 53 |
-| `gltfjsx` | GLTF to JSX converter | 0 | 9 |
-| `goto` |  | 0 | 9 |
-| `gum` | A tool for glamorous shell scripts | 12 | 2 |
-| `herd` | Herd is a blazing fast, native Laravel and PHP development environment for macOS. It provides everything that you need to get started with… | 45 | 7 |
-| `hop` | Interact with Hop in your terminal | 7 | 3 |
-| `hostname` | Set or print name of current host system | 0 | 3 |
-| `htop` | Improved top (interactive process viewer) | 0 | 12 |
-| `http` | HTTPie: command-line HTTP client for the API era | 0 | 46 |
-| `hyper` | Hyper is an Electron-based terminal | 8 | 2 |
-| `hyperfine` | A command-line benchmarking tool | 0 | 22 |
-| `ibus` |  | 12 | 0 |
-| `id` | The id utility displays the user and group names and numeric IDs, of the calling process, to the standard output. If the real and effective… | 0 | 9 |
-| `ifconfig` | configure network interfaces | 0 | 4 |
-| `ignite-cli` | Ignite is a CLI that helps you spin up a new React Native app using a battle-tested tech stack | 4 | 2 |
-| `install` | The file(s) are copied to the target file or directory. If the destination is a directory, then the file is copied into directory with its… | 0 | 14 |
-| `ip` | show and manipulate routing and devices | 6 | 4 |
-| `join` | The join utility performs an 'equality join' on the specified files and writes the result to the standard output. The 'join field' is the… | 0 | 8 |
-| `julia` | The Julia Programming Language | 0 | 43 |
-| `kafkactl` | Command-line interface for Apache Kafka | 14 | 3 |
-| `kamal` | Deploy web apps anywhere | 0 | 0 |
-| `kill` | terminate processes | 0 | 3 |
-| `killall` | kill processes by name | 0 | 0 |
-| `kitty` |  | 12 | 13 |
-| `klist` | Reads and displays the current tickets in the credential cache (also known as the ticket file) | 0 | 10 |
-| `kool` | Cloud and docker environments made easy | 15 | 2 |
-| `launchctl` | Interfaces with launchd | 42 | 0 |
-| `leaf` | Create and interact with your leaf projects | 13 | 7 |
-| `lima` | Lima is an alias for "limactl shell $LIMA_INSTANCE" | 0 | 1 |
-| `login` | Begin session on the system | 0 | 4 |
-| `lsblk` | List block devices | 0 | 28 |
-| `lsof` | List open files | 0 | 40 |
-| `man` | manual pages | 0 | 0 |
-| `meroxa` | The Meroxa CLI | 17 | 6 |
-| `mkdocs` | Project documentation with Markdown | 4 | 2 |
-| `mkfifo` | Make FIFOs (first-in, first-out) | 0 | 1 |
-| `mkinitcpio` | Create an initial ramdisk environment | 0 | 27 |
-| `mknod` | Create device special file | 2 | 1 |
-| `mosh` |  | 0 | 15 |
-| `mount` | Mount disks and manage subtrees | 0 | 34 |
-| `nc` | Arbitrary TCP and UDP connections and listens | 0 | 34 |
-| `ncal` | Displays a calendar and the date of Easter | 0 | 17 |
-| `neofetch` | The most complete system information CLI tool | 0 | 83 |
-| `netstat` | network connections and statistics | 0 | 6 |
-| `networkQuality` | Measure the different aspects of network quality | 0 | 6 |
-| `networksetup` | Configuration tool for network settings in System Preferences | 92 | 0 |
-| `nextflow` | Nextflow enables scalable and reproducible scientific workflows using software containers. It allows the adaptation of pipelines written in… | 15 | 10 |
-| `nhost` | Nhost's command-line | 10 | 0 |
-| `nmap` | Network exploration tool and security / port scanner | 0 | 26 |
-| `nrm` | Use the right package manage - remove | 0 | 6 |
-| `ns` | The NativeScript CLI lets you create, build, and deploy NativeScript based apps on iOS and Android devices | 24 | 1 |
-| `nslookup` | query DNS name servers | 0 | 5 |
-| `nylas` | A command line interface for Nylas's API | 7 | 11 |
-| `oh-my-posh` |  | 6 | 1 |
-| `okta` | The Okta CLI is the easiest way to get started with Okta! | 6 | 4 |
-| `ollama` | A command-line tool for managing and deploying machine learning models | 12 | 2 |
-| `omz` | Oh My Zsh | 8 | 0 |
-| `pac` | Power Platform CLI | 23 | 0 |
-| `passwd` | Modify a user's password | 0 | 3 |
-| `pathchk` | Check pathnames for POSIX portability | 0 | 2 |
-| `pdfunite` | Combine multiple pdfs | 0 | 2 |
-| `pgrep` | find processes by name | 0 | 5 |
-| `ping` | Send ICMP ECHO_REQUEST to network hosts | 0 | 36 |
-| `pkg-config` | Return metainformation about installed libraries | 0 | 34 |
-| `pkill` | Send the specified signal (by default SIGTERM) to each specified process | 0 | 23 |
-| `pmset` | Power management settings | 3 | 4 |
-| `pocketbase` | PocketBase CLI | 3 | 5 |
-| `printenv` | print environment values | 0 | 0 |
-| `prisma` | Prisma is a modern DB toolkit to query, migrate and model your database | 7 | 0 |
-| `pro` | Manage Ubuntu Pro services from Canonical | 9 | 0 |
-| `pry` | Interactive Ruby | 0 | 17 |
-| `ps` | Report a snapshot of the current processes | 0 | 38 |
-| `publish` |  | 4 | 1 |
-| `pwd` | Return working directory name | 0 | 2 |
-| `rancher` | The Rancher CLI (Command Line Interface) is a unified tool that you can use to interact with Rancher | 21 | 4 |
-| `repeat` | Interpret the result as a number and repeat the commands this many times | 0 | 0 |
-| `rscript` | Scripting Front-End for R | 0 | 13 |
-| `sam` | AWS Serverless Application Model CLI | 12 | 4 |
-| `sanity` | Sanity CLI tool for managing Sanity installations, managing plugins, schemas and datasets | 25 | 1 |
-| `screen` | Screen manager with VT100/ANSI terminal emulation | 3 | 24 |
-| `shell-config` |  | 9 | 2 |
-| `shortcuts` | Command-line utility for running shortcuts | 5 | 0 |
-| `simctl` |  | 37 | 0 |
-| `source` | Source files in shell | 0 | 0 |
-| `speedtest-cli` | Command line interface for testing internet bandwidth using speedtest.net | 0 | 20 |
-| `spotify` | CLI to use Spotify from the terminal | 12 | 1 |
-| `ss` | socket statistics | 0 | 6 |
-| `st2` | CLI for StackStorm event-driven automation platform | 26 | 12 |
-| `stack` | The Haskell Tool Stack | 21 | 27 |
-| `starkli` | Starkli, a ⚡ blazing ⚡ fast ⚡ CLI tool for Starknet powered by 🦀 starknet-rs 🦀 | 26 | 0 |
-| `su` |  | 0 | 4 |
-| `sudo` | Execute a command as the superuser or another user | 0 | 3 |
-| `sysctl` | Get or set kernel state | 0 | 12 |
-| `systemctl` | control systemd | 7 | 0 |
-| `tac` | Concatenate and print files in reverse | 0 | 5 |
-| `tailcall` | TailCall CLI for managing and optimizing GraphQL configurations | 4 | 0 |
-| `tailwindcss` | Tailwindcss CLI tools | 2 | 10 |
-| `time` | Time how long a command takes! | 0 | 0 |
-| `tldr` | A simpler man page than the existing man page | 0 | 9 |
-| `tmux` | terminal multiplexer | 4 | 0 |
-| `tmuxinator` | Create and manage tmux sessions easily | 16 | 0 |
-| `top` | Display Linux tasks | 0 | 6 |
-| `traceroute` | Print the route packets take to network host | 0 | 25 |
-| `trap` | Automatically execute commands after receiving signals by processes or the operating system | 0 | 2 |
-| `trex` | Advanced package management for deno, based on import_map.json | 9 | 3 |
-| `tsh` | TSH: Teleport Authentication Gateway Client | 19 | 14 |
-| `tuist` | Generate, build and test your Xcode projects. For more info please see https://docs.tuist.io/ | 10 | 1 |
-| `twilio` | Manage your Twilio resources from your terminal | 32 | 1 |
-| `uname` | Print operating system name | 0 | 7 |
-| `unset` | unset environment variables | 0 | 0 |
-| `visudo` | Visudo edits the sudoers file, which defines the users and groups with administrator rights | 0 | 9 |
-| `vultr-cli` | Official command line interface for the Vultr API | 24 | 0 |
-| `wezterm` | Wez's Terminal Emulator | 13 | 5 |
-| `wget` | download files | 0 | 0 |
-| `where` | For each name, indicate how it should be interpreted | 0 | 6 |
-| `whereis` | Locate the binary, source, and manual page files for a command | 0 | 8 |
-| `which` | locate a command | 0 | 0 |
-| `who` | Display who is logged in | 1 | 13 |
-| `wing` |  | 4 | 0 |
-| `wp` | WP-CLI is the command-line interface for WordPress | 43 | 0 |
-| `wrk` | Wrk - a HTTP benchmarking tool | 0 | 9 |
-| `wscat` | Communicate over websocket | 0 | 23 |
-| `yank` | Yank terminal output to clipboard | 0 | 7 |
-| `ykman` | Configure your YubiKey via the command line | 8 | 8 |
-| `zapier` | The Zapier CLI is a developer-focused way to create and maintain Zapier integrations. See more at https://github.com/zapier/zapier-platform | 34 | 0 |
+| `adb` | Android Debug Bridge | 0 | 0 |
+| `ag` | The Silver Searcher code search tool | 0 | 10 |
+| `airflow` | Apache Airflow workflow platform | 0 | 0 |
+| `aliases` | Manage shell aliases | 0 | 0 |
+| `asciinema` | Record terminal sessions | 0 | 0 |
+| `asr` | Apple Software Restore | 0 | 0 |
+| `atuin` | Magical shell history | 7 | 0 |
+| `basename` | Strip the directory from a path | 0 | 0 |
+| `bc` | Arbitrary precision calculator | 0 | 0 |
+| `btop` | Resource monitor | 0 | 2 |
+| `bundle` | Ruby dependency manager | 0 | 0 |
+| `cal` | Display a calendar | 0 | 0 |
+| `cci` | CircleCI CLI | 0 | 0 |
+| `cdk8s` | Kubernetes manifests as code | 0 | 0 |
+| `chezmoi` | Dotfile manager | 8 | 0 |
+| `chsh` | Change the login shell | 0 | 0 |
+| `codesign` | Sign and verify macOS code | 0 | 0 |
+| `croc` | Transfer files between computers | 0 | 0 |
+| `crontab` | Maintain crontab files | 0 | 5 |
+| `curl` | Transfer data with URLs | 0 | 14 |
+| `date` | Display or set the date and time | 0 | 0 |
+| `dateseq` | Generate sequences of dates | 0 | 0 |
+| `dcli` | Dashlane CLI | 0 | 0 |
+| `dd` | Convert and copy data blocks | 0 | 0 |
+| `ddev` | Local PHP development environments | 0 | 0 |
+| `defaults` | Access macOS user defaults | 7 | 0 |
+| `degit` | Clone repositories without history | 0 | 0 |
+| `deta` | Deta cloud CLI | 0 | 0 |
+| `dig` | DNS lookup utility | 0 | 0 |
+| `dirname` | Strip the filename from a path | 0 | 0 |
+| `do-release-upgrade` | Upgrade the Ubuntu release | 0 | 0 |
+| `dog` | Modern DNS client | 0 | 0 |
+| `dotnet` | .NET SDK CLI | 0 | 0 |
+| `dscacheutil` | Query the macOS Directory Service cache | 0 | 0 |
+| `dscl` | macOS Directory Service CLI | 0 | 0 |
+| `dtm` | macOS device management CLI | 0 | 0 |
+| `echo` | Write arguments to standard output | 0 | 0 |
+| `eleventy` | Static site generator | 0 | 0 |
+| `env` | Run a program in a modified environment | 0 | 2 |
+| `exec` | Replace the shell with a command | 0 | 0 |
+| `export` | Set environment variables | 0 | 2 |
+| `fastlane` | Mobile app build automation | 0 | 0 |
+| `fdisk` | Partition table manipulator | 0 | 0 |
+| `ffmpeg` | Audio and video converter | 0 | 10 |
+| `firefox` | Firefox browser | 0 | 0 |
+| `fisher` | Fish plugin manager | 0 | 0 |
+| `fmt` | Reformat paragraph text | 0 | 0 |
+| `forc` | Fuel orchestrator CLI | 0 | 0 |
+| `forge` | Foundry Ethereum toolkit | 0 | 0 |
+| `fzf` | Fuzzy finder | 0 | 5 |
+| `fzf-tmux` | Open fzf in a tmux pane | 0 | 0 |
+| `gltfjsx` | Convert GLTF models to JSX | 0 | 0 |
+| `goto` | Directory bookmarking tool | 0 | 0 |
+| `gum` | Glamorous shell script components | 0 | 0 |
+| `herd` | Laravel Herd CLI | 0 | 0 |
+| `hop` | Secret management CLI | 0 | 0 |
+| `hostname` | Show or set the host name | 0 | 0 |
+| `htop` | Interactive process viewer | 0 | 3 |
+| `http` | HTTPie API client | 0 | 0 |
+| `hyper` | Hyper terminal | 0 | 0 |
+| `hyperfine` | Command-line benchmarking | 0 | 0 |
+| `ibus` | Input method framework CLI | 0 | 0 |
+| `id` | Print user and group IDs | 0 | 0 |
+| `ifconfig` | Configure network interfaces | 0 | 0 |
+| `ignite-cli` | Cosmos blockchain scaffold | 0 | 0 |
+| `install` | Copy files and set attributes | 0 | 0 |
+| `ip` | Show and manipulate routing and devices | 0 | 0 |
+| `join` | Join lines of two files on a field | 0 | 0 |
+| `julia` | Julia language runtime | 0 | 0 |
+| `kafkactl` | Kafka cluster management CLI | 0 | 0 |
+| `kamal` | Deploy web apps with Docker | 0 | 0 |
+| `kill` | Send a signal to a process | 0 | 4 |
+| `killall` | Kill processes by name | 0 | 2 |
+| `kitty` | Kitty terminal emulator | 0 | 0 |
+| `klist` | List Kerberos tickets | 0 | 0 |
+| `kool` | Development environment CLI | 0 | 0 |
+| `launchctl` | Interface with launchd | 9 | 0 |
+| `leaf` | Leaf package manager | 0 | 0 |
+| `lima` | Linux virtual machines on macOS | 0 | 0 |
+| `login` | Log into the system | 0 | 0 |
+| `lsblk` | List block devices | 0 | 0 |
+| `lsof` | List open files | 0 | 0 |
+| `man` | Read manual pages | 0 | 2 |
+| `meroxa` | Data streaming platform CLI | 0 | 0 |
+| `mkdocs` | Documentation site generator | 0 | 0 |
+| `mkfifo` | Create named pipes | 0 | 0 |
+| `mkinitcpio` | Generate an initramfs | 0 | 0 |
+| `mknod` | Create special files | 0 | 0 |
+| `mosh` | Mobile shell | 0 | 2 |
+| `mount` | Mount file systems | 0 | 0 |
+| `nc` | Read and write network connections | 0 | 0 |
+| `ncal` | Display a calendar | 0 | 0 |
+| `neofetch` | Show system information | 0 | 0 |
+| `netstat` | Show network connections | 0 | 0 |
+| `networkQuality` | Measure network quality | 0 | 0 |
+| `networksetup` | Configure macOS networking | 0 | 0 |
+| `nextflow` | Data-driven workflow engine | 0 | 0 |
+| `nhost` | Nhost backend CLI | 0 | 0 |
+| `nmap` | Network exploration and scanning | 0 | 0 |
+| `nrm` | npm registry manager | 0 | 0 |
+| `ns` | NativeScript CLI | 0 | 0 |
+| `nslookup` | Query DNS servers | 0 | 0 |
+| `nylas` | Nylas API CLI | 0 | 0 |
+| `oh-my-posh` | Custom shell prompt | 0 | 0 |
+| `okta` | Okta identity CLI | 0 | 0 |
+| `ollama` | Run local language models | 0 | 0 |
+| `omz` | Oh My Zsh CLI | 0 | 0 |
+| `pac` | Power Platform CLI | 0 | 0 |
+| `passwd` | Change the user password | 0 | 0 |
+| `pathchk` | Check path validity and portability | 0 | 0 |
+| `pdfunite` | Merge PDF documents | 0 | 0 |
+| `pgrep` | Find processes by name | 0 | 0 |
+| `ping` | Send ICMP echo requests | 0 | 0 |
+| `pkg-config` | Query library compile flags | 0 | 0 |
+| `pkill` | Signal processes by name | 0 | 0 |
+| `pmset` | macOS power management settings | 0 | 0 |
+| `pocketbase` | Backend in a single file | 0 | 0 |
+| `printenv` | Print environment variables | 0 | 1 |
+| `prisma` | Database ORM CLI | 0 | 0 |
+| `pro` | Process management CLI | 0 | 0 |
+| `pry` | Ruby interactive console | 0 | 0 |
+| `ps` | Report process status | 0 | 7 |
+| `publish` | Swift static site generator | 0 | 0 |
+| `pwd` | Print the working directory | 0 | 0 |
+| `rancher` | Rancher container management CLI | 0 | 0 |
+| `repeat` | Repeat a command | 0 | 0 |
+| `rscript` | Run R scripts | 0 | 0 |
+| `sam` | AWS Serverless Application Model CLI | 0 | 0 |
+| `sanity` | Sanity CMS CLI | 0 | 0 |
+| `screen` | Terminal multiplexer | 0 | 5 |
+| `shell-config` | Edit shell configuration | 0 | 0 |
+| `shortcuts` | Run macOS Shortcuts | 0 | 0 |
+| `simctl` | Manage iOS simulators | 0 | 0 |
+| `source` | Execute commands in the current shell | 0 | 0 |
+| `speedtest-cli` | Test internet bandwidth | 0 | 0 |
+| `spotify` | Spotify CLI | 0 | 0 |
+| `ss` | Investigate sockets | 0 | 0 |
+| `st2` | StackStorm automation CLI | 0 | 0 |
+| `stack` | Haskell tool stack | 0 | 0 |
+| `starkli` | Starknet CLI | 0 | 0 |
+| `su` | Substitute user identity | 0 | 0 |
+| `sudo` | Execute a command as another user | 0 | 8 |
+| `sysctl` | Get and set kernel state | 0 | 0 |
+| `systemctl` | Control the systemd system and services | 14 | 4 |
+| `tac` | Print files in reverse | 0 | 0 |
+| `tailcall` | GraphQL platform CLI | 0 | 0 |
+| `tailwindcss` | Utility-first CSS framework CLI | 0 | 0 |
+| `time` | Time command execution | 0 | 0 |
+| `tldr` | Simplified manual pages | 0 | 2 |
+| `tmux` | Terminal multiplexer | 9 | 10 |
+| `tmuxinator` | Manage tmux sessions | 0 | 0 |
+| `top` | Display and update process statistics | 0 | 3 |
+| `traceroute` | Trace the route to a host | 0 | 0 |
+| `trap` | Trap shell signals | 0 | 0 |
+| `trex` | t-rex tile server | 0 | 0 |
+| `tsh` | Teleport client | 0 | 0 |
+| `tuist` | Xcode project generation tool | 0 | 0 |
+| `twilio` | Twilio API CLI | 0 | 0 |
+| `uname` | Print system information | 0 | 0 |
+| `unset` | Unset shell variables | 0 | 2 |
+| `visudo` | Edit the sudoers file safely | 0 | 0 |
+| `vultr-cli` | Vultr cloud CLI | 0 | 0 |
+| `wezterm` | WezTerm terminal emulator | 0 | 0 |
+| `wget` | Download files from the web | 0 | 5 |
+| `where` | Locate a command | 0 | 0 |
+| `whereis` | Locate binaries, sources, and manuals | 0 | 3 |
+| `which` | Locate a command on PATH | 0 | 1 |
+| `who` | Show who is logged in | 0 | 0 |
+| `wing` | The Silver Searcher GUI | 0 | 0 |
+| `wp` | WordPress CLI | 0 | 0 |
+| `wrk` | HTTP benchmarking tool | 0 | 0 |
+| `wscat` | WebSocket CLI | 0 | 0 |
+| `yank` | Yank terminal output to the clipboard | 0 | 0 |
+| `ykman` | YubiKey manager | 0 | 0 |
+| `zapier` | Zapier automation CLI | 0 | 0 |

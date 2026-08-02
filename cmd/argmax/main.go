@@ -1,6 +1,3 @@
-// Command argmax is a terminal-resident completion and prediction tool
-// that wraps an interactive shell in a PTY. See argmax-prd.md for the
-// product contract.
 package main
 
 import (
@@ -9,14 +6,10 @@ import (
 	"github.com/rselbach/argmax/internal/cli"
 )
 
-// version is injected by the release build:
-//
-//	go build -ldflags "-X main.version=1.2.3"
+// version is injected at build time (-X main.version=...). Development
+// builds print "dev" (PRD UPD-001).
 var version = "dev"
 
 func main() {
-	if version != "" {
-		cli.Version = version
-	}
-	os.Exit(cli.Main(os.Args[1:]))
+	os.Exit(cli.Main(os.Args[1:], version))
 }

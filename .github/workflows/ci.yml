@@ -24,10 +24,8 @@ jobs:
         run: go test -race ./...
       - name: Benchmarks compile and run once
         run: go test -run NONE -bench . -benchtime 1x ./...
-      - name: Tools build
-        run: |
-          go build ./tools/cataloggen ./tools/docgen
-          cd tools/figexport && go build ./...
+      - name: Catalog docs drift check (SPEC-011)
+        run: go run ./tools/docgen -check
 
   lint:
     runs-on: ubuntu-latest
@@ -46,3 +44,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: ShellCheck
         run: shellcheck scripts/install.sh scripts/nfpm-preremove.sh
+
+  # Validates the whole goreleaser pipeline (build matrix, archives,
+  # checksums, nfpm) on every push without publishing anything.
+  release-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean

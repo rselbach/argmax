@@ -18,3 +18,5 @@ coverage.out
 
 # Editor and OS noise
 .DS_Store
+
+/bin/
