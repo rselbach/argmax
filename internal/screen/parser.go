@@ -137,7 +137,6 @@ func (guard *sequenceGuard) step(value byte) guardEvent {
 			guard.state = guardGround
 		case value == 0x1b:
 			guard.beginEscape()
-			return guardUnsupported
 		case value >= 0x20 && value <= 0x2f:
 			if guard.escapeIntermediate {
 				return guardUnsupported

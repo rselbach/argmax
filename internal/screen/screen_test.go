@@ -145,6 +145,17 @@ func TestEscapeUTF8AndSavedCursorPartitionInvariant(t *testing.T) {
 	}
 }
 
+func TestEscapeRestartsIncompleteEscapeSequence(t *testing.T) {
+	t.Parallel()
+	want := newTestObserver(t, 10, 3)
+	want.Observe([]byte("\x1b[2;3HX"))
+
+	got := newTestObserver(t, 10, 3)
+	got.Observe([]byte{'\x1b'})
+	got.Observe([]byte("\x1b[2;3HX"))
+	assertSameScreen(t, got, want, "restarted escape")
+}
+
 func TestIncompleteUTF8SuppressesUntilComplete(t *testing.T) {
 	t.Parallel()
 	data := []byte("界")

@@ -64,8 +64,12 @@ func (observer *ScreenObserver) feedNormalized(data []byte) {
 			oldState == guardDiscardString ||
 			oldState == guardDiscardStringEscape
 
+		if oldState == guardEscape && value == 0x1b {
+			observer.parser.Reset()
+		}
 		if (oldState == guardGround && (value == 0x1b || value == 0x9b)) ||
-			oldState == guardOSCEscape || oldState == guardCSI && value == 0x1b {
+			oldState == guardOSCEscape ||
+			(oldState == guardEscape || oldState == guardCSI) && value == 0x1b {
 			observer.suppressDispatch = false
 		}
 
