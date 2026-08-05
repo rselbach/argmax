@@ -220,6 +220,7 @@ func (s *Session) candidatesFor(m mode, line, cwd string, cfg *config.Config) []
 func (s *Session) specCandidates(line, cwd string, cfg *config.Config) []complete.Candidate {
 	ctx := complete.Context{
 		CWD:                    cwd,
+		Shell:                  s.opts.Shell,
 		HiddenFiles:            cfg.UI.HiddenFiles,
 		GitFilterActiveBranch:  cfg.Git.FilterActiveBranch,
 		GitDeduplicateBranches: cfg.Git.DeduplicateBranches,
@@ -275,7 +276,7 @@ func (s *Session) inferred(ctx complete.Context, line string, tokens []complete.
 	base := line[:partial.Start]
 	cands := s.inferrer.Complete(ctx.CWD, tokens[0].Text, args, partial.Text)
 	for i := range cands {
-		cands[i].Text = base + complete.QuoteArg(cands[i].Title)
+		cands[i].Text = base + ctx.Shell.QuoteArg(cands[i].Title)
 		cands[i].Description = firstNonEmpty(cands[i].Description, "inferred completion")
 	}
 	return cands

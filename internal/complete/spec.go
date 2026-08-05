@@ -1,12 +1,19 @@
 package complete
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/rselbach/argmax/internal/shell"
+)
 
 // Context carries the environment a generator may need. Generators inherit
 // the child shell's working directory, never the wrapper's.
 type Context struct {
 	// CWD is the child shell's reported working directory.
 	CWD string
+	// Shell selects the quoting syntax used when materializing generated
+	// argument values. The zero value uses Bash/Zsh-compatible quoting.
+	Shell shell.Kind
 	// HiddenFiles includes dot-prefixed entries in path completion.
 	HiddenFiles bool
 	// GitFilterActiveBranch omits the active branch for checkout/switch.

@@ -172,7 +172,7 @@ func (e *Engine) nodeCandidates(ctx Context, line string, res walkResult, partia
 		if res.pendingOption.Generator == nil {
 			return nil
 		}
-		return materialize(res.pendingOption.Generator(ctx, nil, prefix), base, node)
+		return materialize(ctx, res.pendingOption.Generator(ctx, nil, prefix), base, node)
 	}
 	if len(res.posArgs) == 0 && !typingOption {
 		for _, sub := range node.Subcommands {
@@ -218,20 +218,20 @@ func (e *Engine) nodeCandidates(ctx Context, line string, res walkResult, partia
 		})
 	}
 	if node.Generator != nil && !argsCapped && !typingOption {
-		out = append(out, materialize(node.Generator(ctx, res.posArgs, prefix), base, node)...)
+		out = append(out, materialize(ctx, node.Generator(ctx, res.posArgs, prefix), base, node)...)
 	}
 	return out
 }
 
 // materialize turns raw generator candidates into full command lines.
-func materialize(cands []Candidate, base string, node *Spec) []Candidate {
+func materialize(ctx Context, cands []Candidate, base string, node *Spec) []Candidate {
 	out := make([]Candidate, 0, len(cands))
 	for _, c := range cands {
 		insert := c.Insert
 		if insert == "" {
 			insert = c.Title
 		}
-		c.Text = base + QuoteArg(insert)
+		c.Text = base + ctx.Shell.QuoteArg(insert)
 		if c.Source == "" {
 			c.Source = SourceSpec
 		}

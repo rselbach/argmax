@@ -94,7 +94,7 @@ func (s *Session) topLevel(prefix string) []complete.Candidate {
 			continue
 		}
 		cands = append(cands, complete.Candidate{
-			Text:        name,
+			Text:        s.opts.Shell.QuoteArg(name),
 			Title:       name,
 			Description: "system command",
 			Source:      complete.SourceSystem,
@@ -195,6 +195,7 @@ func (s *Session) completionContext(cwd string) complete.Context {
 	cfg := s.opts.Watcher.Current()
 	return complete.Context{
 		CWD:                    cwd,
+		Shell:                  s.opts.Shell,
 		HiddenFiles:            cfg.UI.HiddenFiles,
 		GitFilterActiveBranch:  cfg.Git.FilterActiveBranch,
 		GitDeduplicateBranches: cfg.Git.DeduplicateBranches,

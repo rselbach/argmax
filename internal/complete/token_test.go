@@ -65,22 +65,3 @@ func TestTokenize(t *testing.T) {
 		})
 	}
 }
-
-func TestQuoteArg(t *testing.T) {
-	tests := map[string]struct {
-		in   string
-		want string
-	}{
-		"plain":          {in: "main.go", want: "main.go"},
-		"with space":     {in: "My Documents", want: `"My Documents"`},
-		"already quoted": {in: `"My Documents"`, want: `"My Documents"`},
-		"empty":          {in: "", want: ""},
-	}
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			if got := QuoteArg(tc.in); got != tc.want {
-				t.Errorf("QuoteArg(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
-	}
-}

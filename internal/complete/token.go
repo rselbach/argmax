@@ -66,14 +66,3 @@ func Tokenize(line string) []Token {
 	tokens = append(tokens, Token{Text: "", Start: len(line)})
 	return tokens
 }
-
-// QuoteArg quotes an argument containing spaces exactly once.
-func QuoteArg(s string) string {
-	if s == "" || !strings.ContainsAny(s, " \t") {
-		return s
-	}
-	if strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`) {
-		return s
-	}
-	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
-}

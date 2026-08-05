@@ -96,6 +96,37 @@ func (k Kind) Path() (string, error) {
 	return p, nil
 }
 
+// QuoteArg returns shell source that evaluates to s as exactly one literal
+// argument. Safe path-like values remain unquoted for readable completions.
+func (k Kind) QuoteArg(s string) string {
+	if safeArg(s) {
+		return s
+	}
+	if k == Fish {
+		// Fish permits backslash-escaped quotes and backslashes inside
+		// single quotes. No expansions occur in the resulting string.
+		replacer := strings.NewReplacer(`\`, `\\`, `'`, `\'`)
+		return `'` + replacer.Replace(s) + `'`
+	}
+	// Bash and Zsh single quotes are entirely literal. Represent an
+	// embedded quote by ending the string, escaping it, and reopening it.
+	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
+}
+
+func safeArg(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' ||
+			r >= '0' && r <= '9' || strings.ContainsRune("_./-", r) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // HistoryPath returns the shell's history file, honoring $HISTFILE and
 // XDG-aware defaults.
 func (k Kind) HistoryPath() string {

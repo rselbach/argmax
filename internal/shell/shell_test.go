@@ -1,9 +1,70 @@
 package shell
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
+
+func TestQuoteArgSyntax(t *testing.T) {
+	tests := []struct {
+		name string
+		kind Kind
+		in   string
+		want string
+	}{
+		{name: "safe path", kind: Bash, in: "src/main.go", want: "src/main.go"},
+		{name: "empty", kind: Bash, in: "", want: `''`},
+		{name: "bash spaces", kind: Bash, in: "My Documents", want: `'My Documents'`},
+		{name: "zsh single quote", kind: Zsh, in: "it's", want: `'it'\''s'`},
+		{name: "fish single quote", kind: Fish, in: "it's", want: `'it\'s'`},
+		{name: "bash backslash", kind: Bash, in: `a\b`, want: `'a\b'`},
+		{name: "fish backslash", kind: Fish, in: `a\b`, want: `'a\\b'`},
+		{name: "quoted input is data", kind: Bash, in: `"quoted"`, want: `'"quoted"'`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.kind.QuoteArg(tc.in); got != tc.want {
+				t.Errorf("%s.QuoteArg(%q) = %q, want %q", tc.kind, tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBashQuoteArgRoundTrip(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	values := []string{
+		"", "plain", "spaces and\ttabs", "line one\nline two",
+		"'", `"`, `\`, "$", "`", "$()", ";", "&", "|", ">", "<",
+		"*", "?", "[", "]", "(", ")", "!", "#", "~",
+		`"already quoted"`, `'already quoted'`,
+	}
+	for _, value := range values {
+		t.Run(value, func(t *testing.T) {
+			script := `set -- ` + Bash.QuoteArg(value) + `; test "$#" -eq 1 && printf %s "$1"`
+			out, err := exec.Command(bash, "-c", script).Output()
+			if err != nil {
+				t.Fatalf("bash rejected quoted argument %q: %v", Bash.QuoteArg(value), err)
+			}
+			if string(out) != value {
+				t.Errorf("round trip = %q, want %q (source %q)", out, value, Bash.QuoteArg(value))
+			}
+		})
+	}
+}
+
+func TestQuoteArgProtectsShellMetacharacters(t *testing.T) {
+	const metacharacters = " \t\n'\"\\$`;&|><*?[]()!#~"
+	for _, kind := range []Kind{Bash, Zsh, Fish} {
+		quoted := kind.QuoteArg(metacharacters)
+		if !strings.HasPrefix(quoted, "'") || !strings.HasSuffix(quoted, "'") {
+			t.Errorf("%s metacharacters not quoted: %q", kind, quoted)
+		}
+	}
+}
 
 func TestParseAliases(t *testing.T) {
 	tests := map[string]struct {

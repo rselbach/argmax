@@ -3,6 +3,8 @@ package complete
 import (
 	"strings"
 	"testing"
+
+	"github.com/rselbach/argmax/internal/shell"
 )
 
 func testRegistry() *Registry {
@@ -87,7 +89,7 @@ func TestEngineComplete(t *testing.T) {
 		},
 		"generator with quoted multiword": {
 			line:     "git checkout fix",
-			wantText: []string{`git checkout "fix bug"`},
+			wantText: []string{`git checkout 'fix bug'`},
 		},
 		"option promotion while typing dash": {
 			line:     "git checkout --f",
@@ -122,6 +124,33 @@ func TestEngineComplete(t *testing.T) {
 				if contains(got, reject) {
 					t.Errorf("Complete(%q) should not contain %q", tc.line, reject)
 				}
+			}
+		})
+	}
+}
+
+func TestEngineQuotesGeneratedArgumentsForShell(t *testing.T) {
+	reg := NewRegistry(&Spec{
+		Name: "tool",
+		Generator: func(_ Context, _ []string, _ string) []Candidate {
+			return []Candidate{{Title: `it's\literal`}}
+		},
+	})
+	e := &Engine{Registry: reg}
+
+	tests := []struct {
+		kind shell.Kind
+		want string
+	}{
+		{kind: shell.Bash, want: `tool 'it'\''s\literal'`},
+		{kind: shell.Zsh, want: `tool 'it'\''s\literal'`},
+		{kind: shell.Fish, want: `tool 'it\'s\\literal'`},
+	}
+	for _, tc := range tests {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			got := e.Complete(Context{Shell: tc.kind}, "tool ")
+			if !contains(got, tc.want) {
+				t.Errorf("Complete() missing %q; got %#v", tc.want, got)
 			}
 		})
 	}
