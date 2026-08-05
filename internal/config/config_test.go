@@ -217,6 +217,10 @@ timeout_ms = 3000
 
 [ai.providers.groq.extra_request_body]
 temperature = 0.2
+authorization = "Bearer payload-secret"
+
+[ai.providers.groq.extra_request_body.metadata]
+private_token = "nested-secret"
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -230,11 +234,16 @@ temperature = 0.2
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out, "supersecret") {
-		t.Error("config show must redact direct API keys")
+	for _, secret := range []string{"supersecret", "payload-secret", "nested-secret"} {
+		if strings.Contains(out, secret) {
+			t.Errorf("config show exposed %q", secret)
+		}
 	}
 	if !strings.Contains(out, "<redacted>") {
 		t.Error("redaction marker missing")
+	}
+	if strings.Contains(out, "extra_request_body") {
+		t.Error("config show must omit arbitrary provider request payloads")
 	}
 }
 

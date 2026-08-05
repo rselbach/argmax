@@ -257,19 +257,18 @@ func (p *Provider) Timeout() time.Duration {
 	return time.Duration(p.TimeoutMS) * time.Millisecond
 }
 
-// Redacted returns resolved TOML with direct API keys masked, for
-// `argmax config show`.
+// Redacted returns resolved TOML with provider credentials masked and
+// arbitrary request payloads omitted, for `argmax config show`.
 func (c *Config) Redacted() (string, error) {
 	var b strings.Builder
 	enc := toml.NewEncoder(&b)
 	type redactedProvider struct {
-		InheritedFrom    string         `toml:"inherited_from,omitempty"`
-		Endpoint         string         `toml:"endpoint,omitempty"`
-		APIKey           string         `toml:"api_key,omitempty"`
-		APIKeyEnv        string         `toml:"api_key_env,omitempty"`
-		Model            string         `toml:"model,omitempty"`
-		TimeoutMS        int            `toml:"timeout_ms,omitempty"`
-		ExtraRequestBody map[string]any `toml:"extra_request_body,omitempty"`
+		InheritedFrom string `toml:"inherited_from,omitempty"`
+		Endpoint      string `toml:"endpoint,omitempty"`
+		APIKey        string `toml:"api_key,omitempty"`
+		APIKeyEnv     string `toml:"api_key_env,omitempty"`
+		Model         string `toml:"model,omitempty"`
+		TimeoutMS     int    `toml:"timeout_ms,omitempty"`
 	}
 	out := struct {
 		Core        Core        `toml:"core"`
@@ -287,7 +286,14 @@ func (c *Config) Redacted() (string, error) {
 	out.AI.AI.Providers = nil
 	out.AI.Providers = make(map[string]redactedProvider, len(c.AI.Providers))
 	for name, p := range c.AI.Providers {
-		rp := redactedProvider(p)
+		rp := redactedProvider{
+			InheritedFrom: p.InheritedFrom,
+			Endpoint:      p.Endpoint,
+			APIKey:        p.APIKey,
+			APIKeyEnv:     p.APIKeyEnv,
+			Model:         p.Model,
+			TimeoutMS:     p.TimeoutMS,
+		}
 		if rp.APIKey != "" {
 			rp.APIKey = "<redacted>"
 		}
