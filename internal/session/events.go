@@ -3,6 +3,8 @@ package session
 import (
 	"bufio"
 	"context"
+	"errors"
+	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,15 +13,13 @@ import (
 	"github.com/rselbach/argmax/internal/logging"
 )
 
+const maxEventRecordSize = 64 * 1024
+
 // eventPump reads NUL-delimited shell hook records from the inherited
 // session-private descriptor: buf:<lbuffer>, cwd:<path>, pre:<command>,
 // post:<status>, and ready:.
 func (s *Session) eventPump() {
-	scanner := bufio.NewScanner(s.eventsR)
-	scanner.Buffer(make([]byte, 64*1024), 64*1024)
-	scanner.Split(scanNul)
-	for scanner.Scan() {
-		record := scanner.Text()
+	err := readEventRecords(s.eventsR, func(record string) bool {
 		s.mu.Lock()
 		s.hooksSeen = true
 		s.mu.Unlock()
@@ -38,22 +38,80 @@ func (s *Session) eventPump() {
 		}
 		select {
 		case <-s.done:
-			return
+			return false
 		default:
+			return true
 		}
+	}, func() {
+		logging.L().Warn("oversized shell integration event discarded", "max_bytes", maxEventRecordSize)
+	})
+	if errors.Is(err, io.EOF) {
+		// Pipe EOF races the normal child-exit path. Give serve a moment to
+		// close done before treating it as an integration failure.
+		select {
+		case <-s.done:
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	select {
+	case <-s.done:
+		return
+	default:
+	}
+	s.mu.Lock()
+	hadHooks := s.hooksSeen
+	s.hooksSeen = false
+	s.mu.Unlock()
+	if err != nil && !errors.Is(err, io.EOF) {
+		logging.L().Warn("shell integration event stream failed; using foreground fallback", "error", err)
+	} else if hadHooks {
+		logging.L().Warn("shell integration event stream closed; using foreground fallback")
 	}
 }
 
-func scanNul(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	for i, b := range data {
-		if b == 0 {
-			return i + 1, data[:i], nil
+// readEventRecords reads bounded NUL-delimited records. An oversized record
+// is discarded through its next delimiter without losing subsequent events.
+func readEventRecords(r io.Reader, onRecord func(string) bool, onOversized func()) error {
+	reader := bufio.NewReaderSize(r, 32*1024)
+	record := make([]byte, 0, 1024)
+	discarding := false
+	for {
+		fragment, err := reader.ReadSlice(0)
+		terminated := err == nil
+		if terminated {
+			fragment = fragment[:len(fragment)-1]
 		}
+		if !discarding {
+			if len(record)+len(fragment) > maxEventRecordSize {
+				record = record[:0]
+				discarding = true
+				onOversized()
+			} else {
+				record = append(record, fragment...)
+			}
+		}
+		if terminated {
+			if !discarding {
+				if !onRecord(string(record)) {
+					return nil
+				}
+			}
+			record = record[:0]
+			discarding = false
+			continue
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			if len(record) > 0 && !discarding {
+				onRecord(string(record))
+			}
+			return io.EOF
+		}
+		return err
 	}
-	if atEOF && len(data) > 0 {
-		return len(data), data, nil
-	}
-	return 0, nil, nil
 }
 
 // onBuffer resyncs the tracked line from a shell buffer report.
