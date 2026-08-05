@@ -2,6 +2,14 @@ package ui
 
 import "testing"
 
+func TestSanitizeDisplayText(t *testing.T) {
+	got := sanitizeDisplayText("file\x1b[2J\n\t\u0085name")
+	want := "file�[2J���name"
+	if got != want {
+		t.Errorf("sanitizeDisplayText() = %q, want %q", got, want)
+	}
+}
+
 func TestVisibleWidth(t *testing.T) {
 	tests := map[string]struct {
 		in   string

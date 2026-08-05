@@ -9,6 +9,18 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
+// sanitizeDisplayText replaces terminal control data in untrusted labels with
+// an inert visible marker. Candidate insertion text is kept separately and is
+// never passed through this function.
+func sanitizeDisplayText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return '�'
+		}
+		return r
+	}, s)
+}
+
 // VisibleWidth measures s in terminal cells, ignoring CSI/OSC/control
 // sequences and counting wide Unicode characters as two cells.
 func VisibleWidth(s string) int {

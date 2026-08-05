@@ -110,6 +110,7 @@ func (r *Renderer) Notice(text string) {
 	if !r.havePos || r.row+1 > r.height {
 		return
 	}
+	text = sanitizeDisplayText(text)
 	text = TruncateToWidth(text, r.width-1)
 	_, _ = fmt.Fprintf(r.out, "\x1b7\x1b[%d;1H\x1b[2K%s%s%s\x1b8",
 		r.row+1, fg(r.opts.Palette.Muted), text, reset)
@@ -311,6 +312,8 @@ func (r *Renderer) menuLines(items []complete.Candidate, selected, scroll int, q
 
 // itemLine renders one candidate row.
 func (r *Renderer) itemLine(c complete.Candidate, selected bool, query string, width int) string {
+	c.Title = sanitizeDisplayText(c.Title)
+	c.Description = sanitizeDisplayText(c.Description)
 	p := r.opts.Palette
 	var b strings.Builder
 	textColor := fg(p.Primary)
