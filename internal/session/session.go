@@ -264,6 +264,9 @@ func (s *Session) start() error {
 	if err != nil {
 		_ = eventsR.Close()
 		_ = eventsW.Close()
+		if s.tty != os.Stdin {
+			_ = s.tty.Close()
+		}
 		return fmt.Errorf("open pty: %w", err)
 	}
 	if ws, err := pty.GetsizeFull(s.tty); err == nil {
@@ -292,6 +295,9 @@ func (s *Session) start() error {
 		_ = tts.Close()
 		_ = eventsR.Close()
 		_ = eventsW.Close()
+		if s.tty != os.Stdin {
+			_ = s.tty.Close()
+		}
 		return fmt.Errorf("start shell: %w", err)
 	}
 	_ = tts.Close()     // child holds the slave side
@@ -302,6 +308,11 @@ func (s *Session) start() error {
 	s.ttyState, err = term.MakeRaw(int(s.tty.Fd()))
 	if err != nil {
 		_ = ptmx.Close()
+		_ = eventsR.Close()
+		if s.tty != os.Stdin {
+			_ = s.tty.Close()
+		}
+		killAndWait(cmd)
 		return fmt.Errorf("set raw mode: %w", err)
 	}
 	s.renderer = ui.NewRenderer(os.Stdout, s.uiOptions(s.opts.Watcher.Current()))
@@ -343,12 +354,30 @@ func (s *Session) serve() (int, error) {
 }
 
 func (s *Session) restore() {
-	if s.ttyState != nil {
+	if s.ttyState != nil && s.tty != nil {
 		_ = term.Restore(int(s.tty.Fd()), s.ttyState)
+		s.ttyState = nil
 	}
 	if s.ptmx != nil {
 		_ = s.ptmx.Close()
+		s.ptmx = nil
 	}
+	if s.eventsR != nil {
+		_ = s.eventsR.Close()
+		s.eventsR = nil
+	}
+	if s.tty != nil && s.tty != os.Stdin {
+		_ = s.tty.Close()
+		s.tty = nil
+	}
+}
+
+func killAndWait(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
 }
 
 // outputPump forwards shell output to stdout through the renderer so
