@@ -88,6 +88,21 @@ func TestBuildPromptMarksUntrusted(t *testing.T) {
 	}
 }
 
+func TestSnapshotHashIncludesSectionContent(t *testing.T) {
+	first := Snapshot{
+		CWD:      "/proj",
+		Sections: []Section{{Label: "git status", Content: "M one.go"}},
+	}
+	second := first
+	second.Sections = []Section{{Label: "git status", Content: "M two.go"}}
+	if first.Hash() == second.Hash() {
+		t.Error("equal-length section content must produce distinct snapshot hashes")
+	}
+	if first.Hash() != first.Hash() {
+		t.Error("identical snapshots must produce stable hashes")
+	}
+}
+
 func TestHelpAllowlistRejectsPaths(t *testing.T) {
 	g := &Gatherer{Probe: func(_ string, _ time.Duration, name string, _ ...string) string {
 		t.Fatalf("probe must not run for %q", name)

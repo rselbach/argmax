@@ -1,7 +1,9 @@
 package ai
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -47,12 +49,22 @@ type Section struct {
 
 // Hash returns a stable digest of the snapshot for caching.
 func (s Snapshot) Hash() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s|%s|%d|%s|", s.CWD, s.PrevCommand, s.PrevExitStatus, strings.Join(s.RecentCommands, ";"))
-	for _, sec := range s.Sections {
-		fmt.Fprintf(&b, "%s=%d;", sec.Label, len(sec.Content))
+	h := sha256.New()
+	write := func(label, value string) {
+		fmt.Fprintf(h, "%s:%d:", label, len(value))
+		_, _ = io.WriteString(h, value)
 	}
-	return b.String()
+	write("cwd", s.CWD)
+	write("previous-command", s.PrevCommand)
+	write("previous-exit-status", fmt.Sprint(s.PrevExitStatus))
+	for _, command := range s.RecentCommands {
+		write("recent-command", command)
+	}
+	for _, sec := range s.Sections {
+		write("section-label", sec.Label)
+		write("section-content", sec.Content)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // Prober runs one bounded external probe in cwd; injected so context
