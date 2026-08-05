@@ -59,7 +59,9 @@ func Registry() *complete.Registry {
 		}
 		standalone = append(standalone, d)
 	}
-	return complete.NewRegistry(append(goSpecs, standalone...)...)
+	all := append(goSpecs, standalone...)
+	normalizeAliases(all)
+	return complete.NewRegistry(all...)
 }
 
 // dataSpecs decodes the embedded bundle, merges cross-listed placements

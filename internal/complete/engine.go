@@ -36,19 +36,34 @@ func (r *Registry) All() []*Spec { return r.list }
 // Validate checks the registry for duplicate names, malformed specs, and
 // unreachable nodes. It is exercised in CI.
 func (r *Registry) Validate() error {
-	seen := map[string]bool{}
+	seen := map[string]string{}
 	for _, s := range r.list {
 		if s.Name == "" {
 			return fmt.Errorf("spec with empty name")
 		}
-		key := strings.ToLower(s.Name)
-		if seen[key] {
-			return fmt.Errorf("duplicate spec name %q", s.Name)
+		if err := claimSpecNames(seen, s, "registry"); err != nil {
+			return err
 		}
-		seen[key] = true
 		if err := validateNode(s, s.Name); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func claimSpecNames(seen map[string]string, spec *Spec, scope string) error {
+	for i, name := range append([]string{spec.Name}, spec.Aliases...) {
+		if name == "" {
+			if i == 0 {
+				return fmt.Errorf("spec %s: empty name", scope)
+			}
+			return fmt.Errorf("spec %s: empty alias for %q", scope, spec.Name)
+		}
+		key := strings.ToLower(name)
+		if previous, exists := seen[key]; exists {
+			return fmt.Errorf("spec %s: name or alias %q collides with %q", scope, name, previous)
+		}
+		seen[key] = name
 	}
 	return nil
 }
@@ -57,23 +72,31 @@ func validateNode(s *Spec, path string) error {
 	if s.Priority < 0 || s.Priority > 100 {
 		return fmt.Errorf("spec %s: priority %d outside 0-100", path, s.Priority)
 	}
-	subs := map[string]bool{}
+	subs := map[string]string{}
 	for _, sub := range s.Subcommands {
 		if sub.Name == "" {
 			return fmt.Errorf("spec %s: subcommand with empty name", path)
 		}
-		key := strings.ToLower(sub.Name)
-		if subs[key] {
-			return fmt.Errorf("spec %s: duplicate subcommand %q", path, sub.Name)
+		if err := claimSpecNames(subs, sub, path+" subcommands"); err != nil {
+			return err
 		}
-		subs[key] = true
 		if err := validateNode(sub, path+" "+sub.Name); err != nil {
 			return err
 		}
 	}
+	optionNames := map[string]bool{}
 	for _, opt := range s.Options {
 		if len(opt.Names) == 0 {
 			return fmt.Errorf("spec %s: option with no names", path)
+		}
+		for _, name := range opt.Names {
+			if name == "" {
+				return fmt.Errorf("spec %s: option with empty name", path)
+			}
+			if optionNames[name] {
+				return fmt.Errorf("spec %s: duplicate option name %q", path, name)
+			}
+			optionNames[name] = true
 		}
 	}
 	return nil

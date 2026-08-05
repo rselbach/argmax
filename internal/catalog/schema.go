@@ -74,25 +74,47 @@ func (d *SpecData) ToSpec() (*complete.Spec, error) {
 		gen = combineGenerators(staticValues(d.Values), gen)
 	}
 	s.Generator = gen
+	optionNames := map[string]bool{}
 	for _, o := range d.Options {
 		optGen, err := ResolveGenerator(o.Generator)
 		if err != nil {
 			return nil, fmt.Errorf("spec %s option %v: %w", d.Name, o.Names, err)
 		}
+		// Imported corpora occasionally assign one short spelling to two
+		// different long options. Keep the first claim while preserving
+		// every unambiguous spelling.
+		names := make([]string, 0, len(o.Names))
+		for _, name := range o.Names {
+			if name != "" && !optionNames[name] {
+				optionNames[name] = true
+				names = append(names, name)
+			}
+		}
+		if len(names) == 0 {
+			continue
+		}
 		s.Options = append(s.Options, complete.Option{
-			Names:       o.Names,
+			Names:       names,
 			Description: o.Description,
 			TakesArg:    o.TakesArg,
 			Generator:   optGen,
 		})
 	}
+	subcommands := map[string]*complete.Spec{}
 	for _, sub := range d.Subcommands {
 		converted, err := sub.ToSpec()
 		if err != nil {
 			return nil, err
 		}
+		key := strings.ToLower(converted.Name)
+		if existing := subcommands[key]; existing != nil {
+			enrichSpec(existing, converted)
+			continue
+		}
+		subcommands[key] = converted
 		s.Subcommands = append(s.Subcommands, converted)
 	}
+	normalizeAliases(s.Subcommands)
 	return s, nil
 }
 

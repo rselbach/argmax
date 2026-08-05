@@ -232,10 +232,15 @@ func TestRegistryValidate(t *testing.T) {
 		registry *Registry
 		wantErr  bool
 	}{
-		"valid":        {registry: testRegistry(), wantErr: false},
-		"duplicate":    {registry: NewRegistry(&Spec{Name: "x"}, &Spec{Name: "X"}), wantErr: true},
-		"empty sub":    {registry: NewRegistry(&Spec{Name: "x", Subcommands: []*Spec{{Name: ""}}}), wantErr: true},
-		"bad priority": {registry: NewRegistry(&Spec{Name: "x", Priority: 150}), wantErr: true},
+		"valid":                  {registry: testRegistry(), wantErr: false},
+		"duplicate":              {registry: NewRegistry(&Spec{Name: "x"}, &Spec{Name: "X"}), wantErr: true},
+		"top alias and name":     {registry: NewRegistry(&Spec{Name: "x", Aliases: []string{"y"}}, &Spec{Name: "Y"}), wantErr: true},
+		"top aliases":            {registry: NewRegistry(&Spec{Name: "x", Aliases: []string{"z"}}, &Spec{Name: "y", Aliases: []string{"Z"}}), wantErr: true},
+		"sub alias and name":     {registry: NewRegistry(&Spec{Name: "x", Subcommands: []*Spec{{Name: "one", Aliases: []string{"two"}}, {Name: "TWO"}}}), wantErr: true},
+		"duplicate option":       {registry: NewRegistry(&Spec{Name: "x", Options: []Option{{Names: []string{"-v"}}, {Names: []string{"-v"}}}}), wantErr: true},
+		"duplicate option alias": {registry: NewRegistry(&Spec{Name: "x", Options: []Option{{Names: []string{"-v", "-v"}}}}), wantErr: true},
+		"empty sub":              {registry: NewRegistry(&Spec{Name: "x", Subcommands: []*Spec{{Name: ""}}}), wantErr: true},
+		"bad priority":           {registry: NewRegistry(&Spec{Name: "x", Priority: 150}), wantErr: true},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

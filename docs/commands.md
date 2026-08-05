@@ -97,7 +97,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `railway` | CLI for managing Railway Apps | 23 | 3 |
 | `rbenv` | Pick a Ruby version for your application and guarantee that your development environment matches production | 10 | 0 |
 | `robot` | CLI for running Robot Framework automation tests | 0 | 60 |
-| `rsync` | fast incremental transfer | 0 | 134 |
+| `rsync` | fast incremental transfer | 0 | 135 |
 | `scp` | secure copy | 0 | 19 |
 | `serverless` | Zero-friction serverless development | 21 | 1 |
 | `sfdx` |  | 134 | 0 |
@@ -271,7 +271,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `dart` | A command-line utility for Dart development | 9 | 5 |
 | `flutter` | Run flutter command | 24 | 4 |
 | `fvm` | Flutter Version Management: A cli to manage Flutter SDK versions | 12 | 3 |
-| `gradle` | Gradle is an open-source build automation tool that is designed to be flexible enough to build almost any type of software | 16 | 49 |
+| `gradle` | Gradle is an open-source build automation tool that is designed to be flexible enough to build almost any type of software | 16 | 48 |
 | `java` | Launch a Java application | 0 | 7 |
 | `javac` | Java compiler | 0 | 5 |
 | `jenv` | Manage your Java environment | 33 | 2 |
@@ -295,7 +295,7 @@ regenerate with `go run ./tools/docgen` after changing the catalog.
 | `g++` | The default C++ compiler for most linux distributions | 0 | 800 |
 | `gcc` | The default compiler for most linux distributions | 0 | 800 |
 | `premake` | Premake CLI | 14 | 2 |
-| `swift` | Swift compiler | 4 | 108 |
+| `swift` | Swift compiler | 4 | 107 |
 | `typst` | The Typst compiler | 6 | 4 |
 | `xcode-select` | Active developer directory for Xcode tools | 0 | 6 |
 | `xcodebuild` | Build Xcode projects | 0 | 82 |

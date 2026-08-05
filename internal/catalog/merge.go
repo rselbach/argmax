@@ -82,6 +82,28 @@ func enrichSpec(dst, src *complete.Spec) {
 		}
 		dst.Subcommands = append(dst.Subcommands, sub)
 	}
+	normalizeAliases(dst.Subcommands)
+}
+
+// normalizeAliases gives canonical sibling names precedence, then keeps
+// the first claim on each imported alias.
+func normalizeAliases(specs []*complete.Spec) {
+	claimed := make(map[string]bool, len(specs)*2)
+	for _, spec := range specs {
+		claimed[strings.ToLower(spec.Name)] = true
+	}
+	for _, spec := range specs {
+		aliases := spec.Aliases[:0]
+		for _, alias := range spec.Aliases {
+			key := strings.ToLower(alias)
+			if alias == "" || claimed[key] {
+				continue
+			}
+			claimed[key] = true
+			aliases = append(aliases, alias)
+		}
+		spec.Aliases = aliases
+	}
 }
 
 func removeAlias(aliases []string, alias string) []string {
