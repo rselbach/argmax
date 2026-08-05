@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, content string) string {
@@ -40,6 +41,35 @@ func TestLoadFileOverridesDefaults(t *testing.T) {
 	}
 	if cfg.Core.Mode != "last" {
 		t.Errorf("untouched sections keep defaults, got mode %q", cfg.Core.Mode)
+	}
+}
+
+func TestWatcherRetriesFailedReloadAtSameModTime(t *testing.T) {
+	path := writeConfig(t, "[core]\nmode = \"last\"\n")
+	initial, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := NewWatcher(path, Default())
+	failedModTime := initial.ModTime().Add(2 * time.Second)
+
+	if err := os.WriteFile(path, []byte("[core\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, failedModTime, failedModTime); err != nil {
+		t.Fatal(err)
+	}
+	w.Refresh()
+
+	if err := os.WriteFile(path, []byte("[core]\nmode = \"history\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, failedModTime, failedModTime); err != nil {
+		t.Fatal(err)
+	}
+	w.Refresh()
+	if got := w.Current().Core.Mode; got != "history" {
+		t.Errorf("mode = %q, want corrected config to be retried", got)
 	}
 }
 

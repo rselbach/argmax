@@ -72,9 +72,6 @@ func (w *Watcher) poll() {
 	}
 	cfg, err := Load(w.path)
 	if err != nil {
-		w.mu.Lock()
-		w.modTime = info.ModTime()
-		w.mu.Unlock()
 		if w.OnError != nil {
 			w.OnError(err)
 		}
