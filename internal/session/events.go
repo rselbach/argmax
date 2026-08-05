@@ -176,13 +176,17 @@ func (s *Session) onCommandEnd(payload string) {
 		return
 	}
 	skeleton := s.registry.Skeleton(command)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	s.launchWorker(func() {
+		parent := s.ctx
+		if parent == nil {
+			parent = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(parent, 500*time.Millisecond)
 		defer cancel()
 		if err := s.store.Record(ctx, command, skeleton, prevSkeleton, cwd, status); err != nil {
 			logging.L().Debug("usage recording failed", "error", err)
 		}
-	}()
+	})
 }
 
 // onPromptReady returns to prompt-tracking state.

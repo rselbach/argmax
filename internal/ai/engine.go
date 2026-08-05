@@ -38,6 +38,8 @@ type Engine struct {
 	cancel      context.CancelFunc
 	emptyCancel context.CancelFunc
 	generation  uint64
+	active      int
+	idle        chan struct{}
 	cachedAt    time.Time
 	cachedKey   string
 	cachedText  string
@@ -148,10 +150,12 @@ func (e *Engine) Request(buffer string, snapshot func() Snapshot, deliver func(t
 	e.cancel = cancel
 	debounce := e.debounce
 	wait := time.Until(e.lastCall.Add(e.minInterval))
+	e.startRequestLocked()
 	e.mu.Unlock()
 
 	go func() {
 		defer cancel()
+		defer e.finishRequest()
 		delay := debounce
 		if wait > delay {
 			delay = wait
@@ -222,10 +226,12 @@ func (e *Engine) RequestEmpty(minInterval time.Duration, snapshot func() Snapsho
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e.emptyCancel = cancel
+	e.startRequestLocked()
 	e.mu.Unlock()
 
 	go func() {
 		defer cancel()
+		defer e.finishRequest()
 		snap := snapshot()
 		hash := requestCacheKey(providerKey, snap)
 		e.mu.Lock()
@@ -278,6 +284,40 @@ func (e *Engine) RequestEmpty(minInterval time.Duration, snapshot func() Snapsho
 		e.mu.Unlock()
 		deliver(command)
 	}()
+}
+
+func (e *Engine) startRequestLocked() {
+	if e.active == 0 {
+		e.idle = make(chan struct{})
+	}
+	e.active++
+}
+
+func (e *Engine) finishRequest() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.active--
+	if e.active == 0 {
+		close(e.idle)
+	}
+}
+
+// Wait blocks until all request goroutines have exited or ctx is canceled.
+// Callers must prevent new requests before waiting.
+func (e *Engine) Wait(ctx context.Context) error {
+	e.mu.Lock()
+	if e.active == 0 {
+		e.mu.Unlock()
+		return nil
+	}
+	idle := e.idle
+	e.mu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func requestCacheKey(providerKey string, snapshot Snapshot) string {

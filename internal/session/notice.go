@@ -57,12 +57,19 @@ func (s *Session) showPendingNotice() {
 	}
 	// Give the cursor query issued at prompt-ready time a moment to
 	// resolve so the notice lands under the prompt.
-	time.AfterFunc(80*time.Millisecond, func() {
-		s.mu.Lock()
-		busy := s.commandActive || s.menuVisible
-		s.mu.Unlock()
-		if !busy {
-			s.renderer.Notice(notice)
-		}
+	s.mu.Lock()
+	if s.noticeTimer != nil {
+		s.noticeTimer.Stop()
+	}
+	s.noticeTimer = time.AfterFunc(80*time.Millisecond, func() {
+		s.launchWorker(func() {
+			s.mu.Lock()
+			busy := s.commandActive || s.menuVisible
+			s.mu.Unlock()
+			if !busy {
+				s.renderer.Notice(notice)
+			}
+		})
 	})
+	s.mu.Unlock()
 }

@@ -67,7 +67,7 @@ func (s *Session) computeIn(m mode) {
 		return
 	}
 
-	go func() {
+	s.launchWorker(func() {
 		cfg := s.opts.Watcher.Current()
 		cands := s.candidatesFor(m, line, cwd, cfg)
 		cands = complete.Dedupe(cands, line)
@@ -81,7 +81,7 @@ func (s *Session) computeIn(m mode) {
 		if m == modeSpec && atEnd && !navigated && cfg.AI.Enabled {
 			s.requestAI(line, cwd)
 		}
-	}()
+	})
 }
 
 // queueRender schedules a draw at the next trustworthy cursor report.
@@ -179,7 +179,11 @@ func (s *Session) currentGhostLocked() string {
 // rankSpec applies the weighted adaptive ranking with a bounded signal
 // collection budget.
 func (s *Session) rankSpec(cands []complete.Candidate, line, cwd string) []complete.Candidate {
-	ctx, cancel := context.WithTimeout(context.Background(), signalBudget)
+	parent := s.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, signalBudget)
 	defer cancel()
 	sig := rank.Signals{
 		Workspace: s.detector.Detect(cwd),
@@ -429,53 +433,58 @@ func (s *Session) maybePredictEmpty() {
 	cwd := s.cwd
 	prevCommand := s.prevCommand
 	prevExit := s.prevExit
-	s.mu.Unlock()
-	time.AfterFunc(debounce, func() {
-		s.mu.Lock()
-		stale := gen != s.generation || s.commandActive || !s.buf.Empty()
-		s.mu.Unlock()
-		if stale {
-			return
-		}
-		// Local deterministic rules run first; only a rule with
-		// confidence at least 70 short-circuits the AI fallback.
-		if pred, ok := ai.PredictEmpty(cwd, prevCommand, prevExit, probe); ok && pred.Confidence >= 70 {
-			s.apply(gen, []complete.Candidate{{
-				Text:        pred.Command,
-				Title:       pred.Command,
-				Description: pred.Reason,
-				Source:      complete.SourceAI,
-				Confidence:  pred.Confidence,
-				Icon:        "ai",
-			}})
-			return
-		}
-		if !cfg.AI.Enabled {
-			return
-		}
-		minInterval := time.Duration(cfg.AI.SuggestOnEmpty.MinIntervalMS) * time.Millisecond
-		if minInterval == 0 {
-			minInterval = 5 * time.Second
-		}
-		s.aiEngine.RequestEmpty(minInterval, func() ai.Snapshot {
-			return s.gatherer.Gather(cwd, "", prevCommand, prevExit, nil)
-		}, func(command string) {
+	if s.emptyTimer != nil {
+		s.emptyTimer.Stop()
+	}
+	s.emptyTimer = time.AfterFunc(debounce, func() {
+		s.launchWorker(func() {
 			s.mu.Lock()
-			usable := gen == s.generation && !s.commandActive && s.buf.Empty()
+			stale := gen != s.generation || s.commandActive || !s.buf.Empty()
 			s.mu.Unlock()
-			if !usable {
+			if stale {
 				return
 			}
-			s.apply(gen, []complete.Candidate{{
-				Text:        command,
-				Title:       command,
-				Description: "AI prediction",
-				Source:      complete.SourceAI,
-				Confidence:  ai.DefaultConfidence,
-				Icon:        "ai",
-			}})
+			// Local deterministic rules run first; only a rule with
+			// confidence at least 70 short-circuits the AI fallback.
+			if pred, ok := ai.PredictEmpty(cwd, prevCommand, prevExit, probe); ok && pred.Confidence >= 70 {
+				s.apply(gen, []complete.Candidate{{
+					Text:        pred.Command,
+					Title:       pred.Command,
+					Description: pred.Reason,
+					Source:      complete.SourceAI,
+					Confidence:  pred.Confidence,
+					Icon:        "ai",
+				}})
+				return
+			}
+			if !cfg.AI.Enabled {
+				return
+			}
+			minInterval := time.Duration(cfg.AI.SuggestOnEmpty.MinIntervalMS) * time.Millisecond
+			if minInterval == 0 {
+				minInterval = 5 * time.Second
+			}
+			s.aiEngine.RequestEmpty(minInterval, func() ai.Snapshot {
+				return s.gatherer.Gather(cwd, "", prevCommand, prevExit, nil)
+			}, func(command string) {
+				s.mu.Lock()
+				usable := gen == s.generation && !s.commandActive && s.buf.Empty()
+				s.mu.Unlock()
+				if !usable {
+					return
+				}
+				s.apply(gen, []complete.Candidate{{
+					Text:        command,
+					Title:       command,
+					Description: "AI prediction",
+					Source:      complete.SourceAI,
+					Confidence:  ai.DefaultConfidence,
+					Icon:        "ai",
+				}})
+			})
 		})
 	})
+	s.mu.Unlock()
 }
 
 func firstNonEmpty(vals ...string) string {

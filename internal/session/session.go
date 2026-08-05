@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
 	"github.com/rselbach/argmax/internal/ai"
@@ -114,9 +115,17 @@ type Session struct {
 	// prompt themes issue their own queries) and is forwarded intact.
 	dsrOutstanding int
 
-	coalesce *time.Timer
-	done     chan struct{}
-	doneOnce sync.Once
+	coalesce    *time.Timer
+	emptyTimer  *time.Timer
+	noticeTimer *time.Timer
+	done        chan struct{}
+	doneOnce    sync.Once
+	ctx         context.Context
+	cancel      context.CancelFunc
+
+	workerMu sync.Mutex
+	workers  sync.WaitGroup
+	stopping bool
 }
 
 // keybindings holds the resolved configurable keys.
@@ -136,6 +145,8 @@ func Run(opts Options) (int, error) {
 	registryCh := make(chan *complete.Registry, 1)
 	go func() { registryCh <- catalog.Registry() }()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	s := &Session{
 		opts:        opts,
 		inferrer:    infer.New(),
@@ -144,6 +155,8 @@ func Run(opts Options) (int, error) {
 		menuEnabled: true,
 		selected:    -1,
 		done:        make(chan struct{}),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 	s.hist = history.NewProvider(opts.Shell.HistoryPath(), historyFormat(opts.Shell))
 	s.mode = startupMode(opts.Watcher.Current())
@@ -324,7 +337,7 @@ func (s *Session) start() error {
 
 // serve runs the pumps until the shell exits.
 func (s *Session) serve() (int, error) {
-	defer s.restore()
+	defer s.shutdown()
 
 	s.opts.Watcher.OnChange = func(cfg *config.Config) {
 		s.configure(cfg)
@@ -333,16 +346,16 @@ func (s *Session) serve() (int, error) {
 	s.opts.Watcher.OnError = func(err error) {
 		logging.L().Warn("configuration reload failed; keeping last valid configuration", "error", err)
 	}
-	go s.outputPump()
-	go s.inputPump()
-	go s.eventPump()
-	go s.watchForeground()
-	go s.watchResize()
-	go s.watchUpdateNotice()
-	go s.opts.Watcher.Run(contextFromDone(s.done))
+	s.launchWorker(s.outputPump)
+	s.launchWorker(s.inputPump)
+	s.launchWorker(s.eventPump)
+	s.launchWorker(s.watchForeground)
+	s.launchWorker(s.watchResize)
+	s.launchWorker(s.watchUpdateNotice)
+	s.launchWorker(func() { s.opts.Watcher.Run(s.ctx) })
 
 	err := s.child.Wait()
-	s.doneOnce.Do(func() { close(s.done) })
+	s.stop()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode(), nil
@@ -351,6 +364,82 @@ func (s *Session) serve() (int, error) {
 		return 1, fmt.Errorf("shell exited: %w", err)
 	}
 	return 0, nil
+}
+
+func (s *Session) launchWorker(fn func()) bool {
+	s.workerMu.Lock()
+	defer s.workerMu.Unlock()
+	if s.stopping {
+		return false
+	}
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			return false
+		default:
+		}
+	}
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		fn()
+	}()
+	return true
+}
+
+func (s *Session) stop() {
+	s.doneOnce.Do(func() { close(s.done) })
+	if s.cancel != nil {
+		s.cancel()
+	}
+}
+
+func (s *Session) shutdown() {
+	s.workerMu.Lock()
+	s.stopping = true
+	s.workerMu.Unlock()
+	s.stop()
+
+	s.mu.Lock()
+	for _, timer := range []*time.Timer{s.coalesce, s.emptyTimer, s.noticeTimer} {
+		if timer != nil {
+			timer.Stop()
+		}
+	}
+	s.coalesce = nil
+	s.emptyTimer = nil
+	s.noticeTimer = nil
+	s.mu.Unlock()
+	if s.aiEngine != nil {
+		s.aiEngine.Cancel()
+	}
+	// Unblock the PTY and hook readers before joining their workers. The
+	// input worker polls done and exits without closing the user's stdin.
+	if s.ptmx != nil {
+		_ = s.ptmx.Close()
+	}
+	if s.eventsR != nil {
+		_ = s.eventsR.Close()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	workersDone := make(chan struct{})
+	go func() {
+		s.workers.Wait()
+		close(workersDone)
+	}()
+	select {
+	case <-workersDone:
+	case <-ctx.Done():
+		logging.L().Warn("session workers did not stop before shutdown deadline")
+	}
+	if s.aiEngine != nil {
+		if err := s.aiEngine.Wait(ctx); err != nil {
+			logging.L().Warn("AI workers did not stop before shutdown deadline", "error", err)
+		}
+	}
+	s.restore()
 }
 
 func (s *Session) restore() {
@@ -391,10 +480,10 @@ func (s *Session) outputPump() {
 			_, _ = s.renderer.Write(buf[:n])
 		}
 		if err != nil {
-			if !errors.Is(err, io.EOF) && !errors.Is(err, syscall.EIO) {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, syscall.EIO) && !errors.Is(err, os.ErrClosed) {
 				logging.L().Warn("unexpected pty read failure", "error", err)
 			}
-			s.doneOnce.Do(func() { close(s.done) })
+			s.stop()
 			return
 		}
 	}
@@ -448,6 +537,22 @@ func (s *Session) inputPump() {
 		})
 	}
 	for {
+		select {
+		case <-s.done:
+			return
+		default:
+		}
+		poll := []unix.PollFd{{Fd: int32(s.tty.Fd()), Events: unix.POLLIN}}
+		if _, err := unix.Poll(poll, 100); err != nil {
+			if errors.Is(err, syscall.EINTR) {
+				continue
+			}
+			logging.L().Debug("terminal input poll failed", "error", err)
+			return
+		}
+		if poll[0].Revents == 0 {
+			continue
+		}
 		n, err := s.tty.Read(buf)
 		decodeMu.Lock()
 		stopEscapeTimer()
@@ -554,14 +659,4 @@ func probe(cwd string, timeout time.Duration, name string, args ...string) strin
 		return ""
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// contextFromDone adapts the session's done channel to a context.
-func contextFromDone(done <-chan struct{}) context.Context {
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		<-done
-		cancel()
-	}()
-	return ctx
 }

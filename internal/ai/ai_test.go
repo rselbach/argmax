@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -232,6 +233,11 @@ func TestConfigureCancelsInflightRequests(t *testing.T) {
 			awaitSignal(t, started, "provider request did not start")
 			e.Configure(config.AI{}, nil)
 			awaitSignal(t, canceled, "provider request was not canceled")
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := e.Wait(ctx); err != nil {
+				t.Fatalf("canceled AI worker did not exit: %v", err)
+			}
 			select {
 			case <-delivered:
 				t.Error("request from old configuration delivered a result")
