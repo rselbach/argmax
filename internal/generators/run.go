@@ -30,7 +30,7 @@ func run(dir string, timeout time.Duration, name string, args ...string) string 
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &limitWriter{w: &out, n: maxProbeOutput}
-	if err := cmd.Run(); err != nil && out.Len() == 0 {
+	if err := cmd.Run(); err != nil {
 		return ""
 	}
 	return strings.TrimRight(out.String(), "\n")
