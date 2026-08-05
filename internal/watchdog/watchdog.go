@@ -23,6 +23,8 @@ import (
 
 const maxStderr = 64 << 10 // retained child stderr for crash diagnosis
 
+const forceKillDelay = 3 * time.Second
+
 // SessionArg is the internal argument marking the monitored session child.
 const SessionArg = "__session"
 
@@ -55,30 +57,41 @@ func Run(version string) int {
 		}
 	}
 
-	// Forward termination signals to the child so the terminal is
-	// restored before this process exits; signal death is then a normal
-	// shutdown, not a crash.
-	signals := make(chan os.Signal, 1)
+	// Buffer signals before starting the child, but do not start forwarding
+	// until cmd.Process is guaranteed to exist.
+	signals := make(chan os.Signal, 4)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer signal.Stop(signals)
+	if err := cmd.Start(); err != nil {
+		restore()
+		fmt.Fprintln(os.Stderr, "argmax: cannot start monitored session:", err)
+		return 1
+	}
+
+	// Forward every termination signal to the child so the terminal is
+	// restored before this process exits; signal death is then a normal
+	// shutdown, not a crash.
 	var forwarded atomic.Bool
+	var childExited atomic.Bool
+	childDone := make(chan struct{})
+	forwardDone := make(chan struct{})
 	go func() {
-		sig, ok := <-signals
-		if !ok {
-			return
-		}
-		forwarded.Store(true)
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(sig)
-			time.AfterFunc(3*time.Second, func() { _ = cmd.Process.Kill() })
-		}
+		forwardSignals(cmd.Process, signals, childDone, &forwarded, &childExited, forceKillDelay)
+		close(forwardDone)
 	}()
 
-	if err := cmd.Run(); err == nil {
+	err = cmd.Wait()
+	childExited.Store(true)
+	close(childDone)
+	<-forwardDone
+	if err == nil {
 		restore()
 		return 0
 	}
-	exitCode := cmd.ProcessState.ExitCode()
+	exitCode := 1
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
 	if forwarded.Load() || !crashed(cmd, ring) {
 		restore()
 		return exitCode
@@ -95,6 +108,48 @@ func Run(version string) int {
 	fmt.Fprintln(os.Stderr, "argmax: starting a rescue shell (argmax disabled).")
 	runRescueShell()
 	return exitCode
+}
+
+func forwardSignals(
+	process *os.Process,
+	signals <-chan os.Signal,
+	childDone <-chan struct{},
+	forwarded, childExited *atomic.Bool,
+	forceAfter time.Duration,
+) {
+	var (
+		forceTimer *time.Timer
+		force      <-chan time.Time
+	)
+	defer func() {
+		if forceTimer != nil {
+			forceTimer.Stop()
+		}
+	}()
+	for {
+		select {
+		case sig, ok := <-signals:
+			if !ok {
+				return
+			}
+			forwarded.Store(true)
+			if !childExited.Load() {
+				_ = process.Signal(sig)
+			}
+			if forceTimer == nil {
+				forceTimer = time.NewTimer(forceAfter)
+				force = forceTimer.C
+			}
+		case <-force:
+			if !childExited.Load() {
+				_ = process.Kill()
+			}
+			forceTimer = nil
+			force = nil
+		case <-childDone:
+			return
+		}
+	}
 }
 
 // crashed distinguishes an internal panic or fatal failure from a normal
