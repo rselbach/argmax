@@ -104,11 +104,38 @@ case $- in *i*)
         __argmax_emit "pre:${BASH_COMMAND}"
       fi
     }
-    case ";${PROMPT_COMMAND:-};" in
-      *";__argmax_prompt;"*) ;;
-      *) PROMPT_COMMAND="__argmax_prompt${PROMPT_COMMAND:+;${PROMPT_COMMAND}}" ;;
+    __argmax_prompt_declaration=$(declare -p PROMPT_COMMAND 2>/dev/null)
+    case "${__argmax_prompt_declaration}" in
+      declare\ -*a*\ PROMPT_COMMAND=*)
+        __argmax_prompt_installed=
+        for __argmax_command in "${PROMPT_COMMAND[@]}"; do
+          [ "${__argmax_command}" = "__argmax_prompt" ] && __argmax_prompt_installed=1
+        done
+        if [ -z "${__argmax_prompt_installed}" ]; then
+          PROMPT_COMMAND=(__argmax_prompt "${PROMPT_COMMAND[@]}")
+        fi
+        ;;
+      *)
+        case ";${PROMPT_COMMAND:-};" in
+          *";__argmax_prompt;"*) ;;
+          *) PROMPT_COMMAND="__argmax_prompt${PROMPT_COMMAND:+;${PROMPT_COMMAND}}" ;;
+        esac
+        ;;
     esac
-    trap '__argmax_debug' DEBUG
+    unset __argmax_prompt_declaration __argmax_prompt_installed __argmax_command
+
+    __argmax_debug_trap=$(trap -p DEBUG)
+    case "${__argmax_debug_trap}" in
+      *"__argmax_debug"*) ;;
+      "") trap '__argmax_debug' DEBUG ;;
+      *)
+        __argmax_debug_trap=${__argmax_debug_trap#trap -- }
+        __argmax_debug_trap=${__argmax_debug_trap% DEBUG}
+        eval "__argmax_previous_debug=${__argmax_debug_trap}"
+        trap "__argmax_debug; ${__argmax_previous_debug}" DEBUG
+        ;;
+    esac
+    unset __argmax_previous_debug __argmax_debug_trap
   fi
   ;;
 esac

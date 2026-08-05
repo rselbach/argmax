@@ -129,6 +129,53 @@ func TestInitScriptsGuardAutostart(t *testing.T) {
 	}
 }
 
+func TestBashInitPreservesPromptCommandArray(t *testing.T) {
+	out := runBashInit(t, `PROMPT_COMMAND=('first command' 'second; command')`, `
+printf 'count=%s\n' "${#PROMPT_COMMAND[@]}"
+for command in "${PROMPT_COMMAND[@]}"; do printf '<%s>\n' "$command"; done
+`)
+	for _, want := range []string{"count=3", "<__argmax_prompt>", "<first command>", "<second; command>"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("sourced Bash integration output %q does not contain %q", out, want)
+		}
+	}
+}
+
+func TestBashInitChainsExistingDebugTrap(t *testing.T) {
+	out := runBashInit(t, `
+__previous_commands=
+trap '__previous_commands+="${BASH_COMMAND}:"' DEBUG
+`, `
+__previous_commands=
+__argmax_test_marker=1
+trap - DEBUG
+printf '%s\n' "$__previous_commands"
+`)
+	if !strings.Contains(out, "__argmax_test_marker=1:") {
+		t.Errorf("existing DEBUG trap did not receive the command after initialization: %q", out)
+	}
+}
+
+func runBashInit(t *testing.T, setup, check string) string {
+	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	script := `
+ARGMAX_ACTIVE=1
+ARGMAX_EVENTS_FD=3
+ARGMAX_TTY="$(tty 2>/dev/null)"
+exec 3>/dev/null
+` + setup + "\n" + InitScript(Bash) + "\n" + check
+	cmd := exec.Command(bash, "--noprofile", "--norc", "-ic", script)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("source Bash integration: %v", err)
+	}
+	return string(out)
+}
+
 func TestBlockMarkers(t *testing.T) {
 	for _, k := range []Kind{Bash, Zsh, Fish} {
 		block := Block(k)
