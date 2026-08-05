@@ -2,6 +2,7 @@ package rank
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -206,6 +207,47 @@ func TestStoreTransitions(t *testing.T) {
 	}
 	if tr["git commit"] <= 0 {
 		t.Errorf("parent-skeleton fallback missing: %v", tr)
+	}
+}
+
+func TestStoreTransitionsOrdersBeforeLimit(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO transitions (prev, next, cwd, count, last_used) VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 500; i++ {
+		if _, err := stmt.ExecContext(ctx, "build", fmt.Sprintf("low-%03d", i), "/other", 1, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := stmt.ExecContext(ctx, "build", "important-global", "/other", 1000, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stmt.ExecContext(ctx, "build", "local", "/project", 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := stmt.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	transitions, err := store.Transitions(ctx, "build", "/project", func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transitions["local"] == 0 || transitions["important-global"] == 0 {
+		t.Errorf("bounded transitions: local=%v important-global=%v, want both",
+			transitions["local"], transitions["important-global"])
 	}
 }
 

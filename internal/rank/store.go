@@ -197,7 +197,9 @@ func (s *Store) Transitions(ctx context.Context, prevSkeleton, cwd string, paren
 
 func (s *Store) transitionsFor(ctx context.Context, prev, cwd string, strength float64, out map[string]float64) error {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT next, cwd, count FROM transitions WHERE prev = ? LIMIT 500`, prev)
+		SELECT next, cwd, count FROM transitions WHERE prev = ?
+		ORDER BY (cwd = ?) DESC, count DESC, last_used DESC, next ASC, cwd ASC
+		LIMIT 500`, prev, cwd)
 	if err != nil {
 		return fmt.Errorf("query transitions: %w", err)
 	}
