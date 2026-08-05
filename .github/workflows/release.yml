@@ -26,3 +26,28 @@ jobs:
           # Homebrew tap pushes need a token with access to
           # rselbach/homebrew-tap; omit to skip the tap update.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+      - name: Classify release tag
+        id: release
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+          else
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Render AUR release metadata
+        if: steps.release.outputs.stable == 'true'
+        run: |
+          scripts/render-aur.sh \
+            "${{ steps.release.outputs.version }}" \
+            dist/checksums.txt \
+            dist/aur
+      - name: Upload AUR release metadata
+        if: steps.release.outputs.stable == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aur-${{ github.ref_name }}
+          path: dist/aur/
+          include-hidden-files: true

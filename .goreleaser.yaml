@@ -36,6 +36,14 @@ archives:
       - NOTICE
       - README*
 
+# Publish a workflow-owned source archive instead of relying on GitHub's
+# generated tag archives. Source archives are included in checksums.txt.
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}-{{ .Version }}-source"
+  format: tar.gz
+  prefix_template: "{{ .ProjectName }}-{{ .Version }}/"
+
 checksum:
   name_template: checksums.txt
 

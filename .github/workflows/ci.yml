@@ -50,4 +50,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: ShellCheck
-        run: shellcheck scripts/install.sh scripts/nfpm-preremove.sh
+        run: shellcheck scripts/install.sh scripts/nfpm-preremove.sh scripts/render-aur.sh

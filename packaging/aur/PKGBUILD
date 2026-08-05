@@ -1,16 +1,16 @@
 # Maintainer: Roberto Selbach <roberto.selbach@gmail.com>
-# RELEASE TEMPLATE ONLY: do not publish until pkgver and sha256sums are
-# replaced with values verified for the release source archive.
+# Rendered by scripts/render-aur.sh from the source archive and checksum
+# produced by GoReleaser. Do not publish this unrendered template.
 pkgname=argmax
-pkgver=0.1.0
+pkgver=@PKGVER@
 pkgrel=1
 pkgdesc="Terminal-resident command completion and prediction"
 arch=('x86_64' 'aarch64')
 url="https://github.com/rselbach/argmax"
 license=('MIT')
 makedepends=('go>=1.26')
-source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('REPLACE_WITH_RELEASE_SOURCE_SHA256')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/releases/download/v${pkgver}/${pkgname}-${pkgver}-source.tar.gz")
+sha256sums=('@SOURCE_SHA256@')
 
 build() {
   cd "${pkgname}-${pkgver}"
