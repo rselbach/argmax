@@ -1,10 +1,16 @@
 package update
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -55,14 +61,14 @@ func TestVerifyChecksum(t *testing.T) {
 	data := []byte("release payload")
 	digest := sha256.Sum256(data)
 	good := hex.EncodeToString(digest[:]) + "  argmax_linux_amd64.tar.gz\n"
-	if err := verifyChecksum(data, good, "argmax_linux_amd64.tar.gz"); err != nil {
+	if err := verifyChecksum(digest, good, "argmax_linux_amd64.tar.gz"); err != nil {
 		t.Errorf("valid checksum rejected: %v", err)
 	}
 	bad := strings.Repeat("0", 64) + "  argmax_linux_amd64.tar.gz\n"
-	if err := verifyChecksum(data, bad, "argmax_linux_amd64.tar.gz"); err == nil {
+	if err := verifyChecksum(digest, bad, "argmax_linux_amd64.tar.gz"); err == nil {
 		t.Error("mismatched checksum accepted")
 	}
-	if err := verifyChecksum(data, good, "argmax_darwin_arm64.tar.gz"); err == nil {
+	if err := verifyChecksum(digest, good, "argmax_darwin_arm64.tar.gz"); err == nil {
 		t.Error("missing checksum entry accepted")
 	}
 }
@@ -90,4 +96,136 @@ func TestDownloadEnforcesBodyLimit(t *testing.T) {
 	if _, err := download(server.Client(), server.URL+"/failure", 4); err == nil {
 		t.Error("non-200 download succeeded")
 	}
+}
+
+func TestDownloadToTempStreamsAndCleansFailures(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("payload"))
+	}))
+	defer server.Close()
+
+	file, digest, err := downloadToTemp(server.Client(), server.URL, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDigest := sha256.Sum256([]byte("payload"))
+	if string(got) != "payload" || digest != wantDigest {
+		t.Errorf("download = %q, %x; want payload, %x", got, digest, wantDigest)
+	}
+	name := file.Name()
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(name); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := downloadToTemp(server.Client(), server.URL, 6); err == nil {
+		t.Error("oversized temporary download succeeded")
+	}
+	entries, err := os.ReadDir(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("failed download left temporary files: %v", entries)
+	}
+}
+
+func TestReplaceBinaryStreamsArchiveEntry(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "argmax")
+	if err := os.WriteFile(destination, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{'n', 'e', 'w', 0, 0xff, '\n'}
+	archive := makeArchive(t, "release/argmax", tar.TypeReg, want)
+	if err := replaceBinary(bytes.NewReader(archive), destination, int64(len(want))); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("replacement bytes = %v, want %v", got, want)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Errorf("replacement mode = %v, want executable", info.Mode())
+	}
+}
+
+func TestReplaceBinaryPreservesOriginalOnArchiveFailure(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "argmax")
+	if err := os.WriteFile(destination, []byte("original"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	archive := makeArchive(t, "release/argmax", tar.TypeReg, []byte("oversized"))
+	if err := replaceBinary(bytes.NewReader(archive), destination, 4); err == nil {
+		t.Fatal("oversized archive entry replaced the binary")
+	}
+	got, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "original" {
+		t.Errorf("original binary changed to %q", got)
+	}
+	temps, err := filepath.Glob(filepath.Join(dir, ".argmax-update-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temps) != 0 {
+		t.Errorf("failed replacement left temporary files: %v", temps)
+	}
+}
+
+func TestExtractBinaryRejectsMissingRegularEntry(t *testing.T) {
+	archive := makeArchive(t, "release/argmax", tar.TypeSymlink, nil)
+	if err := extractBinary(bytes.NewReader(archive), io.Discard, 100); err == nil {
+		t.Error("archive without a regular argmax binary succeeded")
+	}
+	empty := makeArchive(t, "release/argmax", tar.TypeReg, nil)
+	if err := extractBinary(bytes.NewReader(empty), io.Discard, 100); err == nil {
+		t.Error("empty argmax binary succeeded")
+	}
+}
+
+func makeArchive(t *testing.T, name string, typeflag byte, data []byte) []byte {
+	t.Helper()
+	var archive bytes.Buffer
+	gz := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gz)
+	header := &tar.Header{Name: name, Mode: 0o755, Typeflag: typeflag}
+	if typeflag == tar.TypeReg {
+		header.Size = int64(len(data))
+	} else if typeflag == tar.TypeSymlink {
+		header.Linkname = "elsewhere"
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		t.Fatal(err)
+	}
+	if typeflag == tar.TypeReg {
+		if _, err := tw.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return archive.Bytes()
 }

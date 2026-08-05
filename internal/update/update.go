@@ -22,6 +22,9 @@ import (
 const (
 	releasesURL    = "https://api.github.com/repos/rselbach/argmax/releases"
 	networkTimeout = 5 * time.Second
+	archiveLimit   = 200 << 20
+	checksumsLimit = 1 << 20
+	binaryLimit    = 500 << 20
 )
 
 // Release describes one published release.
@@ -152,22 +155,6 @@ func Apply(rel Release) error {
 	}
 	client := &http.Client{Timeout: 5 * time.Minute}
 
-	archive, err := download(client, assetURL, 200<<20)
-	if err != nil {
-		return fmt.Errorf("download %s: %w", assetName, err)
-	}
-	sums, err := download(client, sumsURL, 1<<20)
-	if err != nil {
-		return fmt.Errorf("download checksums: %w", err)
-	}
-	if err := verifyChecksum(archive, string(sums), assetName); err != nil {
-		return err
-	}
-	binary, err := extractBinary(archive)
-	if err != nil {
-		return err
-	}
-
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve current binary: %w", err)
@@ -176,26 +163,88 @@ func Apply(rel Release) error {
 	if err != nil {
 		return fmt.Errorf("resolve current binary: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(self), ".argmax-update-*")
+
+	archive, digest, err := downloadToTemp(client, assetURL, archiveLimit)
+	if err != nil {
+		return fmt.Errorf("download %s: %w", assetName, err)
+	}
+	defer func() {
+		_ = archive.Close()
+		_ = os.Remove(archive.Name())
+	}()
+	sums, err := download(client, sumsURL, checksumsLimit)
+	if err != nil {
+		return fmt.Errorf("download checksums: %w", err)
+	}
+	if err := verifyChecksum(digest, string(sums), assetName); err != nil {
+		return err
+	}
+	return replaceBinary(archive, self, binaryLimit)
+}
+
+func replaceBinary(archive io.Reader, destination string, limit int64) error {
+	tmp, err := os.CreateTemp(filepath.Dir(destination), ".argmax-update-*")
 	if err != nil {
 		return fmt.Errorf("stage update: %w", err)
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.Write(binary); err != nil {
+	if err := extractBinary(archive, tmp, limit); err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("write update: %w", err)
+		return err
 	}
 	if err := tmp.Chmod(0o755); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("mark update executable: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync staged update: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("finish staging update: %w", err)
 	}
-	if err := os.Rename(tmp.Name(), self); err != nil {
+	if err := os.Rename(tmp.Name(), destination); err != nil {
 		return fmt.Errorf("replace binary: %w", err)
 	}
 	return nil
+}
+
+func downloadToTemp(client *http.Client, url string, limit int64) (*os.File, [sha256.Size]byte, error) {
+	var digest [sha256.Size]byte
+	tmp, err := os.CreateTemp("", ".argmax-download-*")
+	if err != nil {
+		return nil, digest, err
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, digest, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, digest, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	hash := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmp, hash), io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, digest, err
+	}
+	if n > limit {
+		return nil, digest, fmt.Errorf("response exceeds %d-byte limit", limit)
+	}
+	copy(digest[:], hash.Sum(nil))
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return nil, digest, err
+	}
+	keep = true
+	return tmp, digest, nil
 }
 
 func download(client *http.Client, url string, limit int64) ([]byte, error) {
@@ -221,8 +270,7 @@ func readBounded(reader io.Reader, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-func verifyChecksum(data []byte, sums, assetName string) error {
-	digest := sha256.Sum256(data)
+func verifyChecksum(digest [sha256.Size]byte, sums, assetName string) error {
 	want := hex.EncodeToString(digest[:])
 	for _, ln := range strings.Split(sums, "\n") {
 		fields := strings.Fields(ln)
@@ -239,23 +287,36 @@ func verifyChecksum(data []byte, sums, assetName string) error {
 	return fmt.Errorf("no checksum entry for %s", assetName)
 }
 
-func extractBinary(archive []byte) ([]byte, error) {
-	gz, err := gzip.NewReader(strings.NewReader(string(archive)))
+func extractBinary(archive io.Reader, destination io.Writer, limit int64) error {
+	gz, err := gzip.NewReader(archive)
 	if err != nil {
-		return nil, fmt.Errorf("open archive: %w", err)
+		return fmt.Errorf("open archive: %w", err)
 	}
 	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			return nil, fmt.Errorf("archive contains no argmax binary")
+			return fmt.Errorf("archive contains no argmax binary")
 		}
 		if err != nil {
-			return nil, fmt.Errorf("read archive: %w", err)
+			return fmt.Errorf("read archive: %w", err)
 		}
 		if filepath.Base(hdr.Name) == "argmax" && hdr.Typeflag == tar.TypeReg {
-			return io.ReadAll(io.LimitReader(tr, 500<<20))
+			if hdr.Size <= 0 {
+				return fmt.Errorf("archive contains an empty argmax binary")
+			}
+			if hdr.Size > limit {
+				return fmt.Errorf("argmax binary exceeds %d-byte limit", limit)
+			}
+			n, err := io.Copy(destination, io.LimitReader(tr, limit+1))
+			if err != nil {
+				return fmt.Errorf("extract argmax binary: %w", err)
+			}
+			if n > limit {
+				return fmt.Errorf("argmax binary exceeds %d-byte limit", limit)
+			}
+			return nil
 		}
 	}
 }
