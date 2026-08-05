@@ -1,8 +1,11 @@
 package ai
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -147,6 +150,103 @@ func TestCompletedSuggestionCacheUsesRequestIdentity(t *testing.T) {
 	e.Configure(cfg, provider)
 	if got, ok := e.Cached("git sta", snapshot); ok {
 		t.Errorf("cache reused %q after provider change", got)
+	}
+}
+
+func TestConfigureCancelsPendingRequest(t *testing.T) {
+	var snapshots atomic.Int32
+	e := &Engine{}
+	e.Configure(config.AI{DebounceMS: 50}, &config.Provider{
+		Endpoint: "http://127.0.0.1:1", Model: "test", TimeoutMS: 100,
+	})
+	e.Request("git sta", func() Snapshot {
+		snapshots.Add(1)
+		return Snapshot{}
+	}, func(string, int) {
+		t.Error("canceled request must not deliver")
+	})
+	e.Configure(config.AI{}, nil)
+	time.Sleep(100 * time.Millisecond)
+	if got := snapshots.Load(); got != 0 {
+		t.Errorf("snapshot gathered %d times after pending request was canceled", got)
+	}
+}
+
+func TestConfigureInvalidatesRequestState(t *testing.T) {
+	e := &Engine{}
+	cfg := config.AI{Provider: "test"}
+	provider := &config.Provider{Endpoint: "https://example.test", Model: "model"}
+	snapshot := Snapshot{CWD: "/work"}
+	e.Configure(cfg, provider)
+	e.cachedAt = time.Now()
+	e.cachedText = "git status"
+	e.cachedKey = requestCacheKey(e.providerKey, snapshot)
+	e.emptyLastHash = requestCacheKey(e.providerKey, snapshot)
+	e.emptyCachedCmd = "git status"
+	e.cooldownEnd = time.Now().Add(time.Hour)
+
+	e.Configure(config.AI{}, nil)
+	e.Configure(cfg, provider)
+	if got, ok := e.Cached("git sta", snapshot); ok {
+		t.Errorf("cache survived disable and re-enable: %q", got)
+	}
+	if e.emptyLastHash != "" || e.emptyCachedCmd != "" {
+		t.Error("empty-prompt cache survived reconfiguration")
+	}
+	if !e.cooldownEnd.IsZero() {
+		t.Error("provider cooldown survived reconfiguration")
+	}
+}
+
+func TestConfigureCancelsInflightRequests(t *testing.T) {
+	for _, request := range []string{"completion", "empty prompt"} {
+		t.Run(request, func(t *testing.T) {
+			started := make(chan struct{})
+			canceled := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
+				close(started)
+				<-r.Context().Done()
+				close(canceled)
+			}))
+			defer func() {
+				server.CloseClientConnections()
+				server.Close()
+			}()
+
+			e := &Engine{}
+			e.Configure(config.AI{DebounceMS: 1, MinIntervalMS: 1}, &config.Provider{
+				Endpoint: server.URL, Model: "test", TimeoutMS: 5000,
+			})
+			delivered := make(chan struct{}, 1)
+			if request == "completion" {
+				e.Request("git sta", func() Snapshot { return Snapshot{} }, func(string, int) {
+					delivered <- struct{}{}
+				})
+			} else {
+				e.RequestEmpty(0, func() Snapshot { return Snapshot{} }, func(string) {
+					delivered <- struct{}{}
+				})
+			}
+			awaitSignal(t, started, "provider request did not start")
+			e.Configure(config.AI{}, nil)
+			awaitSignal(t, canceled, "provider request was not canceled")
+			select {
+			case <-delivered:
+				t.Error("request from old configuration delivered a result")
+			case <-time.After(20 * time.Millisecond):
+			}
+		})
+	}
+}
+
+func awaitSignal(t *testing.T, ch <-chan struct{}, failure string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal(failure)
 	}
 }
 

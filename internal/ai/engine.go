@@ -36,6 +36,8 @@ type Engine struct {
 	lastCall    time.Time
 	cooldownEnd time.Time
 	cancel      context.CancelFunc
+	emptyCancel context.CancelFunc
+	generation  uint64
 	cachedAt    time.Time
 	cachedKey   string
 	cachedText  string
@@ -52,6 +54,16 @@ type Engine struct {
 func (e *Engine) Configure(cfg config.AI, provider *config.Provider) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.cancelRequestsLocked()
+	e.generation++
+	e.lastCall = time.Time{}
+	e.cooldownEnd = time.Time{}
+	e.cachedAt = time.Time{}
+	e.cachedKey = ""
+	e.cachedText = ""
+	e.emptyLastCall = time.Time{}
+	e.emptyLastHash = ""
+	e.emptyCachedCmd = ""
 	if provider == nil {
 		e.client = nil
 		e.providerKey = ""
@@ -82,9 +94,17 @@ func (e *Engine) Enabled() bool {
 func (e *Engine) Cancel() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.cancelRequestsLocked()
+}
+
+func (e *Engine) cancelRequestsLocked() {
 	if e.cancel != nil {
 		e.cancel()
 		e.cancel = nil
+	}
+	if e.emptyCancel != nil {
+		e.emptyCancel()
+		e.emptyCancel = nil
 	}
 }
 
@@ -116,6 +136,7 @@ func (e *Engine) Request(buffer string, snapshot func() Snapshot, deliver func(t
 	e.mu.Lock()
 	client := e.client
 	providerKey := e.providerKey
+	generation := e.generation
 	if client == nil || time.Now().Before(e.cooldownEnd) {
 		e.mu.Unlock()
 		return
@@ -141,6 +162,10 @@ func (e *Engine) Request(buffer string, snapshot func() Snapshot, deliver func(t
 		case <-time.After(delay):
 		}
 		e.mu.Lock()
+		if generation != e.generation {
+			e.mu.Unlock()
+			return
+		}
 		e.lastCall = time.Now()
 		e.mu.Unlock()
 		snap := snapshot()
@@ -149,7 +174,9 @@ func (e *Engine) Request(buffer string, snapshot func() Snapshot, deliver func(t
 		if err != nil {
 			if errors.Is(err, ErrRateLimited) {
 				e.mu.Lock()
-				e.cooldownEnd = time.Now().Add(cooldownDuration)
+				if generation == e.generation {
+					e.cooldownEnd = time.Now().Add(cooldownDuration)
+				}
 				e.mu.Unlock()
 			}
 			if !errors.Is(err, context.Canceled) && e.Log != nil {
@@ -165,6 +192,10 @@ func (e *Engine) Request(buffer string, snapshot func() Snapshot, deliver func(t
 			return
 		}
 		e.mu.Lock()
+		if generation != e.generation || ctx.Err() != nil {
+			e.mu.Unlock()
+			return
+		}
 		e.cachedKey = requestCacheKey(providerKey, snap)
 		e.cachedText = text
 		e.cachedAt = time.Now()
@@ -181,16 +212,27 @@ func (e *Engine) RequestEmpty(minInterval time.Duration, snapshot func() Snapsho
 	e.mu.Lock()
 	client := e.client
 	providerKey := e.providerKey
+	generation := e.generation
 	if client == nil || time.Now().Before(e.cooldownEnd) {
 		e.mu.Unlock()
 		return
 	}
+	if e.emptyCancel != nil {
+		e.emptyCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	e.emptyCancel = cancel
 	e.mu.Unlock()
 
 	go func() {
+		defer cancel()
 		snap := snapshot()
 		hash := requestCacheKey(providerKey, snap)
 		e.mu.Lock()
+		if generation != e.generation || ctx.Err() != nil {
+			e.mu.Unlock()
+			return
+		}
 		if hash == e.emptyLastHash && e.emptyCachedCmd != "" {
 			cached := e.emptyCachedCmd
 			e.mu.Unlock()
@@ -205,14 +247,16 @@ func (e *Engine) RequestEmpty(minInterval time.Duration, snapshot func() Snapsho
 		e.mu.Unlock()
 
 		system, user := BuildEmptyPrompt(snap)
-		raw, err := client.Complete(context.Background(), system, user)
+		raw, err := client.Complete(ctx, system, user)
 		if err != nil {
 			if errors.Is(err, ErrRateLimited) {
 				e.mu.Lock()
-				e.cooldownEnd = time.Now().Add(cooldownDuration)
+				if generation == e.generation {
+					e.cooldownEnd = time.Now().Add(cooldownDuration)
+				}
 				e.mu.Unlock()
 			}
-			if e.Log != nil {
+			if !errors.Is(err, context.Canceled) && e.Log != nil {
 				e.Log("empty-prompt prediction failed", err)
 			}
 			return
@@ -225,6 +269,10 @@ func (e *Engine) RequestEmpty(minInterval time.Duration, snapshot func() Snapsho
 			return
 		}
 		e.mu.Lock()
+		if generation != e.generation || ctx.Err() != nil {
+			e.mu.Unlock()
+			return
+		}
 		e.emptyLastHash = hash
 		e.emptyCachedCmd = command
 		e.mu.Unlock()
