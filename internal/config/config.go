@@ -152,8 +152,16 @@ func Load(path string) (*Config, error) {
 	case err != nil:
 		return nil, fmt.Errorf("read config: %w", err)
 	default:
-		if err := toml.Unmarshal(data, cfg); err != nil {
+		metadata, err := toml.Decode(string(data), cfg)
+		if err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
+		}
+		if unknown := metadata.Undecoded(); len(unknown) != 0 {
+			keys := make([]string, len(unknown))
+			for i, key := range unknown {
+				keys[i] = key.String()
+			}
+			return nil, fmt.Errorf("parse config: unknown keys: %s", strings.Join(keys, ", "))
 		}
 		if err := migrate(cfg, path); err != nil {
 			return nil, err

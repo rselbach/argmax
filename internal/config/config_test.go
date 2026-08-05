@@ -44,6 +44,19 @@ func TestLoadFileOverridesDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	path := writeConfig(t, "[ui]\nmax-sugestions = 42\nunknown = true\n")
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("unknown keys must be rejected")
+	}
+	for _, key := range []string{"ui.max-sugestions", "ui.unknown"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("error %q does not report %q", err, key)
+		}
+	}
+}
+
 func TestWatcherRetriesFailedReloadAtSameModTime(t *testing.T) {
 	path := writeConfig(t, "[core]\nmode = \"last\"\n")
 	initial, err := os.Stat(path)
