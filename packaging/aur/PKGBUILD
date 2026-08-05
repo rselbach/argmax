@@ -1,6 +1,6 @@
 # Maintainer: Roberto Selbach <roberto.selbach@gmail.com>
-# AUR package for argmax. Update pkgver and checksums per release; the
-# release tarballs and checksums.txt come from GitHub releases.
+# RELEASE TEMPLATE ONLY: do not publish until pkgver and sha256sums are
+# replaced with values verified for the release source archive.
 pkgname=argmax
 pkgver=0.1.0
 pkgrel=1
@@ -10,7 +10,7 @@ url="https://github.com/rselbach/argmax"
 license=('MIT')
 makedepends=('go>=1.26')
 source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('SKIP') # replace with the release source checksum
+sha256sums=('REPLACE_WITH_RELEASE_SOURCE_SHA256')
 
 build() {
   cd "${pkgname}-${pkgver}"

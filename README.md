@@ -45,8 +45,9 @@ brew install rselbach/tap/argmax
 go install github.com/rselbach/argmax/cmd/argmax@latest
 ```
 
-`.deb` and `.rpm` packages ship with each release, and `packaging/` carries
-an AUR PKGBUILD and a Nix flake. From source:
+`.deb` and `.rpm` packages ship with each release. The AUR PKGBUILD and Nix
+flake are release-maintainer templates, not ready-to-use install channels;
+see `packaging/README.md`. From source:
 
 ```sh
 git clone https://github.com/rselbach/argmax && cd argmax

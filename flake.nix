@@ -1,3 +1,6 @@
+# Release template only: this intentionally fails to build until a release
+# maintainer pins flake.lock and replaces vendorHash with the real dependency
+# hash for the tagged source. See packaging/README.md.
 {
   description = "argmax — terminal-resident command completion and prediction";
 
@@ -17,7 +20,8 @@
           version = "0.1.0";
           src = ./.;
           subPackages = [ "cmd/argmax" ];
-          # Replace with the real hash reported by the first build.
+          # TEMPLATE PLACEHOLDER: replace with the hash reported by the
+          # first build before advertising this as an installation method.
           vendorHash = pkgs.lib.fakeHash;
           env.CGO_ENABLED = 0;
           ldflags = [ "-s" "-w" "-X main.version=0.1.0" ];
