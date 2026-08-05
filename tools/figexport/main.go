@@ -9,12 +9,14 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/dop251/goja"
 )
@@ -28,6 +30,10 @@ const serialize = `JSON.stringify(globalThis.__spec, function(k, v) {
 	if (typeof v === "function") { return {"__function": true}; }
 	return v;
 })`
+
+const javascriptTimeout = 2 * time.Second
+
+var errJavaScriptTimeout = errors.New("JavaScript execution timed out")
 
 func main() {
 	in := flag.String("in", "", "directory containing built Fig spec .js files")
@@ -96,10 +102,10 @@ func export(srcPath, dstPath string) error {
 	if err := setupShims(vm); err != nil {
 		return err
 	}
-	if _, err := vm.RunString(code); err != nil {
+	if _, err := runJavaScript(vm, code, javascriptTimeout); err != nil {
 		return fmt.Errorf("evaluate: %w", err)
 	}
-	res, err := vm.RunString(serialize)
+	res, err := runJavaScript(vm, serialize, javascriptTimeout)
 	if err != nil {
 		return fmt.Errorf("serialize: %w", err)
 	}
@@ -108,6 +114,23 @@ func export(srcPath, dstPath string) error {
 		return fmt.Errorf("spec did not serialize to JSON")
 	}
 	return os.WriteFile(dstPath, []byte(str), 0o644)
+}
+
+func runJavaScript(vm *goja.Runtime, source string, timeout time.Duration) (goja.Value, error) {
+	interruptDone := make(chan struct{})
+	timer := time.AfterFunc(timeout, func() {
+		vm.Interrupt(errJavaScriptTimeout)
+		close(interruptDone)
+	})
+	value, err := vm.RunString(source)
+	if !timer.Stop() {
+		<-interruptDone
+	}
+	vm.ClearInterrupt()
+	if errors.Is(err, errJavaScriptTimeout) {
+		return nil, fmt.Errorf("%w after %s", errJavaScriptTimeout, timeout)
+	}
+	return value, err
 }
 
 func setupShims(vm *goja.Runtime) error {
