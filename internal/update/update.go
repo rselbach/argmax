@@ -14,9 +14,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -86,49 +87,15 @@ func Latest(channel string) (Release, bool, error) {
 // CompareVersions compares semantic versions; a release version is newer
 // than its prereleases.
 func CompareVersions(a, b string) int {
-	pa, prea := parseVersion(a)
-	pb, preb := parseVersion(b)
-	for i := range 3 {
-		if pa[i] != pb[i] {
-			if pa[i] > pb[i] {
-				return 1
-			}
-			return -1
-		}
-	}
-	switch {
-	case prea == preb:
-		return 0
-	case prea == "":
-		return 1
-	case preb == "":
-		return -1
-	case prea > preb:
-		return 1
-	default:
-		return -1
-	}
+	return semver.Compare(normalizeVersion(a), normalizeVersion(b))
 }
 
-func parseVersion(v string) ([3]int, string) {
-	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
-	var pre string
-	if i := strings.IndexAny(v, "-+"); i >= 0 {
-		pre = v[i+1:]
-		v = v[:i]
+func normalizeVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
 	}
-	var parts [3]int
-	for i, p := range strings.SplitN(v, ".", 3) {
-		if i >= 3 {
-			break
-		}
-		n, err := strconv.Atoi(p)
-		if err != nil {
-			break
-		}
-		parts[i] = n
-	}
-	return parts, pre
+	return version
 }
 
 // IsNewer reports whether latest is newer than current. Development

@@ -20,13 +20,17 @@ func TestCompareVersions(t *testing.T) {
 		a, b string
 		want int
 	}{
-		"patch newer":       {a: "1.2.3", b: "1.2.2", want: 1},
-		"minor older":       {a: "1.1.9", b: "1.2.0", want: -1},
-		"major newer":       {a: "2.0.0", b: "1.9.9", want: 1},
-		"equal":             {a: "1.2.3", b: "1.2.3", want: 0},
-		"v prefix ignored":  {a: "v1.2.3", b: "1.2.3", want: 0},
-		"release beats pre": {a: "1.2.3", b: "1.2.3-nightly.1", want: 1},
-		"pre ordering":      {a: "1.2.3-nightly.2", b: "1.2.3-nightly.1", want: 1},
+		"patch newer":            {a: "1.2.3", b: "1.2.2", want: 1},
+		"minor older":            {a: "1.1.9", b: "1.2.0", want: -1},
+		"major newer":            {a: "2.0.0", b: "1.9.9", want: 1},
+		"equal":                  {a: "1.2.3", b: "1.2.3", want: 0},
+		"v prefix ignored":       {a: "v1.2.3", b: "1.2.3", want: 0},
+		"release beats pre":      {a: "1.2.3", b: "1.2.3-nightly.1", want: 1},
+		"pre ordering":           {a: "1.2.3-nightly.2", b: "1.2.3-nightly.1", want: 1},
+		"numeric pre ordering":   {a: "1.2.3-nightly.10", b: "1.2.3-nightly.2", want: 1},
+		"build metadata ignored": {a: "1.2.3+first", b: "1.2.3+second", want: 0},
+		"minor shorthand":        {a: "1.2", b: "1.2.0", want: 0},
+		"invalid sorts lower":    {a: "not-a-version", b: "1.0.0", want: -1},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
