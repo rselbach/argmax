@@ -77,13 +77,42 @@ func TestDecoderUnknownSequencePreserved(t *testing.T) {
 }
 
 func TestDecoderSplitSequence(t *testing.T) {
-	d := &Decoder{}
-	if events := d.Feed([]byte("\x1b[")); len(events) != 0 {
-		t.Fatalf("incomplete sequence must wait, got %+v", events)
+	sequences := [][]byte{
+		[]byte("\x1b[A"),
+		[]byte("\x1b[1;5A"),
+		[]byte("\x1b[200~"),
 	}
-	events := d.Feed([]byte("A"))
-	if len(events) != 1 || events[0].Key.Kind != keymap.KindUp {
-		t.Errorf("resumed sequence = %+v, want up", events)
+	for _, sequence := range sequences {
+		for split := 1; split < len(sequence); split++ {
+			t.Run(string(sequence)+"/split", func(t *testing.T) {
+				d := &Decoder{}
+				if events := d.Feed(sequence[:split]); len(events) != 0 {
+					t.Fatalf("incomplete sequence must wait, got %+v", events)
+				}
+				events := d.Feed(sequence[split:])
+				if len(events) != 1 || string(events[0].Raw) != string(sequence) {
+					t.Errorf("resumed sequence = %+v, want raw bytes %q", events, sequence)
+				}
+			})
+		}
+	}
+}
+
+func TestDecoderModifiedArrowsPreserved(t *testing.T) {
+	sequences := []string{
+		"\x1b[1;2A", "\x1b[1;5B", "\x1b[1;3C", "\x1b[1;4D",
+		"\x1bO1;5A",
+	}
+	for _, sequence := range sequences {
+		t.Run(sequence, func(t *testing.T) {
+			ev := feedOne(t, []byte(sequence))
+			if ev.Kind != EventRaw {
+				t.Fatalf("modified arrow kind = %v, want raw", ev.Kind)
+			}
+			if string(ev.Raw) != sequence {
+				t.Errorf("modified arrow altered: %q != %q", ev.Raw, sequence)
+			}
+		})
 	}
 }
 
@@ -91,6 +120,9 @@ func TestDecoderLoneEscape(t *testing.T) {
 	d := &Decoder{}
 	if events := d.Feed([]byte{0x1b}); len(events) != 0 {
 		t.Fatalf("lone ESC is pending, got %+v", events)
+	}
+	if !d.LoneEscapePending() {
+		t.Fatal("lone ESC must be distinguishable from other pending sequences")
 	}
 	events := d.FlushPending()
 	if len(events) != 1 || events[0].Key.Kind != keymap.KindEscape {

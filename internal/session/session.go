@@ -374,19 +374,63 @@ func (s *Session) outputPump() {
 // inputPump reads terminal input, decoding at the prompt and forwarding
 // transparently while a foreground command is active.
 func (s *Session) inputPump() {
+	const loneEscapeTimeout = 50 * time.Millisecond
+
 	dec := &input.Decoder{}
 	buf := make([]byte, 4096)
-	for {
-		n, err := s.tty.Read(buf)
-		if err != nil {
-			return
+	var (
+		decodeMu        sync.Mutex
+		escapeTimer     *time.Timer
+		timerGeneration uint64
+	)
+	stopEscapeTimer := func() {
+		timerGeneration++
+		if escapeTimer != nil {
+			escapeTimer.Stop()
+			escapeTimer = nil
 		}
-		events := dec.Feed(buf[:n])
-		if dec.Pending() {
-			events = append(events, dec.FlushPending()...)
-		}
+	}
+	defer func() {
+		decodeMu.Lock()
+		stopEscapeTimer()
+		decodeMu.Unlock()
+	}()
+	dispatch := func(events []input.Event) {
 		for _, ev := range events {
 			s.handleEvent(ev)
+		}
+	}
+	armEscapeTimer := func() {
+		timerGeneration++
+		generation := timerGeneration
+		escapeTimer = time.AfterFunc(loneEscapeTimeout, func() {
+			decodeMu.Lock()
+			defer decodeMu.Unlock()
+			if generation != timerGeneration {
+				return
+			}
+			escapeTimer = nil
+			select {
+			case <-s.done:
+				return
+			default:
+			}
+			dispatch(dec.FlushPending())
+		})
+	}
+	for {
+		n, err := s.tty.Read(buf)
+		decodeMu.Lock()
+		stopEscapeTimer()
+		if n > 0 {
+			dispatch(dec.Feed(buf[:n]))
+			if dec.LoneEscapePending() {
+				armEscapeTimer()
+			}
+		}
+		decodeMu.Unlock()
+		if err != nil {
+			return
 		}
 		select {
 		case <-s.done:

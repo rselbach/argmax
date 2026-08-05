@@ -60,10 +60,16 @@ func (d *Decoder) Feed(p []byte) []Event {
 // Pending reports whether an incomplete sequence is buffered.
 func (d *Decoder) Pending() bool { return len(d.buf) > 0 }
 
+// LoneEscapePending reports whether the buffer may be either an Escape key
+// or the beginning of an escape sequence.
+func (d *Decoder) LoneEscapePending() bool {
+	return len(d.buf) == 1 && d.buf[0] == 0x1b
+}
+
 // FlushPending interprets a lone buffered ESC as the Escape key; called
-// when no continuation bytes arrived in the same read.
+// after a short timeout when no continuation bytes arrive.
 func (d *Decoder) FlushPending() []Event {
-	if len(d.buf) == 1 && d.buf[0] == 0x1b {
+	if d.LoneEscapePending() {
 		d.buf = nil
 		return []Event{{Kind: EventKey, Key: keymap.Key{Kind: keymap.KindEscape}, Raw: []byte{0x1b}}}
 	}
@@ -132,17 +138,29 @@ func (d *Decoder) classify(seq []byte) Event {
 	}
 	switch final {
 	case 'A':
-		return key(keymap.KindUp, 0)
+		if unmodifiedCursorKey(body) {
+			return key(keymap.KindUp, 0)
+		}
 	case 'B':
-		return key(keymap.KindDown, 0)
+		if unmodifiedCursorKey(body) {
+			return key(keymap.KindDown, 0)
+		}
 	case 'C':
-		return key(keymap.KindRight, 0)
+		if unmodifiedCursorKey(body) {
+			return key(keymap.KindRight, 0)
+		}
 	case 'D':
-		return key(keymap.KindLeft, 0)
+		if unmodifiedCursorKey(body) {
+			return key(keymap.KindLeft, 0)
+		}
 	case 'H':
-		return key(keymap.KindHome, 0)
+		if unmodifiedCursorKey(body) {
+			return key(keymap.KindHome, 0)
+		}
 	case 'F':
-		return key(keymap.KindEnd, 0)
+		if unmodifiedCursorKey(body) {
+			return key(keymap.KindEnd, 0)
+		}
 	case 'Z':
 		return key(keymap.KindShiftTab, 0)
 	case 'R': // cursor position report
@@ -173,6 +191,10 @@ func (d *Decoder) classify(seq []byte) Event {
 		}
 	}
 	return Event{Kind: EventRaw, Raw: seq}
+}
+
+func unmodifiedCursorKey(body string) bool {
+	return body == "" || body == "1"
 }
 
 // kittyKey decodes Kitty protocol Ctrl+letter and common control keys.
