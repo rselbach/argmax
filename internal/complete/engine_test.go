@@ -280,6 +280,10 @@ func TestPendingOptionArgument(t *testing.T) {
 	if !contains(got, "tool run -C srcdir") {
 		t.Errorf("option generator should complete -C argument, got %v", findTitles(got))
 	}
+	got = e.Complete(Context{}, "tool run -C=src")
+	if !contains(got, "tool run -C=srcdir") {
+		t.Errorf("option generator should complete an assigned -C argument, got %v", findTitles(got))
+	}
 	// Once the argument is supplied, node completion resumes.
 	got = e.Complete(Context{}, "tool run -b name ")
 	if !contains(got, "tool run -b name positional-value") {

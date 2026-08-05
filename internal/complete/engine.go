@@ -165,6 +165,15 @@ func (e *Engine) nodeCandidates(ctx Context, line string, res walkResult, partia
 		typingOption = strings.HasPrefix(prefix, "-")
 		argsCapped   = node.MaxArgs > 0 && len(res.posArgs) >= node.MaxArgs
 	)
+	if name, value, found := strings.Cut(prefix, "="); found {
+		if opt := node.option(name); opt != nil {
+			if !opt.TakesArg || opt.Generator == nil {
+				return nil
+			}
+			base += name + "="
+			return materialize(ctx, opt.Generator(ctx, nil, value), base, node)
+		}
+	}
 	if res.pendingOption != nil {
 		// The partial token is the option's argument: only the option's
 		// own generator applies, never the node's positional values (a
