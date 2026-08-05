@@ -6,8 +6,8 @@ scratch := `mktemp -d 2>/dev/null || echo /tmp`
 build:
     go build -o argmax ./cmd/argmax
 
-# Run formatters, linters, and the full test suite.
-check: fmt lint test
+# Run formatters, linters, and the full test suite for both Go modules.
+check: fmt lint test figexport-check
 
 fmt:
     goimports -w .
@@ -18,6 +18,10 @@ lint:
 
 test:
     go test -race ./...
+
+figexport-check:
+    cd tools/figexport && go vet ./...
+    cd tools/figexport && go test -race ./...
 
 bench:
     go test -run NONE -bench . -benchtime 10x ./...
