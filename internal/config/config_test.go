@@ -57,6 +57,24 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsArbitraryProviderPayload(t *testing.T) {
+	path := writeConfig(t, `
+[ai.providers.test.extra_request_body]
+temperature = 0.2
+
+[ai.providers.test.extra_request_body.metadata]
+private_token = "value"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, ok := cfg.AI.Providers["test"].ExtraRequestBody["metadata"].(map[string]any)
+	if !ok || metadata["private_token"] != "value" {
+		t.Errorf("nested request payload not decoded: %#v", cfg.AI.Providers["test"].ExtraRequestBody)
+	}
+}
+
 func TestWatcherRetriesFailedReloadAtSameModTime(t *testing.T) {
 	path := writeConfig(t, "[core]\nmode = \"last\"\n")
 	initial, err := os.Stat(path)

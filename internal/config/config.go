@@ -157,11 +157,16 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
 		if unknown := metadata.Undecoded(); len(unknown) != 0 {
-			keys := make([]string, len(unknown))
-			for i, key := range unknown {
-				keys[i] = key.String()
+			keys := make([]string, 0, len(unknown))
+			for _, key := range unknown {
+				if len(key) >= 4 && key[0] == "ai" && key[1] == "providers" && key[3] == "extra_request_body" {
+					continue
+				}
+				keys = append(keys, key.String())
 			}
-			return nil, fmt.Errorf("parse config: unknown keys: %s", strings.Join(keys, ", "))
+			if len(keys) != 0 {
+				return nil, fmt.Errorf("parse config: unknown keys: %s", strings.Join(keys, ", "))
+			}
 		}
 		if err := migrate(cfg, path); err != nil {
 			return nil, err
