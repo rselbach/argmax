@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +29,7 @@ const (
 type cacheKey struct {
 	binary  string
 	modTime int64
+	cwd     string
 	args    string
 	partial string
 }
@@ -56,14 +59,15 @@ func (in *Inferrer) Complete(cwd, executable string, args []string, partial stri
 	if err != nil {
 		return nil
 	}
-	key := cacheKey{binary: path, args: strings.Join(args, "\x00"), partial: partial}
+	cwd = normalizeCWD(cwd)
+	key := cacheKey{binary: path, cwd: cwd, args: strings.Join(args, "\x00"), partial: partial}
 	if info, err := statPath(path); err == nil {
 		key.modTime = info
 	}
 	in.mu.Lock()
 	if cached, ok := in.cache[key]; ok {
 		in.mu.Unlock()
-		return cached
+		return slices.Clone(cached)
 	}
 	in.mu.Unlock()
 
@@ -74,7 +78,14 @@ func (in *Inferrer) Complete(cwd, executable string, args []string, partial stri
 	}
 	in.cache[key] = cands
 	in.mu.Unlock()
-	return cands
+	return slices.Clone(cands)
+}
+
+func normalizeCWD(cwd string) string {
+	if abs, err := filepath.Abs(cwd); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(cwd)
 }
 
 func (in *Inferrer) probe(cwd, path string, args []string, partial string) []complete.Candidate {
