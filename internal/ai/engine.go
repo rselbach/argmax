@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -29,12 +30,14 @@ type Engine struct {
 
 	mu          sync.Mutex
 	client      *Client
+	providerKey string
 	debounce    time.Duration
 	minInterval time.Duration
 	lastCall    time.Time
 	cooldownEnd time.Time
 	cancel      context.CancelFunc
 	cachedAt    time.Time
+	cachedKey   string
 	cachedText  string
 
 	// Empty-prompt prediction state: rate-limited independently and
@@ -51,9 +54,12 @@ func (e *Engine) Configure(cfg config.AI, provider *config.Provider) {
 	defer e.mu.Unlock()
 	if provider == nil {
 		e.client = nil
+		e.providerKey = ""
 		return
 	}
 	e.client = NewClient(provider)
+	extra, _ := json.Marshal(provider.ExtraRequestBody)
+	e.providerKey = strings.Join([]string{cfg.Provider, provider.Endpoint, provider.Model, string(extra)}, "\x00")
 	e.debounce = time.Duration(cfg.DebounceMS) * time.Millisecond
 	if cfg.DebounceMS == 0 {
 		e.debounce = 500 * time.Millisecond
@@ -82,11 +88,15 @@ func (e *Engine) Cancel() {
 	}
 }
 
-// Cached returns a prefix-compatible suggestion from the last 30 seconds.
-func (e *Engine) Cached(buffer string) (string, bool) {
+// Cached returns a prefix-compatible suggestion from the last 30 seconds
+// when it was produced for the same provider and environment context.
+func (e *Engine) Cached(buffer string, snapshot Snapshot) (string, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.cachedText == "" || time.Since(e.cachedAt) > suggestionTTL {
+		return "", false
+	}
+	if e.cachedKey != requestCacheKey(e.providerKey, snapshot) {
 		return "", false
 	}
 	if strings.HasPrefix(e.cachedText, buffer) && e.cachedText != buffer {
@@ -105,6 +115,7 @@ func (e *Engine) Request(buffer string, snapshot func() Snapshot, deliver func(t
 	}
 	e.mu.Lock()
 	client := e.client
+	providerKey := e.providerKey
 	if client == nil || time.Now().Before(e.cooldownEnd) {
 		e.mu.Unlock()
 		return
@@ -154,6 +165,7 @@ func (e *Engine) Request(buffer string, snapshot func() Snapshot, deliver func(t
 			return
 		}
 		e.mu.Lock()
+		e.cachedKey = requestCacheKey(providerKey, snap)
 		e.cachedText = text
 		e.cachedAt = time.Now()
 		e.mu.Unlock()
@@ -168,6 +180,7 @@ func (e *Engine) Request(buffer string, snapshot func() Snapshot, deliver func(t
 func (e *Engine) RequestEmpty(minInterval time.Duration, snapshot func() Snapshot, deliver func(command string)) {
 	e.mu.Lock()
 	client := e.client
+	providerKey := e.providerKey
 	if client == nil || time.Now().Before(e.cooldownEnd) {
 		e.mu.Unlock()
 		return
@@ -176,7 +189,7 @@ func (e *Engine) RequestEmpty(minInterval time.Duration, snapshot func() Snapsho
 
 	go func() {
 		snap := snapshot()
-		hash := snap.Hash()
+		hash := requestCacheKey(providerKey, snap)
 		e.mu.Lock()
 		if hash == e.emptyLastHash && e.emptyCachedCmd != "" {
 			cached := e.emptyCachedCmd
@@ -217,6 +230,10 @@ func (e *Engine) RequestEmpty(minInterval time.Duration, snapshot func() Snapsho
 		e.mu.Unlock()
 		deliver(command)
 	}()
+}
+
+func requestCacheKey(providerKey string, snapshot Snapshot) string {
+	return providerKey + "\x00" + snapshot.Hash()
 }
 
 // BuildEmptyPrompt constructs the prompts for empty-prompt prediction.

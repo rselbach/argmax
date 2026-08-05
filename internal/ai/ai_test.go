@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rselbach/argmax/internal/config"
 )
 
 func TestSanitize(t *testing.T) {
@@ -100,6 +102,51 @@ func TestSnapshotHashIncludesSectionContent(t *testing.T) {
 	}
 	if first.Hash() != first.Hash() {
 		t.Error("identical snapshots must produce stable hashes")
+	}
+}
+
+func TestCompletedSuggestionCacheUsesRequestIdentity(t *testing.T) {
+	e := &Engine{}
+	cfg := config.AI{Provider: "first"}
+	provider := &config.Provider{
+		Endpoint:         "https://first.example/v1",
+		Model:            "model-a",
+		ExtraRequestBody: map[string]any{"seed": int64(1)},
+	}
+	e.Configure(cfg, provider)
+	snapshot := Snapshot{
+		CWD:      "/first",
+		Sections: []Section{{Label: "git status", Content: "M one.go"}},
+	}
+	e.cachedAt = time.Now()
+	e.cachedText = "git status"
+	e.cachedKey = requestCacheKey(e.providerKey, snapshot)
+
+	if got, ok := e.Cached("git sta", snapshot); !ok || got != "git status" {
+		t.Fatalf("matching cache lookup = %q, %v", got, ok)
+	}
+	tests := map[string]Snapshot{
+		"working directory": {CWD: "/second", Sections: snapshot.Sections},
+		"context content":   {CWD: snapshot.CWD, Sections: []Section{{Label: "git status", Content: "M two.go"}}},
+	}
+	for name, changed := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got, ok := e.Cached("git sta", changed); ok {
+				t.Errorf("cache reused %q for changed %s", got, name)
+			}
+		})
+	}
+
+	provider.Model = "model-b"
+	e.Configure(cfg, provider)
+	if got, ok := e.Cached("git sta", snapshot); ok {
+		t.Errorf("cache reused %q after model change", got)
+	}
+	provider.Model = "model-a"
+	cfg.Provider = "second"
+	e.Configure(cfg, provider)
+	if got, ok := e.Cached("git sta", snapshot); ok {
+		t.Errorf("cache reused %q after provider change", got)
 	}
 }
 

@@ -79,13 +79,7 @@ func (s *Session) computeIn(m mode) {
 		}
 		s.apply(gen, cands)
 		if m == modeSpec && atEnd && !navigated && cfg.AI.Enabled {
-			// Reuse a prefix-compatible suggestion from the last 30
-			// seconds before spending a new provider request.
-			if text, ok := s.aiEngine.Cached(line); ok {
-				s.injectAI(line, text, ai.DefaultConfidence)
-			} else {
-				s.requestAI(line, cwd)
-			}
+			s.requestAI(line, cwd)
 		}
 	}()
 }
@@ -362,7 +356,7 @@ func sortByConfidence(cands []complete.Candidate) {
 
 // requestAI issues a debounced AI completion for the buffer.
 func (s *Session) requestAI(line, cwd string) {
-	s.aiEngine.Request(line, func() ai.Snapshot {
+	snapshot := func() ai.Snapshot {
 		s.mu.Lock()
 		prevCommand := s.prevCommand
 		prevExit := s.prevExit
@@ -375,7 +369,14 @@ func (s *Session) requestAI(line, cwd string) {
 			recent = append([]string{e.Command}, recent...)
 		}
 		return s.gatherer.Gather(cwd, line, prevCommand, prevExit, recent)
-	}, func(text string, confidence int) {
+	}()
+	// Reuse a prefix-compatible suggestion before spending a provider
+	// request, but only when its provider and gathered context still match.
+	if text, ok := s.aiEngine.Cached(line, snapshot); ok {
+		s.injectAI(line, text, ai.DefaultConfidence)
+		return
+	}
+	s.aiEngine.Request(line, func() ai.Snapshot { return snapshot }, func(text string, confidence int) {
 		s.injectAI(line, text, confidence)
 	})
 }
