@@ -1,6 +1,7 @@
 package history
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -124,6 +125,22 @@ func TestSearchTiers(t *testing.T) {
 		if m.Entry.Command == "docker compose up" {
 			t.Error("unrelated command must not match")
 		}
+	}
+}
+
+func TestSearchRanksStrictMatchesBeforeLimiting(t *testing.T) {
+	entries := make([]Entry, strictLimit+1)
+	for i := 0; i < strictLimit; i++ {
+		entries[i] = Entry{Command: fmt.Sprintf("echo %d git status", i)}
+	}
+	entries[strictLimit] = Entry{Command: "git status"}
+
+	got := Search(entries, "git status", nil)
+	if len(got) != strictLimit {
+		t.Fatalf("Search() returned %d strict matches, want %d", len(got), strictLimit)
+	}
+	if got[0].Entry.Command != "git status" {
+		t.Errorf("exact match was excluded before limiting: first result = %q", got[0].Entry.Command)
 	}
 }
 

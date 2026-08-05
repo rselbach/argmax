@@ -16,7 +16,7 @@ const (
 const (
 	// emptyQueryLimit caps results for an empty query.
 	emptyQueryLimit = 100
-	// strictLimit caps strict all-word matches retained before fuzzy lookup.
+	// strictLimit caps strict all-word matches retained after ranking.
 	strictLimit = 200
 	// minFuzzyScore rejects extremely weak fuzzy matches.
 	minFuzzyScore = 30
@@ -65,9 +65,7 @@ func Search(entries []Entry, query string, aliasForms func(string) []string) []M
 		}
 		switch {
 		case tier >= tierWords:
-			if len(strict) < strictLimit {
-				strict = append(strict, Match{Entry: e, Tier: tier, Score: score, index: i})
-			}
+			strict = append(strict, Match{Entry: e, Tier: tier, Score: score, index: i})
 		case tier == tierFuzzy && score >= minFuzzyScore:
 			fuzzy = append(fuzzy, Match{Entry: e, Tier: tier, Score: score, index: i})
 		}
@@ -83,6 +81,9 @@ func Search(entries []Entry, query string, aliasForms func(string) []string) []M
 		}
 		return a.index < b.index
 	})
+	if len(strict) > strictLimit {
+		out = append(out[:strictLimit], out[len(strict):]...)
+	}
 	return out
 }
 
