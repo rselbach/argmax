@@ -210,7 +210,7 @@ func discoverGitAliases(cwd string) []toolAlias {
 	if gitAliases.cwd == cwd && time.Since(gitAliases.fetched) < 30*time.Second {
 		return gitAliases.git
 	}
-	out := probe(time.Second, "git", "-C", cwd, "config", "--show-scope", "--get-regexp", `^alias\.`)
+	out := probe(cwd, time.Second, "git", "config", "--show-scope", "--get-regexp", `^alias\.`)
 	var aliases []toolAlias
 	for _, ln := range strings.Split(out, "\n") {
 		fields := strings.SplitN(ln, "\t", 2)

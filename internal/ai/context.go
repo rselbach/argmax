@@ -55,9 +55,9 @@ func (s Snapshot) Hash() string {
 	return b.String()
 }
 
-// Prober runs one bounded external probe; injected so context gathering
-// reuses the generators' safe execution path.
-type Prober func(timeout time.Duration, name string, args ...string) string
+// Prober runs one bounded external probe in cwd; injected so context
+// gathering reuses the generators' safe execution path.
+type Prober func(cwd string, timeout time.Duration, name string, args ...string) string
 
 // Gatherer builds environment snapshots with a small TTL cache for
 // dynamic provider context.
@@ -121,7 +121,9 @@ func (g *Gatherer) specialized(cwd, buffer string) ([]Section, bool) {
 		return nil, false
 	}
 	probe := func(label, key string, timeout time.Duration, name string, args ...string) []Section {
-		out := g.cached(key, func() string { return g.Probe(timeout, name, args...) })
+		out := g.cached(contextCacheKey(cwd, key), func() string {
+			return g.Probe(cwd, timeout, name, args...)
+		})
 		return []Section{{Label: label, Content: truncate(out, capGeneric)}}
 	}
 	head := fields[0]
@@ -135,8 +137,8 @@ func (g *Gatherer) specialized(cwd, buffer string) ([]Section, bool) {
 		return probe("running compose services", "compose-ps", time.Second, "docker", "compose", "ps", "--format", "{{.Name}}\t{{.Status}}"), true
 	case head == "docker" && isOneOf(sub, "exec", "logs", "stop", "restart", "rm"):
 		sections := probe("running containers", "docker-ps", time.Second, "docker", "ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}")
-		images := g.cached("docker-images", func() string {
-			return g.Probe(time.Second, "docker", "images", "--format", "{{.Repository}}:{{.Tag}}")
+		images := g.cached(contextCacheKey(cwd, "docker-images"), func() string {
+			return g.Probe(cwd, time.Second, "docker", "images", "--format", "{{.Repository}}:{{.Tag}}")
 		})
 		return append(sections, Section{Label: "local images", Content: truncate(images, capGeneric)}), true
 	case head == "kubectl" && (isOneOf(sub, "exec", "logs") ||
@@ -167,7 +169,7 @@ func (g *Gatherer) universal(cwd, buffer string) []Section {
 		sections = append(sections, Section{Label: "directory entries", Content: listing})
 	}
 	sections = append(sections, g.gitSections(cwd)...)
-	if help := g.helpFor(buffer); help != "" {
+	if help := g.helpFor(cwd, buffer); help != "" {
 		sections = append(sections, Section{Label: "command help", Content: help})
 	}
 	return sections
@@ -198,8 +200,8 @@ func (g *Gatherer) gitSections(cwd string) []Section {
 	results := make(chan result, len(probes))
 	for i, p := range probes {
 		go func() {
-			out := g.cached("git-"+p.label, func() string {
-				return g.Probe(900*time.Millisecond, "git", append([]string{"-C", cwd}, p.args...)...)
+			out := g.cached(contextCacheKey(cwd, "git-"+p.label), func() string {
+				return g.Probe(cwd, 900*time.Millisecond, "git", p.args...)
 			})
 			results <- result{label: p.label, content: truncate(out, p.limit), order: i}
 		}()
@@ -226,7 +228,7 @@ func (g *Gatherer) gitSections(cwd string) []Section {
 
 // helpFor gathers --help output for allowlisted tools only, rejecting
 // names containing path separators.
-func (g *Gatherer) helpFor(buffer string) string {
+func (g *Gatherer) helpFor(cwd, buffer string) string {
 	fields := strings.Fields(buffer)
 	if len(fields) == 0 {
 		return ""
@@ -235,10 +237,14 @@ func (g *Gatherer) helpFor(buffer string) string {
 	if strings.ContainsAny(name, `/\`) || !helpAllowlist[name] {
 		return ""
 	}
-	out := g.cached("help-"+name, func() string {
-		return g.Probe(time.Second, name, "--help")
+	out := g.cached(contextCacheKey(cwd, "help-"+name), func() string {
+		return g.Probe(cwd, time.Second, name, "--help")
 	})
 	return truncate(out, capHelp)
+}
+
+func contextCacheKey(cwd, probe string) string {
+	return filepath.Clean(cwd) + "\x00" + probe
 }
 
 func detectEcosystems(cwd string) string {

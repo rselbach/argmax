@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -88,15 +89,38 @@ func TestBuildPromptMarksUntrusted(t *testing.T) {
 }
 
 func TestHelpAllowlistRejectsPaths(t *testing.T) {
-	g := &Gatherer{Probe: func(_ time.Duration, name string, _ ...string) string {
+	g := &Gatherer{Probe: func(_ string, _ time.Duration, name string, _ ...string) string {
 		t.Fatalf("probe must not run for %q", name)
 		return ""
 	}}
-	if out := g.helpFor("./script --x"); out != "" {
+	if out := g.helpFor(t.TempDir(), "./script --x"); out != "" {
 		t.Errorf("path-like executable must not gather help, got %q", out)
 	}
-	if out := g.helpFor("nmap -sV"); out != "" {
+	if out := g.helpFor(t.TempDir(), "nmap -sV"); out != "" {
 		t.Errorf("non-allowlisted tool must not gather help, got %q", out)
+	}
+}
+
+func TestGathererProbeCacheIsolatedByWorkingDirectory(t *testing.T) {
+	first := t.TempDir()
+	second := t.TempDir()
+	calls := map[string]int{}
+	g := &Gatherer{Probe: func(cwd string, _ time.Duration, _ string, _ ...string) string {
+		calls[cwd]++
+		return cwd
+	}}
+
+	firstSnap := g.Gather(first, "kubectl logs ", "", 0, nil)
+	g.Gather(first+string(filepath.Separator)+".", "kubectl logs ", "", 0, nil)
+	secondSnap := g.Gather(second, "kubectl logs ", "", 0, nil)
+	if calls[first] != 1 || calls[second] != 1 {
+		t.Fatalf("probe calls by directory = %#v, want one per normalized CWD", calls)
+	}
+	if got := firstSnap.Sections[0].Content; got != first {
+		t.Errorf("first context = %q, want %q", got, first)
+	}
+	if got := secondSnap.Sections[0].Content; got != second {
+		t.Errorf("second context = %q, want %q", got, second)
 	}
 }
 

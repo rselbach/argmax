@@ -35,7 +35,7 @@ func PredictEmpty(cwd, prevCommand string, prevExit int, probe Prober) (Predicti
 		return Prediction{Command: "git diff", Reason: "inspect the reported changes", Confidence: 74}, true
 	}
 	if _, err := os.Stat(gitDir); err == nil && probe != nil {
-		status := probe(800*time.Millisecond, "git", "-C", cwd, "status", "--porcelain")
+		status := probe(cwd, 800*time.Millisecond, "git", "status", "--porcelain")
 		if strings.TrimSpace(status) != "" {
 			return Prediction{Command: "git status", Reason: "the repository has uncommitted changes", Confidence: 72}, true
 		}

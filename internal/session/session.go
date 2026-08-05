@@ -471,10 +471,12 @@ func (s *Session) reloadInPlace() {
 }
 
 // probe runs one bounded external command for AI context gathering.
-func probe(timeout time.Duration, name string, args ...string) string {
+func probe(cwd string, timeout time.Duration, name string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).Output()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = cwd
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
