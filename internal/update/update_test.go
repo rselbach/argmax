@@ -3,6 +3,8 @@ package update
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -62,5 +64,30 @@ func TestVerifyChecksum(t *testing.T) {
 	}
 	if err := verifyChecksum(data, good, "argmax_darwin_arm64.tar.gz"); err == nil {
 		t.Error("missing checksum entry accepted")
+	}
+}
+
+func TestDownloadEnforcesBodyLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/exact":
+			_, _ = w.Write([]byte("1234"))
+		case "/oversized":
+			_, _ = w.Write([]byte("12345"))
+		default:
+			http.Error(w, "failure", http.StatusBadGateway)
+		}
+	}))
+	defer server.Close()
+
+	got, err := download(server.Client(), server.URL+"/exact", 4)
+	if err != nil || string(got) != "1234" {
+		t.Errorf("exact-limit download = %q, %v", got, err)
+	}
+	if _, err := download(server.Client(), server.URL+"/oversized", 4); err == nil {
+		t.Error("oversized download succeeded")
+	}
+	if _, err := download(server.Client(), server.URL+"/failure", 4); err == nil {
+		t.Error("non-200 download succeeded")
 	}
 }

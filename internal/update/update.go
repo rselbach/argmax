@@ -51,8 +51,12 @@ func Latest(channel string) (Release, bool, error) {
 	if resp.StatusCode != http.StatusOK {
 		return Release{}, false, fmt.Errorf("release API returned HTTP %d", resp.StatusCode)
 	}
+	data, err := readBounded(resp.Body, 4<<20)
+	if err != nil {
+		return Release{}, false, fmt.Errorf("read releases: %w", err)
+	}
 	var releases []apiRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&releases); err != nil {
+	if err := json.Unmarshal(data, &releases); err != nil {
 		return Release{}, false, fmt.Errorf("decode releases: %w", err)
 	}
 	var best *apiRelease
@@ -203,7 +207,18 @@ func download(client *http.Client, url string, limit int64) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	return readBounded(resp.Body, limit)
+}
+
+func readBounded(reader io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("response exceeds %d-byte limit", limit)
+	}
+	return data, nil
 }
 
 func verifyChecksum(data []byte, sums, assetName string) error {
