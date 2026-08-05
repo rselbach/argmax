@@ -103,6 +103,25 @@ func TestProviderInvalidatesOnModTime(t *testing.T) {
 	}
 }
 
+func TestProviderClearsPersistentEntriesWhenFileIsDeleted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history")
+	if err := os.WriteFile(path, []byte("persistent command\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := NewProvider(path, FormatBash)
+	p.AddSession("session command")
+	if got := p.Entries(); len(got) != 2 {
+		t.Fatalf("initial entries = %+v, want session and persistent commands", got)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	got := p.Entries()
+	if len(got) != 1 || got[0].Command != "session command" {
+		t.Errorf("entries after deletion = %+v, want only the session command", got)
+	}
+}
+
 func TestSearchTiers(t *testing.T) {
 	entries := []Entry{
 		{Command: "docker compose up"},

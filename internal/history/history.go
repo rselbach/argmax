@@ -89,7 +89,11 @@ func (p *Provider) Entries() []Entry {
 func (p *Provider) refresh() {
 	info, err := os.Stat(p.path)
 	if err != nil {
-		if !p.loaded {
+		if os.IsNotExist(err) {
+			p.loaded = true
+			p.modTime = time.Time{}
+			p.entries = nil
+		} else if !p.loaded {
 			p.loaded = true
 			p.entries = nil
 		}
