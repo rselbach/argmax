@@ -155,16 +155,18 @@ func checkForUpdates(cfg *config.Config) {
 		return
 	}
 	rel, ok, err := update.Latest(cfg.Updater.Channel)
-	st.Updater.LastCheckTime = time.Now().UTC()
 	if err != nil {
 		logging.L().Debug("update check failed", "error", err)
-	} else if ok && update.IsNewer(Version, rel.Version) && st.Updater.SeenVersion != rel.Version {
-		// Discovery is cached across sessions; each new version notifies
-		// once, after a command completes, so the prompt stays stable.
-		st.Updater.SeenVersion = rel.Version
-		logging.L().Info("new version available", "version", rel.Version)
 	}
-	if err := state.Save(st); err != nil {
+	if err := state.Update(func(st *state.State) {
+		st.Updater.LastCheckTime = time.Now().UTC()
+		if err == nil && ok && update.IsNewer(Version, rel.Version) && st.Updater.SeenVersion != rel.Version {
+			// Discovery is cached across sessions; each new version notifies
+			// once, after a command completes, so the prompt stays stable.
+			st.Updater.SeenVersion = rel.Version
+			logging.L().Info("new version available", "version", rel.Version)
+		}
+	}); err != nil {
 		logging.L().Debug("updater state save failed", "error", err)
 	}
 }

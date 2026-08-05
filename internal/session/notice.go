@@ -33,8 +33,11 @@ func (s *Session) watchUpdateNotice() {
 		s.mu.Lock()
 		s.updateNotice = fmt.Sprintf("argmax %s is available (installed %s) — run 'argmax update'", seen, s.opts.Version)
 		s.mu.Unlock()
-		st.Updater.NotifiedVersion = seen
-		if err := state.Save(st); err != nil {
+		if err := state.Update(func(st *state.State) {
+			if st.Updater.SeenVersion == seen {
+				st.Updater.NotifiedVersion = seen
+			}
+		}); err != nil {
 			logging.L().Debug("update notice state save failed", "error", err)
 		}
 		return

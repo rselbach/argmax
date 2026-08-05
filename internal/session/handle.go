@@ -476,9 +476,9 @@ func (s *Session) toggleMode() {
 	s.menuVisible = true
 	s.mu.Unlock()
 	if s.opts.Watcher.Current().Core.Mode == "last" {
-		st := state.Load()
-		st.LastMode = string(current)
-		if err := state.Save(st); err != nil {
+		if err := state.Update(func(st *state.State) {
+			st.LastMode = string(current)
+		}); err != nil {
 			logging.L().Debug("state save failed", "error", err)
 		}
 	}
