@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -80,6 +81,17 @@ func Validate(cfg *Config) error {
 		}
 		if _, ok := cfg.AI.Providers[cfg.AI.Provider]; !ok {
 			return keyError("ai.provider", fmt.Sprintf("provider %q is not configured under [ai.providers.*]", cfg.AI.Provider))
+		}
+		provider := cfg.AI.Providers[cfg.AI.Provider]
+		endpoint, err := url.ParseRequestURI(provider.Endpoint)
+		if err != nil || endpoint.Host == "" || endpoint.Hostname() == "" ||
+			(!strings.EqualFold(endpoint.Scheme, "http") && !strings.EqualFold(endpoint.Scheme, "https")) || endpoint.User != nil ||
+			endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return keyError("ai.providers."+cfg.AI.Provider+".endpoint",
+				"absolute http or https URL without credentials, query, or fragment")
+		}
+		if strings.TrimSpace(provider.Model) == "" {
+			return keyError("ai.providers."+cfg.AI.Provider+".model", "non-empty model name")
 		}
 	}
 	for name, p := range cfg.AI.Providers {

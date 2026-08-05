@@ -129,6 +129,39 @@ func TestValidationNamesKey(t *testing.T) {
 	}
 }
 
+func TestActiveProviderRequiresValidEndpointAndModel(t *testing.T) {
+	tests := map[string]struct {
+		provider string
+		wantKey  string
+	}{
+		"missing endpoint": {
+			provider: "model = \"test\"\n",
+			wantKey:  "ai.providers.test.endpoint",
+		},
+		"unsupported endpoint scheme": {
+			provider: "endpoint = \"file:///tmp/socket\"\nmodel = \"test\"\n",
+			wantKey:  "ai.providers.test.endpoint",
+		},
+		"endpoint credentials": {
+			provider: "endpoint = \"https://secret@example.com/v1\"\nmodel = \"test\"\n",
+			wantKey:  "ai.providers.test.endpoint",
+		},
+		"missing model": {
+			provider: "endpoint = \"https://example.com/v1\"\n",
+			wantKey:  "ai.providers.test.model",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := writeConfig(t, "[ai]\nenabled = true\nprovider = \"test\"\n\n[ai.providers.test]\n"+test.provider)
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), test.wantKey) {
+				t.Errorf("Load() error = %v, want key %q", err, test.wantKey)
+			}
+		})
+	}
+}
+
 func TestClassicAliases(t *testing.T) {
 	path := writeConfig(t, "[ui]\nstyle = \"minimal\"\nmax-suggestions = 10\nmax-height = 10\n")
 	cfg, err := Load(path)
