@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	project "github.com/rselbach/argmax/internal/workspace"
 )
 
 // Caps on gathered context, per the privacy contract.
@@ -171,16 +173,17 @@ func (g *Gatherer) specialized(cwd, buffer string) ([]Section, bool) {
 // sub-second budgets per probe.
 func (g *Gatherer) universal(cwd, buffer string) []Section {
 	var sections []Section
-	if eco := detectEcosystems(cwd); eco != "" {
+	workspace := project.Resolve(cwd)
+	if eco := detectEcosystems(workspace); eco != "" {
 		sections = append(sections, Section{Label: "detected ecosystems", Content: eco})
 	}
-	if scripts := workspaceScripts(cwd); scripts != "" {
+	if scripts := workspaceScripts(workspace.Root); scripts != "" {
 		sections = append(sections, Section{Label: "package scripts and tasks", Content: truncate(scripts, capGeneric)})
 	}
 	if listing := dirListing(cwd); listing != "" {
 		sections = append(sections, Section{Label: "directory entries", Content: listing})
 	}
-	sections = append(sections, g.gitSections(cwd)...)
+	sections = append(sections, g.gitSections(cwd, workspace)...)
 	if help := g.helpFor(cwd, buffer); help != "" {
 		sections = append(sections, Section{Label: "command help", Content: help})
 	}
@@ -189,8 +192,8 @@ func (g *Gatherer) universal(cwd, buffer string) []Section {
 
 // gitSections gathers independent Git probes; each has a sub-second
 // budget.
-func (g *Gatherer) gitSections(cwd string) []Section {
-	if _, err := os.Stat(filepath.Join(cwd, ".git")); err != nil {
+func (g *Gatherer) gitSections(cwd string, workspace project.Info) []Section {
+	if workspace.GitDir == "" {
 		return nil
 	}
 	type result struct {
@@ -229,10 +232,10 @@ func (g *Gatherer) gitSections(cwd string) []Section {
 			sections = append(sections, Section{Label: r.label, Content: r.content})
 		}
 	}
-	if _, err := os.Stat(filepath.Join(cwd, ".git", "MERGE_HEAD")); err == nil {
+	if _, err := os.Stat(filepath.Join(workspace.GitDir, "MERGE_HEAD")); err == nil {
 		sections = append(sections, Section{Label: "repository state", Content: "merge in progress"})
 	}
-	if _, err := os.Stat(filepath.Join(cwd, ".git", "rebase-merge")); err == nil {
+	if _, err := os.Stat(filepath.Join(workspace.GitDir, "rebase-merge")); err == nil {
 		sections = append(sections, Section{Label: "repository state", Content: "rebase in progress"})
 	}
 	return sections
@@ -259,17 +262,11 @@ func contextCacheKey(cwd, probe string) string {
 	return filepath.Clean(cwd) + "\x00" + probe
 }
 
-func detectEcosystems(cwd string) string {
-	markers := map[string]string{
-		"package.json": "node", "go.mod": "go", "Cargo.toml": "rust",
-		"pyproject.toml": "python", "requirements.txt": "python",
-		"Dockerfile": "docker", "Makefile": "make", "justfile": "just",
-		"Justfile": "just", ".git": "git",
-	}
-	var found []string
-	for marker, name := range markers {
-		if _, err := os.Stat(filepath.Join(cwd, marker)); err == nil {
-			found = append(found, name)
+func detectEcosystems(workspace project.Info) string {
+	found := make([]string, 0, len(workspace.Signatures))
+	for signature := range workspace.Signatures {
+		if workspace.Signatures[signature] {
+			found = append(found, signature)
 		}
 	}
 	sort.Strings(found)

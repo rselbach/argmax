@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -292,6 +293,28 @@ func TestGathererProbeCacheIsolatedByWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestGathererDetectsAncestorWorkspace(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/project\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "cmd", "tool")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	g := &Gatherer{Probe: func(string, time.Duration, string, ...string) string { return "" }}
+	snapshot := g.Gather(nested, "", "", 0, nil)
+	for _, section := range snapshot.Sections {
+		if section.Label == "detected ecosystems" && section.Content == "git, go" {
+			return
+		}
+	}
+	t.Errorf("ancestor workspace absent from snapshot: %+v", snapshot.Sections)
+}
+
 func TestPredictEmptyRetryFailed(t *testing.T) {
 	pred, ok := PredictEmpty(t.TempDir(), "make test", 2, nil)
 	if !ok || pred.Command != "make test" {
@@ -303,5 +326,27 @@ func TestPredictEmptyGitStatusThenDiff(t *testing.T) {
 	pred, ok := PredictEmpty(t.TempDir(), "git status", 0, nil)
 	if !ok || pred.Command != "git diff" {
 		t.Errorf("git status should suggest git diff, got %+v ok=%v", pred, ok)
+	}
+}
+
+func TestPredictEmptyReadsStateFromGitDirFile(t *testing.T) {
+	parent := t.TempDir()
+	metadata := filepath.Join(parent, "metadata")
+	if err := os.Mkdir(metadata, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadata, "MERGE_HEAD"), []byte("abc123\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(parent, "checkout")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: ../metadata\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prediction, ok := PredictEmpty(root, "", 0, nil)
+	if !ok || prediction.Command != "git commit" {
+		t.Errorf("worktree merge prediction = %+v, %v", prediction, ok)
 	}
 }

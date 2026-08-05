@@ -3,6 +3,7 @@ package rank
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -219,6 +220,27 @@ func TestWorkspaceDetect(t *testing.T) {
 	}
 	if ws.Has("rust") {
 		t.Error("rust signature should be absent")
+	}
+}
+
+func TestWorkspaceDetectsAncestorGitDirFile(t *testing.T) {
+	parent := t.TempDir()
+	metadata := filepath.Join(parent, "metadata")
+	if err := os.Mkdir(metadata, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(metadata, "HEAD"), "ref: refs/heads/feature/worktree\n")
+	root := filepath.Join(parent, "checkout")
+	nested := filepath.Join(root, "nested")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, ".git"), "gitdir: ../metadata\n")
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/worktree\n")
+
+	ws := (&Detector{}).Detect(nested)
+	if !ws.Has("git") || !ws.Has("go") || ws.GitBranch != "feature/worktree" {
+		t.Errorf("workspace = %+v, want ancestor worktree on feature/worktree", ws)
 	}
 }
 
