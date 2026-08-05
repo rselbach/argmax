@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/rselbach/argmax/internal/catalog"
+	project "github.com/rselbach/argmax/internal/workspace"
 )
 
 const (
@@ -46,6 +47,13 @@ func main() {
 }
 
 func run(prdPath, figDir, outDir string) error {
+	workspace := project.Resolve(".")
+	safeOutDir, err := validateOutputDir(outDir, workspace.Root)
+	if err != nil {
+		return err
+	}
+	outDir = safeOutDir
+
 	categories, err := parsePRD(prdPath)
 	if err != nil {
 		return err
@@ -129,6 +137,25 @@ func run(prdPath, figDir, outDir string) error {
 		fmt.Printf("  stubbed commands:          %s\n", strings.Join(stats.stubs, ", "))
 	}
 	return nil
+}
+
+func validateOutputDir(outDir, repositoryRoot string) (string, error) {
+	if strings.TrimSpace(outDir) == "" {
+		return "", fmt.Errorf("output directory is empty")
+	}
+	absOut, err := filepath.Abs(outDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve output directory: %w", err)
+	}
+	absRoot, err := filepath.Abs(repositoryRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve repository root: %w", err)
+	}
+	expected := filepath.Join(absRoot, "internal", "catalog", "data")
+	if filepath.Clean(absOut) != expected {
+		return "", fmt.Errorf("refusing to replace unsafe output directory %q; expected %q", outDir, expected)
+	}
+	return expected, nil
 }
 
 // category mirrors one PRD section 18 subsection.
