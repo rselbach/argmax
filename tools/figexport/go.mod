@@ -1,6 +1,6 @@
 module github.com/rselbach/argmax/tools/figexport
 
-go 1.26.4
+go 1.26.5
 
 require github.com/dop251/goja v0.0.0-20260723142020-b4aef50fa347
 
